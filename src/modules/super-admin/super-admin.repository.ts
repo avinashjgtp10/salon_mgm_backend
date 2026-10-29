@@ -174,6 +174,7 @@ export const superAdminRepository = {
         COALESCE(s.business_name, s.slug, 'Unnamed')                                    AS name,
         u.id                                                                              AS owner_id,
         u.email                                                                           AS owner_email,
+        u.phone                                                                           AS owner_phone,
         TRIM(CONCAT(u.first_name,' ',COALESCE(u.last_name,'')))                         AS owner_name,
         CASE WHEN s.is_active THEN 'active' ELSE 'inactive' END                         AS status,
         COALESCE(u.is_onboarding_complete, false)                                       AS is_onboarding_complete,
@@ -212,6 +213,7 @@ export const superAdminRepository = {
          OR s.business_name ILIKE $1
          OR s.slug          ILIKE $1
          OR u.email         ILIKE $1
+         OR u.phone         ILIKE $1
          OR u.first_name    ILIKE $1)
       ${dummyFilter}
       ORDER BY s.created_at DESC

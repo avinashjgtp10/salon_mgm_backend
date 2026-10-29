@@ -106,6 +106,23 @@ export const supportController = {
     } catch (err) { next(err); }
   },
 
+  // PATCH /api/v1/support/:id — super admin edits subject / category / message / priority
+  async updateTicket(req: Request, res: Response, next: NextFunction) {
+    try {
+      const { subject, category, message, priority } = req.body ?? {};
+      const ticket = await supportService.updateTicket(String(req.params.id), { subject, category, message, priority });
+      return res.json({ success: true, data: ticket });
+    } catch (err) { next(err); }
+  },
+
+  // DELETE /api/v1/support/:id — super admin deletes a ticket
+  async deleteTicket(req: Request, res: Response, next: NextFunction) {
+    try {
+      await supportService.deleteTicket(String(req.params.id));
+      return res.json({ success: true, data: { id: String(req.params.id) } });
+    } catch (err) { next(err); }
+  },
+
   // PATCH /api/v1/support/:id/status — super admin changes status
   async updateStatus(req: Request, res: Response, next: NextFunction) {
     try {

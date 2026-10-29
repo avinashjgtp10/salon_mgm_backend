@@ -38,6 +38,25 @@ export const supportRepo = {
     return rows;
   },
 
+  // Super admin edit of the ticket's own text fields. Status and the reply have their own endpoints.
+  async updateTicketDetails(id: string, d: { subject: string; category: string; message: string; priority: string }) {
+    const { rows } = await safeQuery(() =>
+      pool.query(
+        `UPDATE support_tickets
+         SET subject=$2, category=$3, message=$4, priority=$5, updated_at=NOW()
+         WHERE id=$1
+         RETURNING id`,
+        [id, d.subject, d.category, d.message, d.priority]
+      )
+    );
+    return rows[0] ? (await supportRepo.getTicketById(id)) ?? rows[0] : null;
+  },
+
+  async deleteTicket(id: string): Promise<boolean> {
+    const { rowCount } = await safeQuery(() => pool.query(`DELETE FROM support_tickets WHERE id=$1`, [id]));
+    return (rowCount ?? 0) > 0;
+  },
+
   async getAllTickets(filters: { status?: string; priority?: string; search?: string } = {}) {
     const conditions: string[] = [];
     const values: any[] = [];
