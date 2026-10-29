@@ -161,11 +161,13 @@ export const botQuestionsRepository = {
     return rows[0];
   },
 
-  // 30-day retention purge — called by bot-questions-cleanup.scheduler.ts.
-  async deleteOlderThan(days: number): Promise<number> {
+  // Retention purge — called by bot-questions-cleanup.scheduler.ts. A chat is removed once its last activity (the question,
+  // or the Super Admin reply if there is one) is older than the window, so a reply is never deleted right after it is sent.
+  async deleteOlderThan(hours: number): Promise<number> {
     const { rowCount } = await pool.query(
-      `DELETE FROM bot_questions WHERE created_at < NOW() - ($1 || ' days')::interval`,
-      [days]
+      `DELETE FROM bot_questions
+       WHERE GREATEST(created_at, COALESCE(admin_replied_at, created_at)) < NOW() - ($1 || ' hours')::interval`,
+      [hours]
     );
     return rowCount ?? 0;
   },

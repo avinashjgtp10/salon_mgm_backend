@@ -70,6 +70,7 @@ export const MODULE_KEYS = [
     "marketing",
     "online_booking",
     "lunox",
+    "chatbot",
     "reports",
     ...REPORT_CATEGORY_KEYS,
     ...REPORT_KEYS,
