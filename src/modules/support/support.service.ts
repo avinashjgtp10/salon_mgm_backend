@@ -60,6 +60,24 @@ export const supportService = {
     return supportRepo.updateTicketStatus(id, status);
   },
 
+  async updateTicket(id: string, data: { subject?: string; category?: string; message?: string; priority?: string }) {
+    const ticket = await supportRepo.getTicketById(id);
+    if (!ticket) throw new Error("Ticket not found");
+    const subject = (data.subject ?? ticket.subject).trim();
+    const message = (data.message ?? ticket.message).trim();
+    const category = (data.category ?? ticket.category).trim();
+    const priority = data.priority ?? ticket.priority;
+    if (!subject) throw new Error("Subject is required");
+    if (!message) throw new Error("Message is required");
+    if (!["low", "medium", "high"].includes(priority)) throw new Error("Invalid priority");
+    return supportRepo.updateTicketDetails(id, { subject, category, message, priority });
+  },
+
+  async deleteTicket(id: string) {
+    const deleted = await supportRepo.deleteTicket(id);
+    if (!deleted) throw new Error("Ticket not found");
+  },
+
   async getStats() {
     return supportRepo.getStats();
   },

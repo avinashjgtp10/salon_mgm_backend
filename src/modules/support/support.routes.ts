@@ -16,5 +16,7 @@ router.get("/stats", authMiddleware, superAdminMiddleware, supportController.get
 router.get("/",      authMiddleware, superAdminMiddleware, supportController.getAllTickets);
 router.patch("/:id/reply",  authMiddleware, superAdminMiddleware, supportController.replyToTicket);
 router.patch("/:id/status", authMiddleware, superAdminMiddleware, supportController.updateStatus);
+router.patch("/:id",        authMiddleware, superAdminMiddleware, supportController.updateTicket);
+router.delete("/:id",       authMiddleware, superAdminMiddleware, supportController.deleteTicket);
 
 export default router;
