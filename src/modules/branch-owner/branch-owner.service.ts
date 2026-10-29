@@ -573,6 +573,25 @@ export const branchOwnerService = {
     return { subscription, plan };
   },
 
+  // Every salon this branch owner manages, with its subscription, plan and invoices, in ONE call (the Subscription page used to
+  // make two requests per salon). The salon list comes from the owner's own assignments, so no salon outside them can appear.
+  // One salon failing to load never blanks the others: it is returned empty and marked failed so the page can show it as
+  // "No Plan" and not remember the answer.
+  async getSalonsBilling(branchOwnerId: string) {
+    const salons: { id: string }[] = await branchOwnerRepository.getMySalons(branchOwnerId);
+    const entries = await Promise.all(salons.map(async (s) => {
+      try {
+        const subscription = await billingService.getSubscription(s.id);
+        const plan = subscription ? await billingService.getPlanById(subscription.plan_id).catch(() => null) : null;
+        const { data } = await billingService.listInvoices({ salon_id: s.id, limit: 50 });
+        return [s.id, { subscription: subscription ?? null, plan, invoices: data, failed: false }] as const;
+      } catch {
+        return [s.id, { subscription: null, plan: null, invoices: [], failed: true }] as const;
+      }
+    }));
+    return Object.fromEntries(entries);
+  },
+
   async getSalonInvoices(branchOwnerId: string, salonId: string) {
     await assertSalonsAssigned(branchOwnerId, [salonId]);
     const { data } = await billingService.listInvoices({ salon_id: salonId, limit: 50 });
