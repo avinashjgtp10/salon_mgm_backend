@@ -1,6 +1,7 @@
 import logger from '../../config/logger';
 import { supportRepo } from "./support.repository";
 import { emailService } from "../utils/email.service";
+import { AppError } from "../../middleware/error.middleware";
 
 export const supportService = {
   async submitTicket(data: {
@@ -38,7 +39,7 @@ export const supportService = {
 
   async markReplyRead(id: string, userId: string, salonId: string) {
     const ticket = await supportRepo.markReplyRead(id, userId, salonId);
-    if (!ticket) throw new Error("Ticket not found");
+    if (!ticket) throw new AppError(404, "Ticket not found", "NOT_FOUND");
     return ticket;
   },
 
@@ -48,34 +49,37 @@ export const supportService = {
 
   async replyToTicket(id: string, reply: string) {
     const ticket = await supportRepo.getTicketById(id);
-    if (!ticket) throw new Error("Ticket not found");
+    if (!ticket) throw new AppError(404, "Ticket not found", "NOT_FOUND");
     return supportRepo.replyToTicket(id, reply);
   },
 
   async updateStatus(id: string, status: string) {
     const allowed = ["open", "in_progress", "resolved", "closed"];
-    if (!allowed.includes(status)) throw new Error("Invalid status");
+    if (!allowed.includes(status)) throw new AppError(400, "Invalid status", "VALIDATION_ERROR");
     const ticket = await supportRepo.getTicketById(id);
-    if (!ticket) throw new Error("Ticket not found");
+    if (!ticket) throw new AppError(404, "Ticket not found", "NOT_FOUND");
     return supportRepo.updateTicketStatus(id, status);
   },
 
   async updateTicket(id: string, data: { subject?: string; category?: string; message?: string; priority?: string }) {
     const ticket = await supportRepo.getTicketById(id);
-    if (!ticket) throw new Error("Ticket not found");
+    if (!ticket) throw new AppError(404, "Ticket not found", "NOT_FOUND");
     const subject = (data.subject ?? ticket.subject).trim();
     const message = (data.message ?? ticket.message).trim();
     const category = (data.category ?? ticket.category).trim();
     const priority = data.priority ?? ticket.priority;
-    if (!subject) throw new Error("Subject is required");
-    if (!message) throw new Error("Message is required");
-    if (!["low", "medium", "high"].includes(priority)) throw new Error("Invalid priority");
+    if (!subject) throw new AppError(400, "Subject is required", "VALIDATION_ERROR");
+    if (!message) throw new AppError(400, "Message is required", "VALIDATION_ERROR");
+    if (subject.length > 200 || message.length > 5000 || category.length > 50) {
+      throw new AppError(400, "Subject, message or category is too long", "VALIDATION_ERROR");
+    }
+    if (!["low", "medium", "high"].includes(priority)) throw new AppError(400, "Invalid priority", "VALIDATION_ERROR");
     return supportRepo.updateTicketDetails(id, { subject, category, message, priority });
   },
 
   async deleteTicket(id: string) {
     const deleted = await supportRepo.deleteTicket(id);
-    if (!deleted) throw new Error("Ticket not found");
+    if (!deleted) throw new AppError(404, "Ticket not found", "NOT_FOUND");
   },
 
   async getStats() {

@@ -3,6 +3,7 @@ import { couponsRepository } from '../coupons/coupons.repository';
 import { appointmentsRepository } from '../appointments/appointments.repository';
 import { recordTransaction } from '../transactions/transaction-recorder.service';
 import { describePaymentMethod } from '../transactions/payment-method.util';
+import { paymentMethodsService } from '../payment-methods/payment-methods.service';
 import { membershipsRepository } from '../memberships/memberships.repository';
 import { clientMembershipsService } from '../client-memberships/client-memberships.service';
 import { clientMembershipsRepository } from '../client-memberships/client-memberships.repository';
@@ -177,6 +178,10 @@ export const paymentsService = {
       throw new AppError(400, 'A Payment Machine payment must belong to an appointment', 'VALIDATION_ERROR');
     }
     const body: CreatePaymentBody = posPaymentRequestId ? { ...clean, pos_payment_request_id: posPaymentRequestId } : clean;
+
+    // A custom payment method that has been deactivated can't take new money
+    // (history keeps its name; this only guards the new payment).
+    await paymentMethodsService.assertNotInactive(body.salon_id, body.payment_method, body.split_details);
 
     if (!body.appointment_id) return paymentsService.recordPayment(body, requesterUserId, async () => {});
     const lock = await posPaymentsRepository.acquireAppointmentPaymentLock(body.appointment_id);

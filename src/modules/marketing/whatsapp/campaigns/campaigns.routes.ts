@@ -32,6 +32,12 @@ router.get('/',
   campaignsController.getAll
 )
 
+// Before '/:id' so "live" is not read as a campaign id. Running campaigns only.
+router.get('/live',
+  authMiddleware, ownerAdminStaff, viewCampaigns,
+  campaignsController.getLive
+)
+
 router.get('/:id',
   authMiddleware, ownerAdminStaff, viewCampaigns,
   campaignsController.getById

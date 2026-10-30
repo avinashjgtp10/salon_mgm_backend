@@ -1,5 +1,6 @@
 import { clientPackagesRepository } from "./client-packages.repository";
 import { recordTransaction } from "../transactions/transaction-recorder.service";
+import { paymentMethodsService } from "../payment-methods/payment-methods.service";
 import { sendPurchaseReceipt } from "../sales/receipt-send.helper";
 import { appointmentsService } from "../appointments/appointments.service";
 import { getPackageNoShowPolicy } from "./package-settings.util";
@@ -207,6 +208,9 @@ export const clientPackagesService = {
   },
 
   async create(salonId: string, dto: CreateClientPackageDTO, requesterUserId?: string): Promise<ClientPackage> {
+    // A deactivated custom payment method can't take a new package payment.
+    await paymentMethodsService.assertNotInactive(salonId, dto.paymentMethod, dto.splitDetails);
+
     const pkg = await clientPackagesRepository.create(salonId, dto);
 
     // Fetched once, reused below for both the package_appointment_reminder_24h
