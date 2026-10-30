@@ -11,6 +11,7 @@ import modulePlansRoutes from "../module-plans/module-plans.routes";
 import salonSubscriptionRoutes from "../salon-subscription/salon-subscription.routes";
 import planPricingRoutes from "../plan-pricing/plan-pricing.routes";
 import countryPricingRoutes from "../plan-pricing/country-pricing.routes";
+import paymentTrackingRoutes from "../payment-tracking/payment-tracking.routes";
 import paymentGatewayRoutes from "../payment-gateway/payment-gateway.routes";
 import subscriptionInvoiceRoutes from "../subscription-invoices/subscription-invoices.routes";
 
@@ -36,6 +37,8 @@ router.use("/module-plans", modulePlansRoutes);
 router.use("/salon-subscription", salonSubscriptionRoutes);
 router.use("/plan-pricing", planPricingRoutes);
 router.use("/country-pricing", countryPricingRoutes);
+// Manual customer / website payments, money added and the combined ledger (separate from Razorpay).
+router.use("/payment-tracking", paymentTrackingRoutes);
 // Platform-wide Razorpay keys (one set for all salons), stored encrypted.
 router.use("/payment-gateway", paymentGatewayRoutes);
 router.use("/subscription-invoices", subscriptionInvoiceRoutes);
