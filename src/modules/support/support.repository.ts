@@ -116,7 +116,11 @@ export const supportRepo = {
     const { rows } = await safeQuery(() =>
       pool.query(
         `UPDATE support_tickets
-         SET admin_reply=$2, replied_at=NOW(), reply_read_at=NULL, status='in_progress', updated_at=NOW()
+         SET reply_read_at = CASE WHEN admin_reply IS DISTINCT FROM $2 THEN NULL ELSE reply_read_at END,
+             replied_at    = CASE WHEN admin_reply IS DISTINCT FROM $2 THEN NOW() ELSE replied_at END,
+             admin_reply   = $2,
+             status        = CASE WHEN status = 'open' THEN 'in_progress' ELSE status END,
+             updated_at    = NOW()
          WHERE id=$1
          RETURNING *`,
         [id, reply]
@@ -166,7 +170,7 @@ export const supportRepo = {
            COUNT(*) FILTER (WHERE status='in_progress')   AS in_progress,
            COUNT(*) FILTER (WHERE status='resolved')      AS resolved,
            COUNT(*) FILTER (WHERE status='closed')        AS closed,
-           COUNT(*) FILTER (WHERE priority='high')        AS high_priority
+           COUNT(*) FILTER (WHERE priority='high' AND status IN ('open','in_progress')) AS high_priority
          FROM support_tickets`
       )
     );

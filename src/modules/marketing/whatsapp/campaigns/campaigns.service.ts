@@ -63,6 +63,11 @@ export const campaignsService = {
     return campaignsRepository.findAll(salonId)
   },
 
+  // Only running campaigns, ever - see findRunning. `ids` (optional) can only narrow it.
+  async getLive(salonId: string, ids?: string[]) {
+    return campaignsRepository.findRunning(salonId, ids)
+  },
+
   async getById(id: string, salonId: string) {
     const c = await campaignsRepository.findById(id, salonId)
     if (!c) throw new AppError(404, 'Campaign not found', 'NOT_FOUND')

@@ -12,6 +12,13 @@ export const supportController = {
         return res.status(400).json({ success: false, error: { message: "Subject and message are required" } });
       }
 
+      if (!["low", "medium", "high"].includes(priority)) {
+        return res.status(400).json({ success: false, error: { message: "Invalid priority" } });
+      }
+      if (subject.trim().length > 200 || message.trim().length > 5000 || String(category ?? "").length > 50) {
+        return res.status(400).json({ success: false, error: { message: "Subject, message or category is too long" } });
+      }
+
       const salon_id = req.user?.salonId;
       const user_id  = req.user?.userId ?? req.user?.id;
 
@@ -100,6 +107,9 @@ export const supportController = {
       const { reply } = req.body;
       if (!reply?.trim()) {
         return res.status(400).json({ success: false, error: { message: "Reply text is required" } });
+      }
+      if (reply.trim().length > 2000) {
+        return res.status(400).json({ success: false, error: { message: "Reply must be 2000 characters or fewer" } });
       }
       const ticket = await supportService.replyToTicket(String(req.params.id), reply.trim());
       return res.json({ success: true, data: ticket });

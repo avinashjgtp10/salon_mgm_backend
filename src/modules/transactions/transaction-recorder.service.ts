@@ -1,6 +1,7 @@
 import { salesRepository } from "../sales/sales.repository";
 import logger from "../../config/logger";
 import { normalizePaymentMethod } from "./payment-method.util";
+import { paymentMethodsService } from "../payment-methods/payment-methods.service";
 import {
   RecordTransactionInput,
   RecordTransactionResult,
@@ -67,7 +68,8 @@ export async function recordTransaction(input: RecordTransactionInput): Promise<
     }
   }
 
-  const { method, reference } = normalizePaymentMethod(input.payment_label, input.split_details, input.source_amounts);
+  const customNames = await paymentMethodsService.nameMap(input.salon_id);
+  const { method, reference } = normalizePaymentMethod(input.payment_label, input.split_details, input.source_amounts, customNames);
 
   try {
     const sale = await salesRepository.create(

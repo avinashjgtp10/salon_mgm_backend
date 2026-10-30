@@ -11,6 +11,30 @@ type Queryable = Pick<PoolClient, 'query'>
 
 export const campaignsRepository = {
 
+  // Live progress for campaigns that are in flight RIGHT NOW. The status filter is applied
+  // here in SQL, not left to the caller: a completed/paused/draft/scheduled/failed campaign
+  // can never come back from this, whatever ids are asked for. `ids` only narrows further.
+  async findRunning(salonId: string, ids?: string[]): Promise<WACampaign[]> {
+    const { rows } = await pool.query(`
+      SELECT
+        c.id, c.status, c.total_contacts, c.started_at, c.completed_at,
+        COUNT(cc.id) FILTER (WHERE cc.status IN ('SENT','DELIVERED','READ','FAILED','BLOCKED'))::int AS sent_count,
+        COUNT(cc.id) FILTER (WHERE cc.status IN ('DELIVERED','READ'))::int AS delivered_count,
+        COUNT(cc.id) FILTER (WHERE cc.status = 'READ')::int    AS read_count,
+        COUNT(cc.id) FILTER (WHERE cc.status = 'FAILED')::int  AS failed_count,
+        COUNT(cc.id) FILTER (WHERE cc.status = 'BLOCKED')::int AS blocked_count,
+        COUNT(cc.id) FILTER (WHERE cc.status = 'SKIPPED')::int AS skipped_count
+      FROM wa_campaigns c
+      LEFT JOIN wa_campaign_contacts cc ON cc.campaign_id = c.id
+      WHERE c.salon_id = $1
+        AND c.status IN ('SENDING', 'RUNNING')
+        AND ($2::uuid[] IS NULL OR c.id = ANY($2::uuid[]))
+      GROUP BY c.id
+      ORDER BY c.created_at DESC
+    `, [salonId, ids && ids.length > 0 ? ids : null])
+    return rows
+  },
+
   async findAll(salonId: string): Promise<WACampaign[]> {
   const { rows } = await pool.query(`
     SELECT
