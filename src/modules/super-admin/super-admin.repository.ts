@@ -189,7 +189,8 @@ export const superAdminRepository = {
         ), false)                                                                         AS meta_setup_complete,
         s.created_at,
         s.is_dummy,
-        (SELECT COUNT(*)::int  FROM staff        WHERE salon_id = s.id)                  AS staff_count,
+        NULLIF(CONCAT_WS(', ', NULLIF(TRIM(s.city), ''), NULLIF(TRIM(s.state), ''), NULLIF(TRIM(s.country), '')), '')   AS location,
+        (SELECT COUNT(*)::int  FROM staff       WHERE salon_id = s.id)                  AS staff_count,
         (SELECT COUNT(*)::int  FROM clients      WHERE salon_id = s.id)                  AS client_count,
         (SELECT COUNT(*)::int  FROM appointments WHERE salon_id = s.id)                  AS total_bookings,
         COALESCE((

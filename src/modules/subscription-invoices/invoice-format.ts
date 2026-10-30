@@ -2,19 +2,12 @@
 
 // The seller on every subscription invoice is SalonOx itself (not the salon: contrast with the salon's own client
 // invoices, where the SALON is the seller). Carried over unchanged from the original billing feature — keep it in
-// step with the company's real GST / bank details.
+// step with the company's real GST details.
 export const SELLER = {
     name: "Salonox Tech",
-    address: "F01, A/P Nimboti Tal. Baramati Dist. Pune",
-    contact: "7875914818",
-    email: "avinashjgpt10@gmail.com",
+    address: "Salonox Tech, JI tower, Bhigwan Baramati Road, Baramati, Pune-413102",
     gst_number: "27ASPPJ5781N1ZT",
     pan: "ASPPJ5781N",
-    bank_name: "Punjab National Bank",
-    bank_branch: "Baramati",
-    bank_account_number: "0705102100002626",
-    bank_ifsc: "PUNB0070510",
-    bank_account_type: "Current",
 } as const;
 
 export const BILLING_CYCLE_LABEL: Record<string, string> = {
