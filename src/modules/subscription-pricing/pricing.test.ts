@@ -134,3 +134,25 @@ describe("which currencies may be charged (no per-country setting needed)", () =
     jest.useRealTimers();
   });
 });
+
+describe("Super Admin country prices", () => {
+  const usd = new Set(["INR", "USD"]);
+  it("shows the saved price as is, with no conversion or tax, and charges it when the currency is enabled", () => {
+    const q = buildQuote(basic, "US", rates, usd, null, { currency: "USD", price: 15 });
+    expect(q.display).toMatchObject({ currency: "USD", subtotal: 15, tax: 0, total: 15, approximate: false });
+    expect(q.charge).toMatchObject({ currency: "USD", subtotal: 15, total: 15, fallback: false });
+    expect(q.base.total).toBe(942.82);
+  });
+  it("shows the saved price but bills INR when the currency can't be charged", () => {
+    const q = buildQuote(basic, "US", rates, INR_ONLY, null, { currency: "USD", price: 15 });
+    expect(q.display).toMatchObject({ currency: "USD", total: 15 });
+    expect(q.charge).toMatchObject({ currency: "INR", total: 942.82, fallback: true });
+  });
+  it("never applies to India, or to a price saved in another currency", () => {
+    expect(buildQuote(basic, "IN", rates, usd, null, { currency: "USD", price: 15 }).charge.total).toBe(942.82);
+    expect(buildQuote(basic, "AE", rates, usd, null, { currency: "USD", price: 15 }).display.currency).toBe("AED");
+  });
+  it("is unchanged for a country without a saved price", () => {
+    expect(buildQuote(basic, "US", rates, usd, null, null).display).toMatchObject({ currency: "USD", subtotal: 8.39, approximate: true });
+  });
+});

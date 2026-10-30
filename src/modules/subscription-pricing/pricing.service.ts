@@ -6,6 +6,7 @@ import { getInrRates, type RatesResult } from "./fx-rates";
 import { billingSchemaReady } from "./billing-schema";
 import { currentRazorpayAccount, getActiveRazorpayAccount, type RazorpayMode } from "./razorpay-account";
 import { getRazorpayCredentials } from "../../config/razorpay";
+import { hasCountryPriceInCurrency, loadOverridesForCountry, type CountryOverride } from "./country-price-store";
 
 // THE server-side price calculation for subscription plans. Every screen (landing page, registration, Billing & Plans, the plan
 // step, Super Admin) and Razorpay checkout read prices from here, and checkout never trusts an amount sent by the browser.
@@ -109,7 +110,7 @@ export interface Quote {
     /** The Indian (INR) price list: the original plan price. */
     base: Breakdown;
     /** The price as shown for this country (the landing page's number). */
-    display: Breakdown & { fx_rate: number; approximate: boolean; tax_note: string; rate_as_of: string | null };
+    display: Breakdown & { fx_rate: number; approximate: boolean; tax_note: string; rate_as_of: string | null; /** True when this is Super Admin's own price for the country rather than a conversion. */ country_priced?: boolean };
     /** What Razorpay will actually charge. */
     charge: Breakdown & { fallback: boolean; reason: string | null; price_locked: boolean; fx_rate: number };
 }
@@ -128,6 +129,7 @@ export function buildQuote(
     rates: RatesResult | null,
     enabled: Set<string>,
     locked?: LockedPrice | null,
+    override?: CountryOverride | null,
 ): Quote {
     const found = currencyForCountry(countryInput) ?? { country: "IN", currency: "INR" };
     const isIndia = found.country === "IN";
@@ -135,6 +137,25 @@ export function buildQuote(
 
     // The Indian price list: price + 18% GST. This is also what a Razorpay plan in INR charges.
     const inr = breakdown("INR", base.price, taxPercent, 2);
+
+    // ── Super Admin's own price for this country (Plans > Country pricing) ───────────────────────────
+    // Shown exactly as saved (no conversion, no tax added). It is charged in that currency when Razorpay can bill it; otherwise the
+    // customer is billed in INR, as for any other currency that cannot be charged. India never has one.
+    if (override && !isIndia && override.currency === found.currency) {
+        const b = breakdown(override.currency, override.price, 0, exponentOf(override.currency) === 0 ? 0 : 2);
+        const impliedRate = base.price > 0 ? Number((override.price / base.price).toFixed(8)) : 1;
+        const display: Quote["display"] = { ...b, fx_rate: impliedRate, approximate: false, tax_note: "excl. applicable taxes", rate_as_of: null, country_priced: true };
+        let charge: Quote["charge"];
+        if (exponentOf(override.currency) === 2 && isChargeable(enabled, override.currency)) {
+            charge = { ...b, fallback: false, reason: null, price_locked: false, fx_rate: impliedRate };
+        } else {
+            const reason = exponentOf(override.currency) !== 2
+                ? `${override.currency} cannot be billed directly, so this subscription is billed in INR.`
+                : `Recurring payments in ${override.currency} are not enabled on our payment account yet, so this subscription is billed in INR.`;
+            charge = { ...inr, fallback: true, reason, price_locked: false, fx_rate: 1 };
+        }
+        return { tier: base.tier, cycle: base.cycle, plan_name: base.name, country: found.country, base: inr, display, charge };
+    }
 
     // ── Display (what the pages show) ────────────────────────────────────────────────────────────────
     const rate = found.currency === "INR" ? 1 : rates?.rates[found.currency];
@@ -209,6 +230,8 @@ export async function findLockedPrice(planId: string, currency: string): Promise
     if (currency === "INR" || !(await billingSchemaReady())) return null;
     const days = lockDays();
     if (days <= 0) return null;
+    // A currency that has Super Admin country prices also has plans registered at those prices, which must not be mistaken for a held exchange-rate price.
+    if (await hasCountryPriceInCurrency(planId, currency)) return null;
     const { rows } = await pool.query(
         `SELECT currency, amount, fx_rate, razorpay_plan_id FROM razorpay_plan_registry
          WHERE plan_id = $1 AND account_key = $2 AND currency = $3 AND created_at > NOW() - ($4 || ' days')::interval
@@ -219,18 +242,19 @@ export async function findLockedPrice(planId: string, currency: string): Promise
     return r ? { currency: r.currency, amount: Number(r.amount), fx_rate: Number(r.fx_rate), razorpay_plan_id: r.razorpay_plan_id ?? null } : null;
 }
 
-async function quoteFor(base: BasePlan, country: string | null | undefined, rates: RatesResult | null): Promise<Quote> {
+async function quoteFor(base: BasePlan, country: string | null | undefined, rates: RatesResult | null, overrides: Map<string, CountryOverride>): Promise<Quote> {
     const enabled = await enabledChargeCurrenciesNow();
     const cur =currencyForCountry(country)?.currency;
-    const locked = cur && cur !== "INR" && isChargeable(enabled, cur) ? await findLockedPrice(base.id, cur) : null;
-    return buildQuote(base, country, rates, enabled, locked);
+    const override = overrides.get(base.id) ?? null;
+    const locked = !override && cur && cur !== "INR" && isChargeable(enabled, cur) ? await findLockedPrice(base.id, cur) : null;
+    return buildQuote(base, country, rates, enabled, locked, override);
 }
 
 export const subscriptionPricingService = {
     /** Every plan and cycle for one country, in one response (public: the landing page and registration use it before login). */
     async quoteAll(country: string | null | undefined) {
-        const [plans, rates] = await Promise.all([loadBasePlans(), getInrRates()]);
-        const quotes = await Promise.all(plans.map((p) => quoteFor(p, country, rates)));
+        const [plans, rates, overrides] = await Promise.all([loadBasePlans(), getInrRates(), loadOverridesForCountry(country)]);
+        const quotes = await Promise.all(plans.map((p) => quoteFor(p, country, rates, overrides)));
         const found = currencyForCountry(country) ?? { country: "IN", currency: "INR" };
         return {
             country: found.country,
@@ -246,9 +270,9 @@ export const subscriptionPricingService = {
         if (!(TIERS as readonly string[]).includes(tier as string) || !(CYCLES as readonly string[]).includes(cycle as string)) {
             throw new AppError(400, "tier must be basic, advance or growth and cycle monthly, quarterly or yearly", "VALIDATION_ERROR");
         }
-        const [plans, rates] = await Promise.all([loadBasePlans(), getInrRates()]);
+        const [plans, rates, overrides] = await Promise.all([loadBasePlans(), getInrRates(), loadOverridesForCountry(country)]);
         const base = plans.find((p) => p.tier === tier && p.cycle === cycle);
         if (!base) throw new AppError(404, "This plan isn't available at that billing cycle", "NOT_FOUND");
-        return { base, quote: await quoteFor(base, country, rates) };
+        return { base, quote: await quoteFor(base, country, rates, overrides) };
     },
 };
