@@ -174,6 +174,7 @@ export const superAdminRepository = {
         COALESCE(s.business_name, s.slug, 'Unnamed')                                    AS name,
         u.id                                                                              AS owner_id,
         u.email                                                                           AS owner_email,
+        u.phone                                                                           AS owner_phone,
         TRIM(CONCAT(u.first_name,' ',COALESCE(u.last_name,'')))                         AS owner_name,
         CASE WHEN s.is_active THEN 'active' ELSE 'inactive' END                         AS status,
         COALESCE(u.is_onboarding_complete, false)                                       AS is_onboarding_complete,
@@ -188,7 +189,8 @@ export const superAdminRepository = {
         ), false)                                                                         AS meta_setup_complete,
         s.created_at,
         s.is_dummy,
-        (SELECT COUNT(*)::int  FROM staff        WHERE salon_id = s.id)                  AS staff_count,
+        NULLIF(CONCAT_WS(', ', NULLIF(TRIM(s.city), ''), NULLIF(TRIM(s.state), ''), NULLIF(TRIM(s.country), '')), '')   AS location,
+        (SELECT COUNT(*)::int  FROM staff       WHERE salon_id = s.id)                  AS staff_count,
         (SELECT COUNT(*)::int  FROM clients      WHERE salon_id = s.id)                  AS client_count,
         (SELECT COUNT(*)::int  FROM appointments WHERE salon_id = s.id)                  AS total_bookings,
         COALESCE((
@@ -212,6 +214,7 @@ export const superAdminRepository = {
          OR s.business_name ILIKE $1
          OR s.slug          ILIKE $1
          OR u.email         ILIKE $1
+         OR u.phone         ILIKE $1
          OR u.first_name    ILIKE $1)
       ${dummyFilter}
       ORDER BY s.created_at DESC

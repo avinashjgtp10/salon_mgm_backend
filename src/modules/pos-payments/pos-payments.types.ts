@@ -24,6 +24,13 @@ export const POS_PAYMENT_MODES: PosPaymentMode[] = ['CARD', 'QR'];
 // many times (poll-through + scheduler) before it needs a person.
 export const MAX_RECORD_ATTEMPTS = 10;
 
+// review_reason prefixes for flags raised only because the outcome wasn't
+// known yet (an unconfirmed cancel, an inconclusive check at expiry). A later
+// definitive "not paid" from the provider answers them, so they're cleared
+// automatically then — every other flag waits for an explicit reconcile.
+export const REVIEW_CANCEL_UNCONFIRMED = 'Cancel requested but';
+export const REVIEW_EXPIRY_DEFERRED = 'Expiry reached without a confirmed outcome';
+
 export type PosPaymentRequest = {
   id: string;
   salon_id: string;

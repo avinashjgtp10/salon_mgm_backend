@@ -3,7 +3,8 @@ import { authMiddleware } from "../../middleware/auth.middleware";
 import { requireModule } from "../../middleware/moduleLock.middleware";
 import { roleMiddleware } from "../../middleware/role.middleware";
 import { requireSalon } from "../../middleware/salon.middleware";
-import { requireAnyPermission } from "../../middleware/permission.middleware";
+import { requireAnyPermission, requirePermission } from "../../middleware/permission.middleware";
+import { upload } from "../services/services.upload";
 import { packageTemplatesController } from "./package-templates.controller";
 import { validateCreatePackageTemplate, validateUpdatePackageTemplate } from "./package-templates.validator";
 
@@ -30,6 +31,10 @@ const viewPackageTemplates = requireAnyPermission(["view_package_templates", "vi
 const addPackageTemplate = requireAnyPermission(["add_package_template", "create_packages"]);
 const editPackageTemplate = requireAnyPermission(["edit_package_template", "edit_packages"]);
 const deletePackageTemplate = requireAnyPermission(["delete_package_template", "delete_packages"]);
+
+// Import creates templates, so it needs the same permission as adding one, plus
+// the System-level import_file key every other import route requires.
+router.post("/import", ...auth, requireModule("packages"), addPackageTemplate, requirePermission("import_file"), upload.single("file"), packageTemplatesController.import);
 
 router.get("/",       ...auth, requireModule("packages"), viewPackageTemplates, packageTemplatesController.list);
 router.post("/",      ...auth, requireModule("packages"), addPackageTemplate, validateCreatePackageTemplate, packageTemplatesController.create);

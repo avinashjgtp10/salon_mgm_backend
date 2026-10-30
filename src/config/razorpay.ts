@@ -1,18 +1,88 @@
 import Razorpay from "razorpay";
+import pool from "./database";
+import logger from "./logger";
 import { AppError } from "../middleware/error.middleware";
+import { decryptSecret } from "../modules/ai-credentials/secret-box";
 
-let client: Razorpay | null = null;
+// Razorpay credentials are platform-wide. Super Admin saves them in the DB (platform_razorpay_settings, secrets encrypted);
+// the RAZORPAY_* environment variables remain as a fallback, field by field, so an existing deployment keeps working.
 
-// Lazily built so the app still boots (and every non-payment feature works) when the keys aren't set.
-export function getRazorpay(): Razorpay {
-    if (client) return client;
-    const key_id = process.env.RAZORPAY_KEY_ID;
-    const key_secret = process.env.RAZORPAY_KEY_SECRET;
-    if (!key_id || !key_secret) {
-        throw new AppError(503, "Razorpay is not configured (RAZORPAY_KEY_ID / RAZORPAY_KEY_SECRET missing)", "RAZORPAY_NOT_CONFIGURED");
+export type RazorpaySource = "database" | "environment" | null;
+export type RazorpayCredentials = {
+    keyId: string | null;
+    keySecret: string | null;
+    webhookSecret: string | null;
+    /** Currencies subscriptions may be charged in ("USD,AED" or "auto"), as saved by Super Admin or from the environment. */
+    subscriptionCurrencies: string | null;
+    sources: { keyId: RazorpaySource; keySecret: RazorpaySource; webhookSecret: RazorpaySource; subscriptionCurrencies: RazorpaySource };
+};
+
+const CACHE_TTL_MS = 30_000;
+let cache: { creds: RazorpayCredentials; expiresAt: number } | null = null;
+let client: { key: string; instance: Razorpay } | null = null;
+let warnedMissingTable = false;
+
+/** Call after the stored credentials change so the next request picks them up straight away. */
+export function invalidateRazorpayCredentials() {
+    cache = null;
+    client = null;
+}
+
+const safeDecrypt = (field: string, enc: string | null | undefined): string | null => {
+    if (!enc) return null;
+    try {
+        return decryptSecret(enc);
+    } catch (err: any) {
+        // Wrong/changed JWT_SECRET or a damaged value: behave as "not set in the database" and fall back to the env var.
+        logger.error("[razorpay] could not decrypt a saved credential", { field, error: err?.message });
+        return null;
     }
-    client = new Razorpay({ key_id, key_secret });
-    return client;
+};
+
+export async function getRazorpayCredentials(): Promise<RazorpayCredentials> {
+    if (cache && cache.expiresAt > Date.now()) return cache.creds;
+
+    let row: any = null;
+    try {
+        // to_jsonb keeps this working before the subscription_currencies migration has been run (the column may not exist yet).
+        row = (await pool.query(
+            `SELECT key_id, key_secret_enc, webhook_secret_enc, to_jsonb(p)->>'subscription_currencies' AS subscription_currencies
+             FROM platform_razorpay_settings p WHERE id = TRUE`
+        )).rows[0] ?? null;
+    } catch (err: any) {
+        if (err?.code !== "42P01") throw err;
+        if (!warnedMissingTable) {
+            warnedMissingTable = true;
+            logger.warn("platform_razorpay_settings table missing: using the RAZORPAY_* environment variables until the migration is run");
+        }
+    }
+
+    const pick = (db: string | null | undefined, env: string | undefined): [string | null, RazorpaySource] =>
+        db ? [db, "database"] : env ? [env, "environment"] : [null, null];
+
+    const [keyId, keyIdSrc] = pick(row?.key_id, process.env.RAZORPAY_KEY_ID);
+    const [keySecret, keySecretSrc] = pick(safeDecrypt("key_secret", row?.key_secret_enc), process.env.RAZORPAY_KEY_SECRET);
+    const [webhookSecret, webhookSrc] = pick(safeDecrypt("webhook_secret", row?.webhook_secret_enc), process.env.RAZORPAY_WEBHOOK_SECRET);
+
+    const [subscriptionCurrencies, currenciesSrc] = pick(row?.subscription_currencies?.trim(), process.env.RAZORPAY_SUBSCRIPTION_CURRENCIES?.trim());
+
+    const creds: RazorpayCredentials = {
+        keyId, keySecret, webhookSecret, subscriptionCurrencies,
+        sources: { keyId: keyIdSrc, keySecret: keySecretSrc, webhookSecret: webhookSrc, subscriptionCurrencies: currenciesSrc },
+    };
+    cache = { creds, expiresAt: Date.now() + CACHE_TTL_MS };
+    return creds;
+}
+
+// Built lazily so the app still boots (and every non-payment feature works) when the keys aren't set.
+export async function getRazorpay(): Promise<Razorpay> {
+    const { keyId, keySecret } = await getRazorpayCredentials();
+    if (!keyId || !keySecret) {
+        throw new AppError(503, "Razorpay is not configured. A Super Admin can add the keys under Plans > Payment Gateway.", "RAZORPAY_NOT_CONFIGURED");
+    }
+    const key = `${keyId}:${keySecret}`;
+    if (!client || client.key !== key) client = { key, instance: new Razorpay({ key_id: keyId, key_secret: keySecret }) };
+    return client.instance;
 }
 
 export type RazorpayPeriod = "monthly" | "yearly";
@@ -28,23 +98,27 @@ export async function createRazorpayPlan(opts: {
     description: string;
     period: RazorpayPeriod;
     interval: number;
+    /** Amount in the plan's currency (rupees for INR), already including any tax that is to be charged. */
     amountRupees: number;
+    /** ISO currency of the plan; defaults to INR. A non-INR plan only works if the merchant account is enabled for it. */
+    currency?: string;
 }): Promise<string> {
     try {
-        const plan = await getRazorpay().plans.create({
+        const plan = await (await getRazorpay()).plans.create({
             period: opts.period,
             interval: opts.interval,
             item: {
                 name: opts.name,
                 description: opts.description,
                 amount: Math.round(opts.amountRupees * 100),
-                currency: "INR",
+                currency: opts.currency ?? "INR",
             },
         });
         return plan.id;
     } catch (err: any) {
         if (err instanceof AppError) throw err;
         const detail = err?.error?.description ?? err?.message ?? "unknown error";
-        throw new AppError(502, `Razorpay could not create the plan: ${detail}`, "RAZORPAY_ERROR");
+        // 424, not 502: a 502 from the origin is replaced by Cloudflare's own error page, hiding Razorpay's reason.
+        throw new AppError(424, `Razorpay could not create the plan: ${detail}`, "RAZORPAY_ERROR");
     }
 }

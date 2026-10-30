@@ -110,6 +110,13 @@ export const campaignWorker = new Worker<CampaignJobData>(
     let sent = 0, failed = 0, blocked = 0
 
     for (const contact of contacts) {
+      // Pause must stop sending NOW, not after the rest of this batch: re-check
+      // before every contact. The remaining contacts stay PENDING (this check
+      // runs before the claim below, so nothing is claimed and lost) and are
+      // picked up again by Resume.
+      const { rows: [live] } = await pool.query(`SELECT status FROM wa_campaigns WHERE id = $1`, [campaignId])
+      if (!live || live.status === 'PAUSED') break
+
       // ← normalize phone before sending — prevents duplicate conversations
       const normalizedPhone = normalizePhone(contact.phone)
 

@@ -66,6 +66,33 @@ export function relationOf(current: { tier: Tier | null; cycle: Cycle } | null, 
     return "change";
 }
 
+/**
+ * The same quote expressed in another currency (two-decimal currencies only; `rate` = units of that currency per 1 INR).
+ * Meant for a quote that was calculated with gstPercent 0: an overseas customer is charged the converted amount with no Indian GST added,
+ * exactly like a new subscription in that currency (subscription-pricing). Every line is converted on its own and the subtotal is rebuilt
+ * from the converted lines, so the displayed lines always add up to the amount charged.
+ */
+export function convertUpgradeQuote(q: UpgradeQuote, rate: number): UpgradeQuote {
+    if (!(rate > 0)) throw new UpgradeError("INVALID", "No exchange rate is available for that currency.");
+    const conv = (paise: number) => Math.round(paise * rate);
+    const newPlanChargePaise = conv(q.newPlanChargePaise);
+    const creditAppliedPaise = Math.min(conv(q.creditAppliedPaise), newPlanChargePaise);
+    const subtotalPaise = newPlanChargePaise - creditAppliedPaise;
+    return {
+        ...q,
+        currentPaidPaise: conv(q.currentPaidPaise),
+        newPlanChargePaise,
+        creditAppliedPaise,
+        // Earned credit (applied + unused, in INR) converted, minus what was applied.
+        unusedCreditPaise: Math.max(0, conv(q.creditAppliedPaise + q.unusedCreditPaise) - creditAppliedPaise),
+        subtotalPaise,
+        gstPercent: 0,
+        gstPaise: 0,
+        totalPaise: subtotalPaise,
+        zeroPayable: subtotalPaise === 0,
+    };
+}
+
 export function calculateUpgradeQuote(input: {
     now: Date;
     current: CurrentPlanFacts;

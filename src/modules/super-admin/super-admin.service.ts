@@ -247,7 +247,7 @@ export const superAdminService = {
     if (!allowed.includes(data.role)) throw new AppError(400, "Invalid role", "VALIDATION_ERROR");
     if (!data.email?.trim()) throw new AppError(400, "Email is required", "VALIDATION_ERROR");
     if (!data.password || data.password.length < 6) throw new AppError(400, "Password must be at least 6 characters", "VALIDATION_ERROR");
-    if (/s/.test(data.password)) throw new AppError(400, "Password cannot contain spaces", "VALIDATION_ERROR");
+    if (/\s/.test(data.password)) throw new AppError(400, "Password cannot contain spaces", "VALIDATION_ERROR");
     if (!data.first_name?.trim()) throw new AppError(400, "First name is required", "VALIDATION_ERROR");
     if (data.role === "salon_owner" && !data.business_name?.trim()) throw new AppError(400, "Business name is required for Salon Owner", "VALIDATION_ERROR");
 

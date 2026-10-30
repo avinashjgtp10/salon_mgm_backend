@@ -3,11 +3,18 @@ import type { PoolClient } from "pg";
 import pool from "../../config/database";
 import logger from "../../config/logger";
 import { AppError } from "../../middleware/error.middleware";
-import { getRazorpay } from "../../config/razorpay";
+import { getRazorpay, getRazorpayCredentials } from "../../config/razorpay";
 import { subscriptionInvoicesService } from "../subscription-invoices/subscription-invoices.service";
 import { subscriptionUpgradeService } from "../subscription-upgrade/subscription-upgrade.service";
 import { salonModulesService } from "../salon-modules/salon-modules.service";
 import { tierOfPlan } from "../subscription-billing/plan-tier";
+import { subscriptionPricingService } from "../subscription-pricing/pricing.service";
+import { billingSchemaReady } from "../subscription-pricing/billing-schema";
+import { resolveRazorpayPlan } from "../subscription-pricing/razorpay-plans";
+import { checkConsentToken, issueConsentToken, type ConsentBinding } from "../subscription-pricing/currency-consent";
+import { currencyForCountry } from "../subscription-pricing/country-currency";
+import { exponentOf, markCurrencyRefused } from "../subscription-pricing/pricing.service";
+import { subscriptionPlanChangeService } from "./subscription-plan-change.service";
 
 const TIERS = ["basic", "advance", "growth"] as const;
 const CYCLES = ["monthly", "quarterly", "yearly"] as const;
@@ -22,47 +29,147 @@ const isCycle = (v: unknown): v is Cycle => (CYCLES as readonly string[]).includ
 const fromUnix = (n: unknown) => (typeof n === "number" && n > 0 ? new Date(n * 1000) : null);
 
 export const subscriptionCheckoutService = {
+    // The customer's own currency cannot be charged (not enabled for subscriptions, or no live rate). Nothing is charged and nothing is
+    // created: the answer is a 409 CURRENCY_NOT_ENABLED that explains why and lists what the customer can do. INR billing is one of those
+    // options, and it is only ever done after the customer confirms it: the offer carries a signed consent token for the exact INR amount.
+    consentRequired(binding: ConsentBinding, quote: Awaited<ReturnType<typeof subscriptionPricingService.quote>>["quote"], status: string): AppError {
+        const c = quote.charge;
+        const inr = `₹${c.total.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+        return new AppError(
+            409,
+            `Subscriptions in ${binding.requestedCurrency} are not available yet. You can continue and be billed ${inr} in INR per ${binding.cycle === "yearly" ? "year" : binding.cycle === "quarterly" ? "quarter" : "month"} (GST included), choose a different country, or contact support.`,
+            "CURRENCY_NOT_ENABLED",
+            {
+                requested_currency: binding.requestedCurrency,
+                country: binding.country,
+                reason: c.reason,
+                consent_status: status,   // missing | expired | invalid | mismatch (an earlier confirmation no longer matches the price)
+                display: quote.display,
+                alternatives: [
+                    {
+                        type: "continue_in_inr", label: `Continue and be billed in INR (${inr})`, currency: "INR",
+                        subtotal: c.subtotal, tax: c.tax, tax_percent: c.tax_percent, total: c.total, recurring_amount: c.recurring_amount,
+                        consent_token: issueConsentToken(binding),
+                    },
+                    { type: "change_country", label: "Choose a different country" },
+                    { type: "contact_support", label: `Contact support about billing in ${binding.requestedCurrency}` },
+                ],
+            },
+        );
+    },
+
     // Creates a Razorpay subscription for the chosen plan and returns Razorpay's hosted payment page (short_url).
     // Our own row is created as 'created'; it only becomes 'active' when the webhook confirms payment.
     // `salonId` is null when the owner pays right after registering, before onboarding has created the salon: the
     // subscription then belongs to the user and is attached to the salon by attachPendingToSalon().
-    async createCheckout(salonId: string | null, userId: string, tier: unknown, cycle: unknown) {
+    // The customer's country for pricing: the one sent with the request (the visitor's pick), else the one saved on their account,
+    // else their salon's. Never an amount: the price is always worked out here, on the server.
+    async resolveCountry(userId: string, salonId: string | null, provided: unknown): Promise<string> {
+        const direct = currencyForCountry(typeof provided === "string" ? provided : null);
+        if (direct) return direct.country;
+        const { rows } = await pool.query(
+            `SELECT u.country AS user_country, s.country AS salon_country
+             FROM users u LEFT JOIN salons s ON s.id = $2 WHERE u.id = $1`,
+            [userId, salonId]
+        );
+        return currencyForCountry(rows[0]?.user_country)?.country ?? currencyForCountry(rows[0]?.salon_country)?.country ?? "IN";
+    },
+
+    // Creates a Razorpay subscription for the chosen plan and returns Razorpay's hosted payment page (short_url).
+    // Our own row is created as 'created'; it only becomes 'active' when the webhook confirms payment.
+    // `salonId` is null when the owner pays right after registering, before onboarding has created the salon: the
+    // subscription then belongs to the user and is attached to the salon by attachPendingToSalon().
+    //
+    // The amount and currency come from the server's own price calculation (subscription-pricing) for the customer's
+    // country, never from the browser. A non-INR charge happens only for currencies enabled on the Razorpay account; any other
+    // country is billed in INR, and the returned `charge` says exactly what that is.
+    async createCheckout(salonId: string | null, userId: string, tier: unknown, cycle: unknown, country?: unknown, consentToken?: unknown) {
         if (!isTier(tier) || !isCycle(cycle)) {
             throw new AppError(400, "tier must be basic, advance or growth and cycle monthly, quarterly or yearly", "VALIDATION_ERROR");
         }
-        const slug = `salonox-${tier}-${cycle}`;
-        const { rows } = await pool.query(
-            `SELECT id, name, price, razorpay_plan_id FROM subscription_plans WHERE slug = $1 AND is_active = TRUE`,
-            [slug]
-        );
-        const plan = rows[0];
-        if (!plan) throw new AppError(404, "This plan isn't available at that billing cycle", "NOT_FOUND");
-        if (!plan.razorpay_plan_id) {
-            throw new AppError(409, "This plan isn't connected to Razorpay yet. Please contact support.", "PLAN_NOT_SYNCED");
+        const customerCountry = await this.resolveCountry(userId, salonId, country);
+        let quoted = await subscriptionPricingService.quote(tier, cycle, customerCountry);
+
+        // The customer's own currency can't be charged: never fall back to INR on our own. Without a valid consent token for exactly this
+        // offer the answer is a 409 with the alternatives; with one, the confirmation is recorded with the subscription below.
+        // If Razorpay itself refuses the currency when the plan is created, that currency is remembered as unavailable and the customer is
+        // offered INR (again with explicit consent) instead of hitting an error.
+        let consent: { requested: string; amount: number } | null = null;
+        let razorpayPlanId = "";
+        for (let attempt = 0; attempt < 2; attempt++) {
+            const { base, quote } = quoted;
+            const charge = quote.charge;
+            consent = null;
+            if (charge.fallback) {
+                const requested = currencyForCountry(quote.country)?.currency ?? quote.display.currency;
+                const binding: ConsentBinding = { userId, tier, cycle, country: quote.country, requestedCurrency: requested, amount: charge.total };
+                const check = checkConsentToken(consentToken, binding);
+                if (!check.ok) throw this.consentRequired(binding, quote, check.reason);
+                consent = { requested, amount: charge.total };
+                logger.info("Customer confirmed INR billing", { userId, slug: base.slug, requested, amount: charge.total });
+            }
+            try {
+                // INR plans carry price + GST; a non-INR plan carries the converted amount (no tax added). Either way it is the plan
+                // registered for THIS Razorpay account, never one that belongs to another account or mode.
+                razorpayPlanId = await resolveRazorpayPlan(base, charge.currency, charge.currency === "INR" ? charge.total : charge.subtotal, charge.fx_rate);
+                break;
+            } catch (err: any) {
+                if (attempt === 0 && err?.code === "CURRENCY_NOT_SUPPORTED" && charge.currency !== "INR") {
+                    markCurrencyRefused(charge.currency);
+                    quoted = await subscriptionPricingService.quote(tier, cycle, customerCountry);
+                    continue;
+                }
+                throw err;
+            }
         }
+        const { base, quote } = quoted;
+        const charge = quote.charge;
+        const slug = base.slug;
 
         let created: any;
         try {
-            created = await getRazorpay().subscriptions.create({
-                plan_id: plan.razorpay_plan_id,
+            created = await (await getRazorpay()).subscriptions.create({
+                plan_id: razorpayPlanId,
                 total_count: TOTAL_COUNT[cycle],
                 quantity: 1,
                 customer_notify: 1,
-                notes: { salon_id: salonId ?? "", user_id: userId, plan_slug: slug },
+                notes: { salon_id: salonId ?? "", user_id: userId, plan_slug: slug, country: quote.country, charge_currency: charge.currency },
             });
         } catch (err: any) {
             if (err instanceof AppError) throw err;
             const detail = err?.error?.description ?? err?.message ?? "unknown error";
-            logger.error("Razorpay subscription create failed", { salonId, slug, detail });
+            logger.error("Razorpay subscription create failed", { salonId, slug, detail, currency: charge.currency });
             throw new AppError(502, `Razorpay could not start the payment: ${detail}`, "RAZORPAY_ERROR");
         }
 
-        await pool.query(
-            `INSERT INTO subscriptions (salon_id, user_id, plan_id, status, is_trial, cancel_at_period_end, razorpay_subscription_id)
-             VALUES ($1, $2, $3, 'created', FALSE, FALSE, $4)`,
-            [salonId, userId, plan.id, created.id]
-        );
-        return { short_url: created.short_url as string, razorpay_subscription_id: created.id as string };
+        // What was quoted and charged is stored with the subscription, so it stays the original purchase price and currency
+        // whatever the exchange rate does later.
+        if (await billingSchemaReady()) {
+            await pool.query(
+                `INSERT INTO subscriptions
+                    (salon_id, user_id, plan_id, status, is_trial, cancel_at_period_end, razorpay_subscription_id,
+                     country_code, pricing_currency, charged_currency, charged_amount, charged_tax, base_price_inr, display_amount, fx_rate,
+                     pricing_razorpay_plan_id, currency_consent_at, currency_consent_requested, currency_consent_amount)
+                 VALUES ($1, $2, $3, 'created', FALSE, FALSE, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
+                [salonId, userId, base.id, created.id, quote.country, quote.display.currency, charge.currency, charge.total, charge.tax,
+                 base.price, quote.display.total, charge.fx_rate, razorpayPlanId,
+                 consent ? new Date() : null, consent?.requested ?? null, consent?.amount ?? null]
+            );
+        } else {
+            await pool.query(
+                `INSERT INTO subscriptions (salon_id, user_id, plan_id, status, is_trial, cancel_at_period_end, razorpay_subscription_id)
+                 VALUES ($1, $2, $3, 'created', FALSE, FALSE, $4)`,
+                [salonId, userId, base.id, created.id]
+            );
+        }
+        return {
+            short_url: created.short_url as string,
+            razorpay_subscription_id: created.id as string,
+            country: quote.country,
+            display: quote.display,
+            charge,
+            consent_recorded: consent !== null,
+        };
     },
 
     // Onboarding just created the salon: hand it every subscription the owner started before it existed (paid or
@@ -109,8 +216,8 @@ export const subscriptionCheckoutService = {
     },
 
     // Razorpay signs the exact raw body with the webhook secret (HMAC-SHA256, hex).
-    verifySignature(rawBody: Buffer | undefined, signature: string | undefined): boolean {
-        const secret = process.env.RAZORPAY_WEBHOOK_SECRET;
+    async verifySignature(rawBody: Buffer | undefined, signature: string | undefined): Promise<boolean> {
+        const secret = (await getRazorpayCredentials()).webhookSecret;
         if (!secret || !rawBody || !signature) return false;
         const expected = crypto.createHmac("sha256", secret).update(rawBody).digest("hex");
         const a = Buffer.from(expected);
@@ -170,14 +277,27 @@ export const subscriptionCheckoutService = {
                     if (pay?.id) {
                         const dup = await client.query(`SELECT 1 FROM subscription_payments WHERE transaction_id = $1`, [pay.id]);
                         if (dup.rowCount === 0) {
-                            const inserted = await client.query(
-                                `INSERT INTO subscription_payments
-                                    (subscription_id, amount, payment_status, payment_method, transaction_id,
-                                     billing_period_start, billing_period_end, paid_at)
-                                 VALUES ($1, $2, 'paid', $3, $4, $5, $6, $7)
-                                 RETURNING id`,
-                                [row.id, Number(pay.amount) / 100, pay.method ?? null, pay.id, start, end, fromUnix(pay.created_at) ?? new Date()]
-                            );
+                            // The payment's own currency and amount, as Razorpay reports them (never assumed to be INR).
+                            const payCurrency = typeof pay.currency === "string" && /^[A-Za-z]{3}$/.test(pay.currency) ? pay.currency.toUpperCase() : "INR";
+                            const payAmount = Number(pay.amount) / 10 ** exponentOf(payCurrency);
+                            const hasCurrency = await billingSchemaReady();
+                            const inserted = hasCurrency
+                                ? await client.query(
+                                    `INSERT INTO subscription_payments
+                                        (subscription_id, amount, payment_status, payment_method, transaction_id,
+                                         billing_period_start, billing_period_end, paid_at, currency)
+                                     VALUES ($1, $2, 'paid', $3, $4, $5, $6, $7, $8)
+                                     RETURNING id`,
+                                    [row.id, payAmount, pay.method ?? null, pay.id, start, end, fromUnix(pay.created_at) ?? new Date(), payCurrency]
+                                )
+                                : await client.query(
+                                    `INSERT INTO subscription_payments
+                                        (subscription_id, amount, payment_status, payment_method, transaction_id,
+                                         billing_period_start, billing_period_end, paid_at)
+                                     VALUES ($1, $2, 'paid', $3, $4, $5, $6, $7)
+                                     RETURNING id`,
+                                    [row.id, payAmount, pay.method ?? null, pay.id, start, end, fromUnix(pay.created_at) ?? new Date()]
+                                );
                             // The tax invoice for this payment (skipped quietly if the salon doesn't exist yet: it is
                             // billed when onboarding attaches the subscription).
                             await subscriptionInvoicesService.generateForPaymentTx(client, inserted.rows[0].id);
@@ -232,6 +352,9 @@ export const subscriptionCheckoutService = {
             // After the commit, mail the invoice PDF to the owner (best effort, never blocks Razorpay's 200).
             const paymentId = event?.payload?.payment?.entity?.id;
             if (result === "charged" && paymentId) subscriptionInvoicesService.emailForTransaction(paymentId).catch((err) => logger.warn("Subscription invoice email failed", { paymentId, error: err?.message }));
+            // A replacement subscription was just authorised: the one it replaces now stops renewing at the end of its cycle.
+            // If this fails the webhook fails too, so Razorpay delivers it again (the event itself is already stored and handling it again is idempotent).
+            if (result === "authenticated") await subscriptionPlanChangeService.onAuthenticated(event?.payload?.subscription?.entity?.id);
             // First activation of a plan: the salon gets that plan's features (not on every renewal, so an admin's later
             // manual customisation isn't undone each month).
             if (result === "activated") await this.applyPlanFeatures(event?.payload?.subscription?.entity?.id).catch((e: any) => logger.error("Applying plan features failed", { error: e?.message }));

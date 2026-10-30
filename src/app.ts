@@ -48,6 +48,7 @@ import salonDashboardRoutes from "./modules/salon-dashboard/salon-dashboard.rout
 import paymentsRoutes from "./modules/payments/payments.routes";
 import posPaymentsRoutes from "./modules/pos-payments/pos-payments.routes";
 import paymentSettingsRoutes from "./modules/payment-settings/payment-settings.routes";
+import paymentMethodsRoutes from "./modules/payment-methods/payment-methods.routes";
 import couponsRoutes from "./modules/coupons/coupons.routes";
 import couponDesignsRoutes from "./modules/coupon-designs/coupon-designs.routes";
 import brandKitRoutes from "./modules/brand-kit/brand-kit.routes";
@@ -314,6 +315,7 @@ app.use("/api/v1/brand-kit", brandKitRoutes);
 app.use("/api/v1/payments", paymentsRoutes);
 app.use("/api/v1/pos-payments", posPaymentsRoutes);
 app.use("/api/v1/payment-settings", paymentSettingsRoutes);
+app.use("/api/v1/payment-methods", paymentMethodsRoutes);
 app.use("/api/v1/blocked-times", blockedTimesRoutes);
 app.use("/api/v1/assets", assetsRoutes);
 app.use("/api/v1/settings", settingsRoutes);

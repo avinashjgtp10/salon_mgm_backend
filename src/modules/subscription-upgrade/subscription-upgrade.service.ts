@@ -3,7 +3,7 @@ import type { PoolClient } from "pg";
 import pool from "../../config/database";
 import logger from "../../config/logger";
 import { AppError } from "../../middleware/error.middleware";
-import { getRazorpay } from "../../config/razorpay";
+import { getRazorpay, getRazorpayCredentials } from "../../config/razorpay";
 import { GST_PERCENT } from "../plan-pricing/plan-pricing.service";
 import { subscriptionInvoicesRepository as invoiceRepo } from "../subscription-invoices/subscription-invoices.repository";
 import { subscriptionInvoicesService } from "../subscription-invoices/subscription-invoices.service";
@@ -15,8 +15,11 @@ import { deriveSubscriptionState, isLiveState } from "../subscription-billing/su
 import {
     loadPaidInfo, loadSalonSubscriptions, pickCurrentSubscription, subscriptionEnd, type SubRow,
 } from "../subscription-billing/subscription-billing.service";
-import { calculateUpgradeQuote, fromPaise, toPaise, UpgradeError, type UpgradeQuote } from "./upgrade-quote";
+import { calculateUpgradeQuote, convertUpgradeQuote, fromPaise, toPaise, UpgradeError, type UpgradeQuote } from "./upgrade-quote";
 import { loadUpgradePolicy } from "./upgrade-policy";
+import { billingSchemaReady } from "../subscription-pricing/billing-schema";
+import { markCurrencyRefused, subscriptionPricingService } from "../subscription-pricing/pricing.service";
+import { currencyForCountry } from "../subscription-pricing/country-currency";
 
 // Plan upgrade flow (Advance -> Growth etc). The salon never sends an amount: the backend prices the upgrade
 // (upgrade-quote.ts / upgrade-policy.ts), stores that quote with the pending upgrade, creates the Razorpay order for exactly
@@ -52,9 +55,56 @@ interface BuiltQuote {
     currentTier: Tier | null;
     currentCycle: Cycle;
     target: { id: string; name: string; tier: Tier; cycle: Cycle; price: number };
+    /** What the upgrade is charged in (INR unless the customer's own currency is chargeable); every amount in `quote` is in this currency. */
+    currency: string;
+    /** Units of `currency` per 1 INR (1 for INR). */
+    fxRate: number;
+    country: string | null;
 }
 
-export async function buildQuote(db: Db, salonId: string, tier: Tier, cycle: Cycle, now: Date = new Date()): Promise<BuiltQuote> {
+// The columns the upgrade needs for a non-INR charge (subscription_upgrades.currency / fx_rate / country_code), added by
+// Migration/add_currency_to_subscription_upgrades.sql. Only a positive answer is remembered, so running the migration needs no restart.
+let upgradeCurrencyColumns = false;
+async function upgradeCurrencyReady(): Promise<boolean> {
+    if (upgradeCurrencyColumns) return true;
+    if (!(await billingSchemaReady())) return false;
+    const { rows } = await pool.query(
+        `SELECT COUNT(*)::int AS n FROM information_schema.columns
+         WHERE table_schema = current_schema() AND table_name = 'subscription_upgrades' AND column_name IN ('currency', 'fx_rate', 'country_code')`
+    );
+    upgradeCurrencyColumns = rows[0]?.n === 3;
+    return upgradeCurrencyColumns;
+}
+
+// The customer's country for pricing: the one the page sent (their pick), else their account's, else their salon's, else India.
+async function resolveUpgradeCountry(db: Db, userId: string | null, salonId: string, provided: unknown): Promise<string> {
+    const direct = currencyForCountry(typeof provided === "string" ? provided : null);
+    if (direct) return direct.country;
+    const { rows } = await db.query(
+        `SELECT s.country AS salon_country, ${userId ? "(SELECT country FROM users WHERE id = $2)" : "NULL"} AS user_country FROM salons s WHERE s.id = $1`,
+        userId ? [salonId, userId] : [salonId]
+    );
+    return currencyForCountry(rows[0]?.user_country)?.country ?? currencyForCountry(rows[0]?.salon_country)?.country ?? "IN";
+}
+
+// The upgrade flow prices a prorated difference in INR and settles it with a one-off INR payment. A subscription billed in another
+// currency would mix currencies (credit, tax, payment), so it is refused here; the plan change for those is scheduled for the end of
+// the current period instead (subscription-plan-change.service.ts).
+export async function assertInrSubscription(db: Db, subscriptionId: string, periodEnd: Date | string | null | undefined) {
+    if (!(await billingSchemaReady())) return;
+    const { rows } = await db.query(`SELECT charged_currency FROM subscriptions WHERE id = $1`, [subscriptionId]);
+    const currency: string | null = rows[0]?.charged_currency ?? null;
+    if (currency && currency !== "INR") {
+        throw new AppError(
+            409,
+            `Your plan is billed in ${currency}, so it can't be upgraded in place. You can schedule the change to start when your current period ends; your current plan stays active until then.`,
+            "CURRENCY_UPGRADE_UNSUPPORTED",
+            { current_currency: currency, current_period_end: periodEnd ?? null, alternatives: [{ type: "schedule_plan_change" }, { type: "contact_support" }] },
+        );
+    }
+}
+
+export async function buildQuote(db: Db, salonId: string, tier: Tier, cycle: Cycle, now: Date = new Date(), country: string | null = null): Promise<BuiltQuote> {
     const rows = await loadSalonSubscriptions(db as never, salonId);
     const { rows: salonRows } = await db.query(`SELECT is_active FROM salons WHERE id = $1`, [salonId]);
     const current = pickCurrentSubscription(rows, now);
@@ -67,6 +117,8 @@ export async function buildQuote(db: Db, salonId: string, tier: Tier, cycle: Cyc
             ? "Your current plan payment is still pending."
             : "Your subscription is not active. Renew it to continue.", "SUBSCRIPTION_NOT_ACTIVE");
     }
+
+    await assertInrSubscription(db, current.id, end);
 
     const currentCycle = normalizeCycle(current.plan_cycle);
     if (!currentCycle || !end) {
@@ -84,10 +136,19 @@ export async function buildQuote(db: Db, salonId: string, tier: Tier, cycle: Cyc
     const policy = loadUpgradePolicy();
     const currentTier = tierOfPlan({ tier: current.plan_tier, name: current.plan_name, slug: current.plan_slug });
 
+    // Overseas customer whose own currency can be charged right now: price the upgrade in INR without Indian GST, then convert it with the
+    // same rate the pricing page and the subscription checkout use. Anything else stays exactly as before (INR + GST).
+    let currency = "INR";
+    let fxRate = 1;
+    if (country && currencyForCountry(country)?.currency !== "INR" && (await upgradeCurrencyReady())) {
+        const { quote: priced } = await subscriptionPricingService.quote(tier, cycle, country);
+        if (!priced.charge.fallback && priced.charge.currency !== "INR") { currency = priced.charge.currency; fxRate = priced.charge.fx_rate; }
+    }
+
     let quote: UpgradeQuote;
     try {
         quote = calculateUpgradeQuote({
-            now, gstPercent: GST_PERCENT, policy,
+            now, gstPercent: currency === "INR" ? GST_PERCENT : 0, policy,
             current: {
                 tier: currentTier, cycle: currentCycle, periodStart: new Date(start), periodEnd: new Date(end),
                 paidSubtotalPaise: paid.state === "paid" && paid.subtotal != null ? toPaise(paid.subtotal) : 0,
@@ -98,19 +159,26 @@ export async function buildQuote(db: Db, salonId: string, tier: Tier, cycle: Cyc
         if (e instanceof UpgradeError) throw upgradeAppError(e);
         throw e;
     }
-    return { quote, current, currentTier, currentCycle, target: { id: planRows[0].id, name: planRows[0].name, tier, cycle, price: Number(planRows[0].price) } };
+    if (currency !== "INR") quote = convertUpgradeQuote(quote, fxRate);
+    return {
+        quote, current, currentTier, currentCycle, currency, fxRate, country,
+        target: { id: planRows[0].id, name: planRows[0].name, tier, cycle, price: Number(planRows[0].price) },
+    };
 }
 
 function quoteView(b: BuiltQuote) {
     const q = b.quote;
     return {
         kind: q.kind,
+        /** Every amount below is in this currency (INR unless the customer's own currency is being charged). */
+        currency: b.currency,
+        approximate_conversion: b.currency !== "INR",
         current: {
             plan_name: b.current.plan_name, tier: b.currentTier, cycle: b.currentCycle,
             period_start: b.current.current_period_start, period_end: subscriptionEnd(b.current),
             paid_subtotal: fromPaise(q.currentPaidPaise),
         },
-        target: { plan_name: b.target.name, tier: b.target.tier, cycle: b.target.cycle, price: b.target.price },
+        target: { plan_name: b.target.name, tier: b.target.tier, cycle: b.target.cycle, price: Math.round(b.target.price * b.fxRate * 100) / 100 },
         total_days: q.totalDays,
         remaining_days: q.remainingDays,
         new_plan_charge: fromPaise(q.newPlanChargePaise),
@@ -146,7 +214,8 @@ interface Completion {
     reason?: string;
 }
 
-const money = (n: number) => `Rs. ${n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+const money = (n: number, currency = "INR") =>
+    `${currency === "INR" ? "Rs." : currency} ${n.toLocaleString(currency === "INR" ? "en-IN" : "en", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 export async function completeUpgrade(db: PoolClient, upgradeId: string, pay: { paymentId: string | null; method: string | null; paidAt: Date }): Promise<Completion> {
     // The lock on this row is what makes everything below happen at most once.
@@ -196,14 +265,25 @@ export async function completeUpgrade(db: PoolClient, upgradeId: string, pay: { 
         [from.id]
     );
 
+    // What the attempt was priced and paid in. INR unless the customer's own currency was charged (then every stored amount is in it).
+    const currency: string = u.currency ?? "INR";
+    const overseas = currency !== "INR";
+    if (overseas) {
+        // Record the new subscription as billed in that currency, so a later upgrade is not priced as if it were INR.
+        await db.query(
+            `UPDATE subscriptions SET country_code = $2, pricing_currency = $3, charged_currency = $3, charged_amount = $4, charged_tax = 0, fx_rate = $5 WHERE id = $1`,
+            [newSubscriptionId, u.country_code ?? null, currency, Number(u.total), u.fx_rate ?? null]
+        );
+    }
+
     const total = Number(u.total);
     let paymentRowId: string | null = null;
     if (total > 0 && pay.paymentId) {
         const ins = await db.query(
             `INSERT INTO subscription_payments
-                (subscription_id, amount, payment_status, payment_method, transaction_id, billing_period_start, billing_period_end, paid_at)
-             VALUES ($1, $2, 'paid', $3, $4, $5, $6, $7) RETURNING id`,
-            [newSubscriptionId, total, pay.method, pay.paymentId, u.period_start, u.period_end, pay.paidAt]
+                (subscription_id, amount, payment_status, payment_method, transaction_id, billing_period_start, billing_period_end, paid_at${overseas ? ", currency" : ""})
+             VALUES ($1, $2, 'paid', $3, $4, $5, $6, $7${overseas ? ", $8" : ""}) RETURNING id`,
+            [newSubscriptionId, total, pay.method, pay.paymentId, u.period_start, u.period_end, pay.paidAt, ...(overseas ? [currency] : [])]
         );
         paymentRowId = ins.rows[0].id;
     }
@@ -214,14 +294,14 @@ export async function completeUpgrade(db: PoolClient, upgradeId: string, pay: { 
         (u.kind === "upgrade"
             ? `, prorated for the remaining ${u.remaining_days} of ${u.total_days} days (current period end date unchanged)`
             : ", new billing term starting today") +
-        (credit > 0 ? `. Credit of ${money(credit)} for the unused value of the previous plan applied.` : ".");
+        (credit > 0 ? `. Credit of ${money(credit, currency)} for the unused value of the previous plan applied.` : ".");
     const invoice = await invoiceRepo.createForUpgrade(db, {
         upgradeId, salonId: u.salon_id, subscriptionId: newSubscriptionId, paymentId: paymentRowId,
         planName: planRows[0].name, billingCycle: u.to_cycle,
         periodStart: String(u.period_start).slice(0, 10), periodEnd: String(u.period_end).slice(0, 10),
         subtotal: Number(u.subtotal), gstPercent: Number(u.gst_percent), gstAmount: Number(u.gst_amount), total,
         credit, description, paymentMode: pay.method ? pay.method.toUpperCase() : (total > 0 ? "RAZORPAY" : "CREDIT"),
-        transactionId: pay.paymentId, issuedAt: pay.paidAt, createdBy: u.created_by,
+        transactionId: pay.paymentId, issuedAt: pay.paidAt, createdBy: u.created_by, currency,
     });
 
     await db.query(
@@ -256,7 +336,7 @@ async function afterCompletion(c: Completion, actingUserId: string | null) {
     if (c.razorpaySubscriptionToCancel) {
         try {
             // Stop the old plan's automatic renewal at the end of the period it already covered.
-            await (getRazorpay().subscriptions as any).cancel(c.razorpaySubscriptionToCancel, true);
+            await ((await getRazorpay()).subscriptions as any).cancel(c.razorpaySubscriptionToCancel, true);
         } catch (err: any) {
             logger.warn("Upgrade: could not cancel the old Razorpay subscription", { sub: c.razorpaySubscriptionToCancel, error: err?.error?.description ?? err?.message });
         }
@@ -266,8 +346,8 @@ async function afterCompletion(c: Completion, actingUserId: string | null) {
 
 // ── gateway verification ────────────────────────────────────────────────────────────────────────────────────────────
 
-function signatureMatches(orderId: string, paymentId: string, signature: string): boolean {
-    const secret = process.env.RAZORPAY_KEY_SECRET;
+async function signatureMatches(orderId: string, paymentId: string, signature: string): Promise<boolean> {
+    const secret = (await getRazorpayCredentials()).keySecret;
     if (!secret) return false;
     const expected = crypto.createHmac("sha256", secret).update(`${orderId}|${paymentId}`).digest("hex");
     const a = Buffer.from(expected);
@@ -278,19 +358,19 @@ function signatureMatches(orderId: string, paymentId: string, signature: string)
 type GatewayPayment = { id: string; status: string; amount: number; currency: string; order_id: string | null; method?: string; created_at?: number };
 
 // Ask Razorpay itself what happened to this payment. The browser's say-so (or its redirect to a success page) is never enough.
-async function fetchVerifiedPayment(paymentId: string, expected: { orderId: string; amountPaise: number }): Promise<{ state: "captured" | "pending" | "failed"; payment: GatewayPayment; reason?: string }> {
+async function fetchVerifiedPayment(paymentId: string, expected: { orderId: string; amountPaise: number; currency: string }): Promise<{ state: "captured" | "pending" | "failed"; payment: GatewayPayment; reason?: string }> {
     let p: GatewayPayment;
     try {
-        p = (await (getRazorpay().payments as any).fetch(paymentId)) as GatewayPayment;
+        p = (await ((await getRazorpay()).payments as any).fetch(paymentId)) as GatewayPayment;
     } catch (err: any) {
-        throw new AppError(502, `Could not confirm the payment with Razorpay: ${err?.error?.description ?? err?.message ?? "unknown error"}`, "RAZORPAY_ERROR");
+        throw new AppError(424, `Could not confirm the payment with Razorpay: ${err?.error?.description ?? err?.message ?? "unknown error"}`, "RAZORPAY_ERROR");
     }
     if (p.order_id !== expected.orderId) return { state: "failed", payment: p, reason: "Payment does not belong to this upgrade" };
-    if (p.currency !== "INR" || Number(p.amount) !== expected.amountPaise) return { state: "failed", payment: p, reason: "Payment amount does not match the upgrade amount" };
+    if (p.currency !== expected.currency || Number(p.amount) !== expected.amountPaise) return { state: "failed", payment: p, reason: "Payment amount does not match the upgrade amount" };
     if (p.status === "captured") return { state: "captured", payment: p };
     if (p.status === "authorized") {
         try {
-            await (getRazorpay().payments as any).capture(paymentId, expected.amountPaise, "INR");
+            await ((await getRazorpay()).payments as any).capture(paymentId, expected.amountPaise, expected.currency);
             return { state: "captured", payment: { ...p, status: "captured" } };
         } catch (err: any) {
             return { state: "pending", payment: p, reason: err?.error?.description ?? "Payment is authorized but not captured yet" };
@@ -311,24 +391,29 @@ async function expireStalePending(db: Db, salonId: string) {
     );
 }
 
-const gatewayPayload = (u: any) => ({
-    key_id: process.env.RAZORPAY_KEY_ID ?? "",
+const gatewayPayload = async (u: any) => ({
+    key_id: (await getRazorpayCredentials()).keyId ?? "",
     order_id: u.razorpay_order_id as string,
     amount: toPaise(Number(u.total)),
-    currency: "INR",
+    currency: (u.currency as string | undefined) ?? "INR",
 });
 
 export const subscriptionUpgradeService = {
-    async quote(salonId: string, tier: unknown, cycle: unknown) {
+    async quote(salonId: string, userId: string | null, tier: unknown, cycle: unknown, country?: unknown) {
         const t = parseTarget(tier, cycle);
-        return quoteView(await buildQuote(pool, salonId, t.tier, t.cycle));
+        return quoteView(await buildQuote(pool, salonId, t.tier, t.cycle, new Date(), await resolveUpgradeCountry(pool, userId, salonId, country)));
     },
 
-    async initiate(salonId: string, userId: string, tier: unknown, cycle: unknown) {
+    // `expectedCurrency` is the currency of the quote the customer was shown. If the price now comes out in a different currency (for
+    // example Razorpay refused the customer's own currency in the meantime), nothing is created: the page re-shows the new quote first.
+    async initiate(salonId: string, userId: string, tier: unknown, cycle: unknown, country?: unknown, expectedCurrency?: unknown) {
         const t = parseTarget(tier, cycle);
         await expireStalePending(pool, salonId);
-        const built = await buildQuote(pool, salonId, t.tier, t.cycle);
+        const built = await buildQuote(pool, salonId, t.tier, t.cycle, new Date(), await resolveUpgradeCountry(pool, userId, salonId, country));
         const q = built.quote;
+        if (typeof expectedCurrency === "string" && expectedCurrency && expectedCurrency.toUpperCase() !== built.currency) {
+            throw new AppError(409, `The price for this upgrade has changed to ${built.currency}. Please review the new amount before paying.`, "QUOTE_CHANGED", { currency: built.currency });
+        }
 
         // Asked again for the same upgrade at the same price (a retry): hand back the same payment instead of making a new one.
         const { rows: pending } = await pool.query(
@@ -336,22 +421,24 @@ export const subscriptionUpgradeService = {
         );
         if (pending[0]) {
             const p = pending[0];
-            if (p.to_plan_id === built.target.id && toPaise(Number(p.total)) === q.totalPaise && p.from_subscription_id === built.current.id && p.razorpay_order_id) {
-                return { upgrade_id: p.id as string, status: "pending" as const, quote: quoteView(built), payment: gatewayPayload(p) };
+            if (p.to_plan_id === built.target.id && toPaise(Number(p.total)) === q.totalPaise && (p.currency ?? "INR") === built.currency && p.from_subscription_id === built.current.id && p.razorpay_order_id) {
+                return { upgrade_id: p.id as string, status: "pending" as const, quote: quoteView(built), payment: await gatewayPayload(p) };
             }
             await pool.query(`UPDATE subscription_upgrades SET status = 'cancelled', failure_reason = 'Replaced by a newer upgrade attempt' WHERE id = $1 AND status = 'pending'`, [p.id]);
         }
 
         let upgradeId: string;
+        const overseas = built.currency !== "INR";   // only possible once the currency columns exist (buildQuote checks)
         try {
             const { rows } = await pool.query(
                 `INSERT INTO subscription_upgrades
                     (salon_id, from_subscription_id, to_plan_id, to_tier, to_cycle, kind, period_start, period_end, total_days, remaining_days,
-                     current_paid, new_plan_charge, credit_applied, subtotal, gst_percent, gst_amount, total, created_by)
-                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18) RETURNING id`,
+                     current_paid, new_plan_charge, credit_applied, subtotal, gst_percent, gst_amount, total, created_by${overseas ? ", currency, fx_rate, country_code" : ""})
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18${overseas ? ",$19,$20,$21" : ""}) RETURNING id`,
                 [salonId, built.current.id, built.target.id, t.tier, t.cycle, q.kind, q.periodStart.toISOString(), q.periodEnd.toISOString(),
                  q.totalDays, q.remainingDays, fromPaise(q.currentPaidPaise), fromPaise(q.newPlanChargePaise), fromPaise(q.creditAppliedPaise),
-                 fromPaise(q.subtotalPaise), q.gstPercent, fromPaise(q.gstPaise), fromPaise(q.totalPaise), userId]
+                 fromPaise(q.subtotalPaise), q.gstPercent, fromPaise(q.gstPaise), fromPaise(q.totalPaise), userId,
+                 ...(overseas ? [built.currency, built.fxRate, built.country] : [])]
             );
             upgradeId = rows[0].id;
         } catch (err: any) {
@@ -367,16 +454,23 @@ export const subscriptionUpgradeService = {
         }
 
         try {
-            const order = await (getRazorpay().orders as any).create({
-                amount: q.totalPaise, currency: "INR", receipt: `upg_${upgradeId.slice(0, 30)}`, payment_capture: 1,
-                notes: { upgrade_id: upgradeId, salon_id: salonId, to: `${t.tier}-${t.cycle}` },
+            const order = await ((await getRazorpay()).orders as any).create({
+                amount: q.totalPaise, currency: built.currency, receipt: `upg_${upgradeId.slice(0, 30)}`, payment_capture: 1,
+                notes: { upgrade_id: upgradeId, salon_id: salonId, to: `${t.tier}-${t.cycle}`, currency: built.currency },
             });
             await pool.query(`UPDATE subscription_upgrades SET razorpay_order_id = $2 WHERE id = $1`, [upgradeId, order.id]);
-            return { upgrade_id: upgradeId, status: "pending" as const, quote: quoteView(built), payment: { key_id: process.env.RAZORPAY_KEY_ID ?? "", order_id: order.id as string, amount: q.totalPaise, currency: "INR" } };
+            return { upgrade_id: upgradeId, status: "pending" as const, quote: quoteView(built), payment: { key_id: (await getRazorpayCredentials()).keyId ?? "", order_id: order.id as string, amount: q.totalPaise, currency: built.currency } };
         } catch (err: any) {
             await pool.query(`UPDATE subscription_upgrades SET status = 'failed', failure_reason = $2 WHERE id = $1 AND status = 'pending'`, [upgradeId, "Could not create the payment order"]);
             if (err instanceof AppError) throw err;
-            throw new AppError(502, `Razorpay could not start the payment: ${err?.error?.description ?? err?.message ?? "unknown error"}`, "RAZORPAY_ERROR");
+            // Razorpay turned the customer's own currency down (a 400, not an auth or network problem). Nothing was charged. Remember it,
+            // so the next quote is in INR, and ask the page to show that new quote before anything is paid.
+            if (overseas && err?.statusCode === 400) {
+                markCurrencyRefused(built.currency);
+                logger.warn("Razorpay refused a non-INR upgrade order", { currency: built.currency, error: err?.error?.description ?? err?.message });
+                throw new AppError(409, `Payments in ${built.currency} aren't available on our payment account right now. Review the amount in INR to continue.`, "QUOTE_CHANGED", { currency: "INR" });
+            }
+            throw new AppError(424, `Razorpay could not start the payment: ${err?.error?.description ?? err?.message ?? "unknown error"}`, "RAZORPAY_ERROR");
         }
     },
 
@@ -393,9 +487,9 @@ export const subscriptionUpgradeService = {
         if (u.status === "completed") return { status: "completed" as const, already: true };
         if (u.status !== "pending") throw new AppError(409, `This upgrade is ${u.status} and can't be completed.`, "UPGRADE_NOT_PENDING");
         if (!u.razorpay_order_id || u.razorpay_order_id !== orderId) throw new AppError(400, "That payment is for a different order", "ORDER_MISMATCH");
-        if (!signatureMatches(orderId, paymentId, signature)) throw new AppError(400, "Payment signature could not be verified", "INVALID_SIGNATURE");
+        if (!(await signatureMatches(orderId, paymentId, signature))) throw new AppError(400, "Payment signature could not be verified", "INVALID_SIGNATURE");
 
-        const verified = await fetchVerifiedPayment(paymentId, { orderId, amountPaise: toPaise(Number(u.total)) });
+        const verified = await fetchVerifiedPayment(paymentId, { orderId, amountPaise: toPaise(Number(u.total)), currency: u.currency ?? "INR" });
         if (verified.state === "failed") {
             await pool.query(`UPDATE subscription_upgrades SET failure_reason = $2 WHERE id = $1 AND status = 'pending'`, [upgradeId, verified.reason ?? "Payment failed"]);
             throw new AppError(402, verified.reason ?? "The payment was not successful.", "PAYMENT_FAILED");
@@ -443,7 +537,7 @@ export const subscriptionUpgradeService = {
         if (!pay?.id) return "ignored (no payment in event)";
 
         // Same checks as the browser path, applied to the gateway's own payload.
-        if (pay.currency !== "INR" || Number(pay.amount) !== toPaise(Number(u.total)) || pay.status !== "captured") {
+        if (pay.currency !== (u.currency ?? "INR") || Number(pay.amount) !== toPaise(Number(u.total)) || pay.status !== "captured") {
             await pool.query(`UPDATE subscription_upgrades SET status = 'needs_review', razorpay_payment_id = $2, failure_reason = 'Payment amount or status did not match the upgrade' WHERE id = $1 AND status = 'pending'`, [u.id, pay.id]);
             return "upgrade payment did not match: needs review";
         }

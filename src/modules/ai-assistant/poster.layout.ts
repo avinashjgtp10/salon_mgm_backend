@@ -261,9 +261,20 @@ export async function composePoster(background: Buffer, format: PosterFormat, t:
 
     const layers: sharp.OverlayOptions[] = [{ input: Buffer.from(doc), top: 0, left: 0 }];
     if (t.logo) {
-        const inner = logoBox - 24;
-        const fitted = await sharp(t.logo).resize(inner, inner, { fit: "inside", background: { r: 0, g: 0, b: 0, alpha: 0 } }).png().toBuffer();
-        layers.push({ input: fitted, top: headerTop + 12, left: left - 5 + 12 });
+        // Whole logo, never cropped or stretched: scale to fit inside the frame (with padding), then centre the
+        // scaled image in the frame using its real size — a wide or tall logo is not square, so a fixed corner
+        // offset would leave it hugging one side.
+        const inner = logoBox - 32;
+        const fitted = await sharp(t.logo)
+            .resize(inner, inner, { fit: "inside", background: { r: 0, g: 0, b: 0, alpha: 0 } })
+            .png().toBuffer();
+        const dims = await sharp(fitted).metadata();
+        const fw = dims.width ?? inner, fh = dims.height ?? inner;
+        layers.push({
+            input: fitted,
+            top: Math.round(headerTop + (logoBox - fh) / 2),
+            left: Math.round(left - 5 + (logoBox - fw) / 2),
+        });
     }
 
     return sharp(background)

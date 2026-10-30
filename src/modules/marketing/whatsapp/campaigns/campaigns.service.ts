@@ -63,6 +63,11 @@ export const campaignsService = {
     return campaignsRepository.findAll(salonId)
   },
 
+  // Only running campaigns, ever - see findRunning. `ids` (optional) can only narrow it.
+  async getLive(salonId: string, ids?: string[]) {
+    return campaignsRepository.findRunning(salonId, ids)
+  },
+
   async getById(id: string, salonId: string) {
     const c = await campaignsRepository.findById(id, salonId)
     if (!c) throw new AppError(404, 'Campaign not found', 'NOT_FOUND')
@@ -131,6 +136,9 @@ export const campaignsService = {
     const campaign = await this.getById(id, salonId)
     if (['SENDING', 'RUNNING', 'SCHEDULED'].includes(campaign.status)) {
       throw new AppError(400, 'Campaign is still in progress — wait for it to finish (or pause it) before resending', 'CAMPAIGN_IN_PROGRESS')
+    }
+    if (campaign.status === 'PAUSED') {
+      throw new AppError(400, 'Campaign is paused with contacts still waiting — resume it to finish sending before resending', 'CAMPAIGN_PAUSED')
     }
 
     const { rows: tmpl } = await pool.query(
@@ -266,27 +274,51 @@ export const campaignsService = {
     return { queued, skipped }
   },
 
+  // Only a running or scheduled campaign can be paused. The status flip is a
+  // single conditional UPDATE, so a double-click (or two admins) cannot pause
+  // twice or pause something that just finished. Workers re-check the status
+  // before every contact, so sending stops within one message of this landing.
   async pause(id: string, salonId: string) {
     await this.getById(id, salonId)
-    return campaignsRepository.updateStatus(id, 'PAUSED')
+    const paused = await campaignsRepository.updateStatusIf(id, ['SENDING', 'RUNNING', 'SCHEDULED'], 'PAUSED')
+    if (!paused) {
+      throw new AppError(409, 'Only a running or scheduled campaign can be paused', 'CAMPAIGN_NOT_PAUSABLE')
+    }
+    return paused
   },
 
   async resume(id: string, salonId: string) {
     const campaign = await this.getById(id, salonId)
-    const pending  = await campaignsRepository.getPendingContactIds(id)
 
-    if (pending.length > 0) {
-      const batches = chunk(pending, campaign.batch_size)
-      for (let i = 0; i < batches.length; i++) {
-        await campaignQueue.add('send-batch', {
-          campaignId: id, salonId,
-          batchIndex: i,
-          contactIds: batches[i],
-        }, { delay: i * 500 })
-      }
+    // A campaign paused before its start time goes back to waiting for it,
+    // rather than blasting out immediately.
+    const waitsForSchedule = !!campaign.scheduled_at && new Date(campaign.scheduled_at).getTime() > Date.now()
+    if (waitsForSchedule) {
+      const rescheduled = await campaignsRepository.updateStatusIf(id, ['PAUSED'], 'SCHEDULED')
+      if (!rescheduled) throw new AppError(409, 'Only a paused campaign can be resumed', 'CAMPAIGN_NOT_PAUSED')
+      return rescheduled
     }
 
-    return campaignsRepository.updateStatus(id, 'SENDING')
+    // Claim the PAUSED -> SENDING transition first: only one caller gets it, so
+    // a double-click cannot queue the same pending contacts twice.
+    const resumed = await campaignsRepository.updateStatusIf(id, ['PAUSED'], 'SENDING')
+    if (!resumed) throw new AppError(409, 'Only a paused campaign can be resumed', 'CAMPAIGN_NOT_PAUSED')
+
+    const pending = await campaignsRepository.getPendingContactIds(id)
+    if (pending.length === 0) {
+      // Nothing left to send (it was paused after the last message went out).
+      return campaignsRepository.updateStatus(id, 'COMPLETED')
+    }
+
+    const batches = chunk(pending, campaign.batch_size)
+    for (let i = 0; i < batches.length; i++) {
+      await campaignQueue.add('send-batch', {
+        campaignId: id, salonId,
+        batchIndex: i,
+        contactIds: batches[i],
+      }, { delay: i * 500 })
+    }
+    return resumed
   },
 
   // ── Self-heal campaigns whose batch jobs died with no automatic retry left ──

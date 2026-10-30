@@ -3,7 +3,9 @@ import { subscriptionsController } from "./subscriptions.controller"
 import { authMiddleware } from "../../middleware/auth.middleware"
 import { validateStartTrial } from "./subscriptions.validator"
 import { planPricingService } from "../plan-pricing/plan-pricing.service"
+import { subscriptionPricingService } from "../subscription-pricing/pricing.service"
 import { subscriptionCheckoutService } from "./subscription-checkout.service"
+import { subscriptionPlanChangeService } from "./subscription-plan-change.service"
 import { subscriptionInvoicesService } from "../subscription-invoices/subscription-invoices.service"
 import { getSalonId } from "../utils/salon.util"
 import { AppError } from "../../middleware/error.middleware"
@@ -25,6 +27,14 @@ router.get("/catalog", async (_req, res, next) => {
     } catch (err) { next(err) }
 })
 
+// Public: every plan and billing cycle priced for one country (?country=US), calculated on the server with the landing page's own
+// rules (INR price x live rate; India + GST). Used by the plan screens; checkout recalculates the amount itself.
+router.get("/pricing", async (req, res, next) => {
+    try {
+        res.json({ success: true, data: await subscriptionPricingService.quoteAll(typeof req.query.country === "string" ? req.query.country : undefined) })
+    } catch (err) { next(err) }
+})
+
 // Owner/admin starts paying for a plan: creates the Razorpay subscription and returns its hosted payment page.
 router.post("/checkout", authMiddleware, async (req, res, next) => {
     try {
@@ -42,7 +52,19 @@ router.post("/checkout", authMiddleware, async (req, res, next) => {
         if (salonId && user.role !== "salon_owner" && user.role !== "admin") {
             throw new AppError(403, "Only the salon owner can change the plan", "FORBIDDEN")
         }
-        const data = await subscriptionCheckoutService.createCheckout(salonId, user.userId, req.body?.tier, req.body?.cycle)
+        const data = await subscriptionCheckoutService.createCheckout(salonId, user.userId, req.body?.tier, req.body?.cycle, req.body?.country, req.body?.consent_token)
+        res.status(201).json({ success: true, data })
+    } catch (err) { next(err) }
+})
+
+// A plan change for a subscription billed in a currency other than INR: starts a NEW subscription when the current period ends. The first call
+// answers 409 PLAN_CHANGE_CONFIRMATION_REQUIRED with what will happen and a signed token; the confirmed call (with that token) creates it.
+router.post("/plan-change", authMiddleware, async (req, res, next) => {
+    try {
+        const user = (req as any).user as { userId: string; role?: string } | undefined
+        if (!user?.userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED")
+        if (user.role !== "salon_owner" && user.role !== "admin") throw new AppError(403, "Only the salon owner can change the plan", "FORBIDDEN")
+        const data = await subscriptionPlanChangeService.schedule(await getSalonId(req), user.userId, req.body?.tier, req.body?.cycle, req.body?.confirmation_token)
         res.status(201).json({ success: true, data })
     } catch (err) { next(err) }
 })
@@ -87,15 +109,15 @@ const billingRoute = (fn: (salonId: string, req: any) => Promise<unknown>) => as
 }
 router.get("/current", authMiddleware, requireModule("billing_plans"), billingRoute((salonId) => subscriptionBillingService.getCurrent(salonId)))
 router.get("/billing-history", authMiddleware, requireModule("billing_history"), billingRoute((salonId) => subscriptionBillingService.getHistory(salonId)))
-router.post("/upgrade/quote", authMiddleware, billingRoute((salonId, req) => subscriptionUpgradeService.quote(salonId, req.body?.tier, req.body?.cycle)))
-router.post("/upgrade/initiate", authMiddleware, billingRoute((salonId, req) => subscriptionUpgradeService.initiate(salonId, req.user.userId, req.body?.tier, req.body?.cycle)))
+router.post("/upgrade/quote", authMiddleware, billingRoute((salonId, req) => subscriptionUpgradeService.quote(salonId, req.user.userId, req.body?.tier, req.body?.cycle, req.body?.country)))
+router.post("/upgrade/initiate", authMiddleware, billingRoute((salonId, req) => subscriptionUpgradeService.initiate(salonId, req.user.userId, req.body?.tier, req.body?.cycle, req.body?.country, req.body?.expected_currency)))
 router.post("/upgrade/:id/verify", authMiddleware, billingRoute((salonId, req) => subscriptionUpgradeService.verify(salonId, String(req.params.id), req.body ?? {}, req.user.userId)))
 router.post("/upgrade/:id/cancel", authMiddleware, billingRoute((salonId, req) => subscriptionUpgradeService.cancel(salonId, String(req.params.id))))
 
 // Razorpay -> us. Public (no auth); authenticity comes from the HMAC signature over the raw body.
 router.post("/webhook", async (req, res) => {
     const raw = (req as any).rawBody as Buffer | undefined
-    if (!subscriptionCheckoutService.verifySignature(raw, req.get("x-razorpay-signature"))) {
+    if (!(await subscriptionCheckoutService.verifySignature(raw, req.get("x-razorpay-signature")))) {
         logger.warn("Razorpay webhook rejected: invalid or missing signature", {
             requestId: (req as any).requestId,
             hasSignature: Boolean(req.get("x-razorpay-signature")),
