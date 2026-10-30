@@ -65,12 +65,13 @@ export const dashboardRepository = {
       ORDER BY DATE(cc.created_at) ASC
     `, [salonId])
 
-    const [recentCampaigns, topCampaigns, topTemplates, engagedContacts, sentToday] = await Promise.all([
+    const [recentCampaigns, topCampaigns, topTemplates, engagedContacts, sentToday, sentTodayFreesAt] = await Promise.all([
       this.getRecentCampaigns(salonId),
       this.getTopCampaigns(salonId),
       this.getTopTemplates(salonId),
       this.getEngagedContacts(salonId),
       this.getSentToday(salonId),
+      this.getSentWindowFreesAt(salonId),
     ])
 
     return {
@@ -88,6 +89,7 @@ export const dashboardRepository = {
       readRate:           totalSent > 0 ? Math.round((totalRead      / totalSent) * 100) : 0,
       dailyVolume:        dailyRows,
       sentToday,
+      sentTodayFreesAt,
       recentCampaigns,
       topCampaigns,
       topTemplates,
@@ -119,6 +121,28 @@ export const dashboardRepository = {
       ) t
     `, [salonId])
     return parseInt(row.sent_today) || 0
+  },
+
+  // When the oldest send still inside the rolling 24h window ages out (i.e.
+  // when usage first starts to drop). null when nothing is counted right now.
+  async getSentWindowFreesAt(salonId: string): Promise<string | null> {
+    const { rows: [row] } = await pool.query(`
+      SELECT MIN(sent_at) AS oldest FROM (
+        SELECT cc.sent_at
+        FROM wa_campaign_contacts cc
+        JOIN wa_campaigns c ON c.id = cc.campaign_id
+        WHERE c.salon_id = $1
+          AND cc.status IN ('SENT','DELIVERED','READ')
+          AND cc.sent_at > NOW() - INTERVAL '24 hours'
+        UNION ALL
+        SELECT sent_at
+        FROM wa_automation_logs
+        WHERE salon_id = $1
+          AND status IN ('SENT','DELIVERED','READ')
+          AND sent_at > NOW() - INTERVAL '24 hours'
+      ) t
+    `, [salonId])
+    return row?.oldest ? new Date(new Date(row.oldest).getTime() + 24 * 3600 * 1000).toISOString() : null
   },
 
   async getRecentCampaigns(salonId: string): Promise<WARecentCampaign[]> {

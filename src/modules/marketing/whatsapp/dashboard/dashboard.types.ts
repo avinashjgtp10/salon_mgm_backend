@@ -12,6 +12,7 @@ export type WADashboardStats = {
   deliveryRate:       number
   readRate:           number
   sentToday:          number
+  sentTodayFreesAt:  string | null
   dailyVolume:        { date: string; count: number }[]
   recentCampaigns:    WARecentCampaign[]
   topCampaigns:       WATopCampaign[]

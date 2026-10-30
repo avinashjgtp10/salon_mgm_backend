@@ -392,12 +392,16 @@ async function prepDailySheet(c: Ctx, f: any): Promise<Prepared> {
     if (num(today.invoice_count) === 0 && rows.length === 0) throw new AppError(400, "There is nothing on the sheet for this day yet.", "NO_DATA");
 
     const billed = num(today.total_amount), paid = num(today.total_paid), due = num(today.total_due);
+    // A sheet row is one bill: `service` is its services joined with ", " and `amount` is the whole bill, so there is
+    // no per-service revenue here. Rank services by how many bills they appear on instead.
     const byService = new Map<string, number>();
     const byStaff = new Map<string, number>();
     const byMethod = new Map<string, number>();
     const byHour = new Map<string, number>();
     for (const r of rows) {
-        byService.set(r.service || "Other", (byService.get(r.service || "Other") ?? 0) + num(r.amount));
+        for (const name of new Set(String(r.service ?? "").split(",").map((x) => x.trim()).filter(Boolean))) {
+            byService.set(name, (byService.get(name) ?? 0) + 1);
+        }
         byStaff.set(r.staff || "Unassigned", (byStaff.get(r.staff || "Unassigned") ?? 0) + num(r.amount));
         if (num(r.paid_amount) > 0) byMethod.set(r.payment_method || "Other", (byMethod.get(r.payment_method || "Other") ?? 0) + num(r.paid_amount));
         const h = String(r.booking_time ?? "").slice(0, 2);
@@ -416,14 +420,14 @@ async function prepDailySheet(c: Ctx, f: any): Promise<Prepared> {
             { label: "Bills", value: String(num(today.invoice_count)) },
         ],
         donut: { title: "Collected vs still due", items: slicesOf([{ label: "Collected", value: paid }, { label: "Still due", value: due }], 2, c.fmt) },
-        bars: { title: "Top services today", items: slicesOf([...byService.entries()].map(([label, value]) => ({ label, value })), 5, c.fmt).filter((x) => x.label !== "Other") },
+        bars: { title: "Top services today (bills)", items: slicesOf([...byService.entries()].map(([label, value]) => ({ label, value })), 5, c.fmt, (r) => `${r.value} bill${r.value === 1 ? "" : "s"}`).filter((x) => x.label !== "Other") },
         facts: {
             date, billed: c.fmt(billed), collected: c.fmt(paid), still_due: c.fmt(due),
             bills: num(today.invoice_count), clients: num(today.client_count), team_members_working: num(today.staff_count), line_items: num(today.items_count),
             fully_paid_bills: num(today.fully_paid_count), bills_with_payment_pending: num(today.pending_payment_count),
             billed_vs_day_before: change, day_before_billed: yesterday ? c.fmt(prevBilled) : null,
             rows_analysed: rows.length,
-            top_services: top(byService, 5).map(([n, v]) => ({ service: n, amount: c.fmt(v) })),
+            top_services: top(byService, 5).map(([n, v]) => ({ service: n, bills: v })),
             by_team_member: top(byStaff, 5).map(([n, v]) => ({ name: n, amount: c.fmt(v) })),
             collected_by_payment_method: top(byMethod, 5).map(([n, v]) => ({ method: n, collected: c.fmt(v) })),
             busiest_booking_hours: top(new Map([...byHour.entries()].map(([k, v]) => [k, v])), 3).map(([h, n]) => ({ hour: h, line_items: n })),
