@@ -127,20 +127,23 @@ export const payrollService = {
             const entry = entryMap.get(staff.id);
             const advanceTotal = await salaryAdvanceRepository.totalForPeriod(salonId, staff.id, periodStart, periodEnd);
 
-            const baseSalary = entry?.base_salary && entry.base_salary > 0 ? entry.base_salary : (wage?.salary_amount ?? 0);
+            // pg returns NUMERIC columns as strings ("9000.00"). Left as-is, "+" below
+            // concatenates instead of adding ("9000.00" + 1720 -> "9000.001720"), which
+            // silently dropped commission and bonus from Net. Coerce every addend.
+            const baseSalary = Number(entry?.base_salary && entry.base_salary > 0 ? entry.base_salary : (wage?.salary_amount ?? 0));
             // commission/tips columns on payroll_entries hold a manual
             // adjustment override once one has been made (see
             // payroll.repository.updateField's comment) — otherwise the
             // live calculated total is authoritative, matching the plan's
             // "re-fetch live totals at pay time" requirement.
-            const commissionTotal = entry && entry.commission > 0 ? entry.commission : commission.total;
-            const tipsTotal = entry && entry.tips > 0 ? entry.tips : (tips?.total_tips ?? 0);
-            const bonus = entry?.bonus ?? 0;
-            const deductions = entry?.deductions ?? 0;
-            const otherEarning = entry?.other_earning ?? 0;
+            const commissionTotal = Number(entry && entry.commission > 0 ? entry.commission : commission.total);
+            const tipsTotal = Number(entry && entry.tips > 0 ? entry.tips : (tips?.total_tips ?? 0));
+            const bonus = Number(entry?.bonus ?? 0);
+            const deductions = Number(entry?.deductions ?? 0);
+            const otherEarning = Number(entry?.other_earning ?? 0);
             // payroll_entries.salary_advance holds a manual adjustment override once
             // one has been made; otherwise the recorded advances total applies.
-            const advance = entry && entry.salary_advance > 0 ? entry.salary_advance : advanceTotal;
+            const advance = Number(entry && entry.salary_advance > 0 ? entry.salary_advance : advanceTotal);
             const netSalary = baseSalary + commissionTotal + tipsTotal + bonus + otherEarning - deductions - advance;
 
             const adjustments = entry ? await payrollAdjustmentRepository.listByEntry(entry.id) : [];

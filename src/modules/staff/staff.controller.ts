@@ -282,12 +282,12 @@ export const staffController = {
           const sheetName = wb.SheetNames[0];
           if (!sheetName) throw new AppError(400, "Excel file has no sheets", "VALIDATION_ERROR");
           rows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { defval: "" });
-          // A DOJ/DOB cell formatted as an actual Excel date (rather than typed
+          // A DOJ cell formatted as an actual Excel date (rather than typed
           // as literal "dd-mm-YYYY" text) comes back from sheet_to_json as a JS
           // Date or a numeric day-serial, neither of which staffService's
           // dd-mm-YYYY string parser understands — normalize those columns to
           // the expected string format here, before validation ever sees them.
-          const DATE_COLUMN_ALIASES = ["DOJ(dd-mm-YYYY)", "DOJ", "doj", "DOB(dd-mm-YYYY)", "DOB", "dob"];
+          const DATE_COLUMN_ALIASES = ["DOJ(dd-mm-YYYY)", "DOJ", "doj"];
           const pad2 = (n: number) => String(n).padStart(2, "0");
           const toDDMMYYYY = (val: unknown): unknown => {
             if (val instanceof Date && !isNaN(val.getTime())) {
@@ -359,8 +359,6 @@ export const staffController = {
     { label: "Commission Type", value: "commission_type", width: 16 },
     { label: "Commission Value", value: "commission_value", width: 14 },
     { label: "Joined Date", value: "joined_date", width: 14 },
-    { label: "Birthday Day", value: "birthday_day", width: 12 },
-    { label: "Birthday Month", value: "birthday_month", width: 14 },
     { label: "Start Date Day", value: "start_date_day", width: 14 },
     { label: "Start Date Month", value: "start_date_month", width: 16 },
     { label: "Start Year", value: "start_year", width: 12 },
@@ -566,7 +564,7 @@ export const staffCommissionsController = {
     try {
       const staffId  = String(req.params.staffId);
       const category = req.query.category ? String(req.query.category) : undefined;
-      const data = await staffCommissionsService.getSlabs(staffId, category);
+      const data = await staffCommissionsService.getSlabs(staffId, getSalonId(req), category);
       return sendSuccess(res, 200, data, "Commission slabs fetched successfully");
     } catch (err) { return next(err); }
   },
@@ -581,7 +579,7 @@ export const staffCommissionsController = {
           throw new AppError(403, "You can only view your own commission history", "FORBIDDEN");
         }
       }
-      const data = await staffCommissionsService.getStaffHistory(staffId, {
+      const data = await staffCommissionsService.getStaffHistory(staffId, getSalonId(req), {
         month: req.query.month ? String(req.query.month) : undefined,
         start_date: req.query.start_date ? String(req.query.start_date) : undefined,
         end_date: req.query.end_date ? String(req.query.end_date) : undefined,

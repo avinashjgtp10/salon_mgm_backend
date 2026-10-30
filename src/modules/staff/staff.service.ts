@@ -478,18 +478,6 @@ export const staffService = {
             return iso;
         };
 
-        const parseDOB = (val: string): { birthday_day: number | null; birthday_month: number | null } => {
-            const s = String(val || "").trim();
-            if (!s) return { birthday_day: null, birthday_month: null };
-            const parts = s.split("-");
-            const day = parseInt(parts[0], 10);
-            const month = parseInt(parts[1], 10);
-            return {
-                birthday_day: isNaN(day) ? null : day,
-                birthday_month: isNaN(month) ? null : month,
-            };
-        };
-
         // Accepts an explicit "not provided" sentinel (undefined) separately
         // from "provided but not a number" (NaN) so callers can tell "optional
         // field, skip it" from "optional field, but what's there is invalid".
@@ -557,7 +545,6 @@ export const staffService = {
                         const phoneRaw = String(row["Contact"] ?? row["contact"] ?? "").trim();
                         const genderRaw = String(row["Gender"] ?? row["gender"] ?? "").trim();
                         const dojRaw = String(row["DOJ(dd-mm-YYYY)"] ?? row["DOJ"] ?? row["doj"] ?? "").trim();
-                        const dobRaw = String(row["DOB(dd-mm-YYYY)"] ?? row["DOB"] ?? row["dob"] ?? "").trim();
                         const roleRaw = String(row["Role"] ?? row["role"] ?? "").trim();
 
                         if (!fullName) fieldErrors.push({ field: "Name", message: "Name is required" });
@@ -581,10 +568,6 @@ export const staffService = {
                             if (!joined_date) fieldErrors.push({ field: "DOJ", message: "Invalid date format. Expected dd-mm-YYYY" });
                         }
 
-                        if (dobRaw && !parseDate(dobRaw)) {
-                            fieldErrors.push({ field: "DOB", message: "Invalid date format. Expected dd-mm-YYYY" });
-                        }
-
                         let permission_level: string | null = "low";
                         if (roleRaw) {
                             permission_level = ROLE_TO_PERMISSION_LEVEL[roleRaw.toLowerCase()] ?? null;
@@ -601,10 +584,6 @@ export const staffService = {
                         const salary_amount = toNum(row["Fixed Salary"] ?? row["fixed_salary"]);
                         if (typeof salary_amount === "number" && (isNaN(salary_amount) || salary_amount < 0)) {
                             fieldErrors.push({ field: "Fixed Salary", message: "Invalid Fixed Salary" });
-                        }
-                        const working_hours_per_day = toNum(row["Working Hours/Day"] ?? row["working_hours_per_day"]);
-                        if (typeof working_hours_per_day === "number" && (isNaN(working_hours_per_day) || working_hours_per_day < 0 || working_hours_per_day > 24)) {
-                            fieldErrors.push({ field: "Working Hours/Day", message: "Invalid Working Hours/Day" });
                         }
 
                         if (email && EMAIL_RE.test(email) && !existingMap.has(email)) {
@@ -641,7 +620,6 @@ export const staffService = {
                         const address = String(row["Address"] ?? row["address"] ?? "").trim() || undefined;
                         const job_title = String(row["Designation"] ?? row["designation"] ?? "").trim() || undefined;
 
-                        const { birthday_day, birthday_month } = parseDOB(dobRaw);
                         const hasWage = typeof hourly_rate === "number" || typeof salary_amount === "number";
 
                         const existing = existingMap.get(email);
@@ -651,9 +629,8 @@ export const staffService = {
                                 await staffRepository.update(existing.id, salonId, {
                                     first_name, last_name, phone, gender, address, job_title,
                                     permission_level: permission_level ?? undefined,
-                                    working_hours_per_day: typeof working_hours_per_day === "number" ? working_hours_per_day : undefined,
                                 });
-                                await staffRepository.updateDateFields(existing.id, salonId, { joined_date, birthday_day, birthday_month });
+                                await staffRepository.updateDateFields(existing.id, salonId, { joined_date });
                                 if (hasWage) {
                                     await staffWagesRepository.upsert(existing.id, {
                                         wages_enabled: true,
@@ -669,9 +646,8 @@ export const staffService = {
                                 const staff = await staffRepository.create(salonId, {
                                     first_name, last_name, email, phone, gender, address, job_title,
                                     permission_level: permission_level ?? undefined,
-                                    working_hours_per_day: typeof working_hours_per_day === "number" ? working_hours_per_day : undefined,
                                 }, null, true); // activateImmediately = true: imported staff don't need email invites
-                                await staffRepository.updateDateFields(staff.id, salonId, { joined_date, birthday_day, birthday_month });
+                                await staffRepository.updateDateFields(staff.id, salonId, { joined_date });
                                 if (hasWage) {
                                     await staffWagesRepository.upsert(staff.id, {
                                         wages_enabled: true,
@@ -948,16 +924,19 @@ export const staffCommissionsService = {
     },
 
     async upsertSlabs(staffId: string, salonId: string, category: string, slabs: any[]) {
+        await _ensureStaff(staffId, salonId);
         return commissionCalculationService.upsertSlabs(staffId, salonId, category, slabs);
     },
 
-    async getSlabs(staffId: string, category?: string) {
+    async getSlabs(staffId: string, salonId: string, category?: string) {
+        await _ensureStaff(staffId, salonId);
         return commissionCalculationService.getSlabs(staffId, category);
     },
 
-    async getStaffHistory(staffId: string, filters: {
+    async getStaffHistory(staffId: string, salonId: string, filters: {
         month?: string; start_date?: string; end_date?: string; status?: string; page?: number; limit?: number;
     } = {}) {
+        await _ensureStaff(staffId, salonId);
         return commissionCalculationService.getStaffHistory(staffId, filters);
     },
 

@@ -120,22 +120,10 @@ export const validateCreateStaff = (
         if (!isOptionalISODate(b.joined_date))
             throw new AppError(400, "joined_date must be a valid date (YYYY-MM-DD)", "VALIDATION_ERROR");
 
-        if (!isOptionalInt(b.birthday_day) || (b.birthday_day !== undefined && (b.birthday_day < 1 || b.birthday_day > 31)))
-            throw new AppError(400, "birthday_day must be an integer between 1 and 31", "VALIDATION_ERROR");
-
-        if (!isOptionalInt(b.birthday_month) || (b.birthday_month !== undefined && (b.birthday_month < 1 || b.birthday_month > 12)))
-            throw new AppError(400, "birthday_month must be an integer between 1 and 12", "VALIDATION_ERROR");
-
         for (const f of ["gender", "address", "avatar_url"]) {
             if (!isOptionalString(b[f]))
                 throw new AppError(400, `${f} must be a string`, "VALIDATION_ERROR");
         }
-
-        if (!isOptionalNumber(b.working_hours_per_day))
-            throw new AppError(400, "working_hours_per_day must be a number", "VALIDATION_ERROR");
-
-        if (!isOptionalInt(b.holidays))
-            throw new AppError(400, "holidays must be a non-negative integer", "VALIDATION_ERROR");
 
         return next();
     } catch (err) {
@@ -181,22 +169,10 @@ export const validateUpdateStaff = (
         if (!isOptionalISODate(b.joined_date))
             throw new AppError(400, "joined_date must be a valid date (YYYY-MM-DD)", "VALIDATION_ERROR");
 
-        if (!isOptionalInt(b.birthday_day) || (b.birthday_day !== undefined && (b.birthday_day < 1 || b.birthday_day > 31)))
-            throw new AppError(400, "birthday_day must be an integer between 1 and 31", "VALIDATION_ERROR");
-
-        if (!isOptionalInt(b.birthday_month) || (b.birthday_month !== undefined && (b.birthday_month < 1 || b.birthday_month > 12)))
-            throw new AppError(400, "birthday_month must be an integer between 1 and 12", "VALIDATION_ERROR");
-
         for (const f of ["gender", "address", "avatar_url"]) {
             if (!isOptionalString(b[f]))
                 throw new AppError(400, `${f} must be a string`, "VALIDATION_ERROR");
         }
-
-        if (!isOptionalNumber(b.working_hours_per_day))
-            throw new AppError(400, "working_hours_per_day must be a number", "VALIDATION_ERROR");
-
-        if (!isOptionalInt(b.holidays))
-            throw new AppError(400, "holidays must be a non-negative integer", "VALIDATION_ERROR");
 
         return next();
     } catch (err) {

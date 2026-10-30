@@ -301,9 +301,9 @@ export const staffRepository = {
                       is_active, invitation_status,
                       invitation_accepted_at,
                       permission_level, custom_permissions,
-                      joined_date, birthday_day, birthday_month,
-                      gender, address, avatar_url, working_hours_per_day, holidays
-                    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32)
+                      joined_date,
+                      gender, address, avatar_url
+                    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28)
                     RETURNING *`,
                         [
                             salonId, data.first_name, data.last_name ?? null, data.email,
@@ -322,13 +322,9 @@ export const staffRepository = {
                             data.permission_level ?? "low",
                             data.custom_permissions ?? null,
                             data.joined_date ?? null,
-                            data.birthday_day ?? null,
-                            data.birthday_month ?? null,
                             data.gender ?? null,
                             data.address ?? null,
                             data.avatar_url ?? null,
-                            data.working_hours_per_day ?? null,
-                            data.holidays ?? null,
                         ]
                     );
                     await client.query('RELEASE SAVEPOINT staff_insert_attempt');
@@ -356,12 +352,10 @@ export const staffRepository = {
 
     async updateDateFields(id: string, salonId: string, data: {
         joined_date?: string | null;
-        birthday_day?: number | null;
-        birthday_month?: number | null;
     }): Promise<void> {
         await pool.query(
-            `UPDATE staff SET joined_date = $1, birthday_day = $2, birthday_month = $3 WHERE id = $4 AND salon_id = $5`,
-            [data.joined_date ?? null, data.birthday_day ?? null, data.birthday_month ?? null, id, salonId]
+            `UPDATE staff SET joined_date = $1 WHERE id = $2 AND salon_id = $3`,
+            [data.joined_date ?? null, id, salonId]
         );
     },
 
@@ -388,13 +382,9 @@ export const staffRepository = {
             custom_permissions: "custom_permissions",
             permission_level: "permission_level",
             joined_date: "joined_date",
-            birthday_day: "birthday_day",
-            birthday_month: "birthday_month",
             gender: "gender",
             address: "address",
             avatar_url: "avatar_url",
-            working_hours_per_day: "working_hours_per_day",
-            holidays: "holidays",
         };
 
         const entries = (Object.keys(patch) as (keyof UpdateStaffBody)[])
@@ -518,8 +508,6 @@ export const staffRepository = {
                 commission_type,
                 commission_value,
                 joined_date,
-                birthday_day,
-                birthday_month,
                 start_date_day,
                 start_date_month,
                 start_year,

@@ -45,10 +45,10 @@ const pageParams = (query: MobileStaffRequest["query"], defaultLimit: number) =>
 const PROFILE_FIELDS = [
   "id", "user_id", "salon_id", "branch_id", "staff_code", "employee_code",
   "first_name", "last_name", "email", "phone", "phone_country_code", "additional_phone",
-  "avatar_url", "gender", "address", "country", "birthday_day", "birthday_month",
+  "avatar_url", "gender", "address", "country",
   "designation", "specialization", "experience_years", "employment_type", "permission_level",
   "joined_date", "start_date_day", "start_date_month", "start_year",
-  "end_date_day", "end_date_month", "end_year", "working_hours_per_day", "holidays",
+  "end_date_day", "end_date_month", "end_year",
   "calendar_color", "allow_calendar_bookings", "invitation_status", "is_active",
   "created_at", "updated_at",
 ] as const satisfies readonly (keyof Staff)[];
