@@ -1382,6 +1382,15 @@ type SalesSummaryChartFilters = {
   include_gst?: boolean;
 };
 
+// The status an appointment really has right now, for the appointment reports. A booking that is still "booked" after its end time is a
+// No Show: the calendar already shows it that way (appointments.service deriveDisplayStatus), but the background sweep that writes
+// "no-show" into the table only runs now and then, so reading the raw column showed those bookings as "Booked" and the No Show filter
+// missed them. The older "no_show" spelling in the enum counts as the same status.
+const EFFECTIVE_APPT_STATUS_SQL = `(CASE
+    WHEN a.status::text = 'no_show' THEN 'no-show'
+    WHEN a.status::text = 'booked' AND a.ends_at < NOW() AND a.deleted_at IS NULL THEN 'no-show'
+    ELSE a.status::text END)`;
+
 export const reportsRepository = {
 
 _buildSalesSummaryWhere(
@@ -13328,7 +13337,7 @@ async getAppointmentDetailReport(
     // which safeQuery lets propagate, failing the whole report request
     // whenever any status filter is applied. Casting the column itself to
     // text lets it compare against the plain text[] array from the request.
-    where.push(`a.status::text = ANY($${idx++}::text[])`);
+    where.push(`${EFFECTIVE_APPT_STATUS_SQL} = ANY($${idx++}::text[])`);
     values.push(filters.statuses);
   }
   // No `else` branch excluding 'deleted' here on purpose — with no status
@@ -13388,13 +13397,13 @@ async getAppointmentDetailReport(
 
   const query = `
     WITH matched AS (
-      SELECT a.*
+      SELECT a.*, ${EFFECTIVE_APPT_STATUS_SQL} AS effective_status
       FROM appointments a
       WHERE ${where.join(" AND ")}
     ),
     exploded AS (
       SELECT
-        m.id, m.scheduled_at, m.duration_minutes, m.created_at, m.client_id, m.staff_id, m.status,
+        m.id, m.scheduled_at, m.duration_minutes, m.created_at, m.client_id, m.staff_id, m.effective_status AS status,
         'service' AS item_type,
         svc.value->>'name' AS item_name,
         NULLIF(svc.value->>'staff_id', '') AS item_staff_id,
@@ -13407,7 +13416,7 @@ async getAppointmentDetailReport(
       UNION ALL
 
       SELECT
-        m.id, m.scheduled_at, m.duration_minutes, m.created_at, m.client_id, m.staff_id, m.status,
+        m.id, m.scheduled_at, m.duration_minutes, m.created_at, m.client_id, m.staff_id, m.effective_status AS status,
         'product' AS item_type,
         prod.value->>'name' AS item_name,
         NULLIF(prod.value->>'staff_id', '') AS item_staff_id,
@@ -13420,7 +13429,7 @@ async getAppointmentDetailReport(
       UNION ALL
 
       SELECT
-        m.id, m.scheduled_at, m.duration_minutes, m.created_at, m.client_id, m.staff_id, m.status,
+        m.id, m.scheduled_at, m.duration_minutes, m.created_at, m.client_id, m.staff_id, m.effective_status AS status,
         'package' AS item_type,
         pkg.value->>'name' AS item_name,
         NULLIF(pkg.value->>'staff_id', '') AS item_staff_id,
@@ -13433,7 +13442,7 @@ async getAppointmentDetailReport(
       UNION ALL
 
       SELECT
-        m.id, m.scheduled_at, m.duration_minutes, m.created_at, m.client_id, m.staff_id, m.status,
+        m.id, m.scheduled_at, m.duration_minutes, m.created_at, m.client_id, m.staff_id, m.effective_status AS status,
         'membership' AS item_type,
         mem.value->>'name' AS item_name,
         NULLIF(mem.value->>'staff_id', '') AS item_staff_id,
@@ -13596,7 +13605,7 @@ async getOnlineAppointmentReport(
     values.push(`${filters.to}T00:00:00+05:30`);
   }
   if (filters.statuses && filters.statuses.length > 0) {
-    where.push(`a.status::text = ANY($${idx++}::text[])`);
+    where.push(`${EFFECTIVE_APPT_STATUS_SQL} = ANY($${idx++}::text[])`);
     values.push(filters.statuses);
   }
 
@@ -13636,13 +13645,13 @@ async getOnlineAppointmentReport(
 
   const query = `
     WITH matched AS (
-      SELECT a.*
+      SELECT a.*, ${EFFECTIVE_APPT_STATUS_SQL} AS effective_status
       FROM appointments a
       WHERE ${where.join(" AND ")}
     ),
     exploded AS (
       SELECT
-        m.id, m.scheduled_at, m.duration_minutes, m.created_at, m.client_id, m.staff_id, m.status,
+        m.id, m.scheduled_at, m.duration_minutes, m.created_at, m.client_id, m.staff_id, m.effective_status AS status,
         'service' AS item_type,
         svc.value->>'name' AS item_name,
         NULLIF(svc.value->>'staff_id', '') AS item_staff_id,
@@ -13655,7 +13664,7 @@ async getOnlineAppointmentReport(
       UNION ALL
 
       SELECT
-        m.id, m.scheduled_at, m.duration_minutes, m.created_at, m.client_id, m.staff_id, m.status,
+        m.id, m.scheduled_at, m.duration_minutes, m.created_at, m.client_id, m.staff_id, m.effective_status AS status,
         'product' AS item_type,
         prod.value->>'name' AS item_name,
         NULLIF(prod.value->>'staff_id', '') AS item_staff_id,
@@ -13668,7 +13677,7 @@ async getOnlineAppointmentReport(
       UNION ALL
 
       SELECT
-        m.id, m.scheduled_at, m.duration_minutes, m.created_at, m.client_id, m.staff_id, m.status,
+        m.id, m.scheduled_at, m.duration_minutes, m.created_at, m.client_id, m.staff_id, m.effective_status AS status,
         'package' AS item_type,
         pkg.value->>'name' AS item_name,
         NULLIF(pkg.value->>'staff_id', '') AS item_staff_id,
@@ -13681,7 +13690,7 @@ async getOnlineAppointmentReport(
       UNION ALL
 
       SELECT
-        m.id, m.scheduled_at, m.duration_minutes, m.created_at, m.client_id, m.staff_id, m.status,
+        m.id, m.scheduled_at, m.duration_minutes, m.created_at, m.client_id, m.staff_id, m.effective_status AS status,
         'membership' AS item_type,
         mem.value->>'name' AS item_name,
         NULLIF(mem.value->>'staff_id', '') AS item_staff_id,

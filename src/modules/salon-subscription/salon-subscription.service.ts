@@ -1,7 +1,22 @@
 import { AppError } from "../../middleware/error.middleware";
 import { salonSubscriptionRepository as repo } from "./salon-subscription.repository";
+import { tierOfPlan } from "../subscription-billing/plan-tier";
 
 const DAY = 24 * 60 * 60 * 1000;
+const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+
+/**
+ * Days left as CALENDAR days: the end day (the date part of the stored value, which is the day the admin picked) minus today's date in
+ * India. The old Math.ceil on the time between now and the stored timestamp gave 31 or 32 for the same end day depending on the
+ * time of day and on whether it was stored as midnight or 23:59:59. The Super Admin screens (utils/subscriptionDays.ts on the
+ * frontend) use the same rule, so every figure agrees.
+ */
+export function calendarDaysLeft(end: string | Date, nowMs: number = Date.now()): number {
+    const endDay = typeof end === "string" ? end.slice(0, 10) : end.toISOString().slice(0, 10);
+    const today = new Date(nowMs + IST_OFFSET_MS).toISOString().slice(0, 10);
+    const toUtcDay = (ymd: string) => { const [y, m, d] = ymd.split("-").map(Number); return Date.UTC(y, m - 1, d); };
+    return Math.round((toUtcDay(endDay) - toUtcDay(today)) / DAY);
+}
 
 function parseDate(v: unknown, field: string): Date {
     const d = typeof v === "string" && v ? new Date(v) : null;
@@ -26,12 +41,19 @@ export const salonSubscriptionService = {
             const live = (h.status === "active" || h.status === "trialing") && (!end || new Date(end).getTime() > now);
             return {
                 ...h,
+                // Basic / Advance / Growth, whichever way the plan row records it (null for a custom or test plan).
+                plan_tier: tierOfPlan({ tier: h.plan_tier_col, name: h.plan_name, slug: h.plan_slug }),
                 ends_at: end ?? null,
                 is_live: live,
-                days_remaining: live && end ? Math.max(0, Math.ceil((new Date(end).getTime() - now) / DAY)) : 0,
+                days_remaining: live && end ? Math.max(0, calendarDaysLeft(end, now)) : 0,
             };
         });
-        return { current: withState[0] ?? null, history: withState };
+        // The plan the salon is on: the live one if there is one, else the newest that was really theirs (an unfinished checkout or a
+        // scheduled replacement that has not started yet is not "the plan they bought").
+        const current = withState.find((h) => h.is_live)
+            ?? withState.find((h) => h.status !== "created" && h.status !== "authenticated")
+            ?? withState[0] ?? null;
+        return { current, history: withState };
     },
 
     // Moves the end date of the salon's current subscription to the END of `end_date` (UTC) - used to add or take

@@ -14,6 +14,7 @@ import countryPricingRoutes from "../plan-pricing/country-pricing.routes";
 import paymentTrackingRoutes from "../payment-tracking/payment-tracking.routes";
 import paymentGatewayRoutes from "../payment-gateway/payment-gateway.routes";
 import subscriptionInvoiceRoutes from "../subscription-invoices/subscription-invoices.routes";
+import clientAnnouncementsRoutes from "../client-announcements/client-announcements.routes";
 
 const router = Router();
 
@@ -42,6 +43,8 @@ router.use("/payment-tracking", paymentTrackingRoutes);
 // Platform-wide Razorpay keys (one set for all salons), stored encrypted.
 router.use("/payment-gateway", paymentGatewayRoutes);
 router.use("/subscription-invoices", subscriptionInvoiceRoutes);
+// Client Announcements: picks the platform salon and copies salon owners into its client list.
+router.use("/client-announcements", clientAnnouncementsRoutes);
 
 // Salon-specific permissions
 router.get("/salon-permissions/search",       superAdminController.searchSalonsForPermissions);

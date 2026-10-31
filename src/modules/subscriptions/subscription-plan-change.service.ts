@@ -6,13 +6,17 @@ import { billingSchemaReady } from "../subscription-pricing/billing-schema";
 import { subscriptionPricingService, CYCLES, TIERS } from "../subscription-pricing/pricing.service";
 import { resolveRazorpayPlan } from "../subscription-pricing/razorpay-plans";
 import { checkPlanChangeToken, issuePlanChangeToken, type PlanChangeBinding } from "../subscription-pricing/currency-consent";
+import { dbDate, normalizeCycle, tierOfPlan } from "../subscription-billing/plan-tier";
+import { changeKindOf } from "../subscription-upgrade/upgrade-quote";
 
-// Changing the plan of a subscription that is billed in a currency other than INR.
+// Changing a plan so that it takes effect WHEN THE CURRENT PERIOD ENDS: a lower plan (downgrade) or the same plan on a shorter billing
+// cycle, for a subscription billed in INR or in any other currency.
 //
-// The in-place upgrade flow (subscription-upgrade) prices a prorated difference in INR and settles it with a one-off INR payment, so it
-// must not touch a subscription billed in another currency (credit, tax and payment would mix currencies); it refuses with
-// CURRENCY_UPGRADE_UNSUPPORTED. This is the safe alternative: a NEW Razorpay subscription for the new plan that STARTS WHEN THE CURRENT
-// PERIOD ENDS (Razorpay `start_at`), authorised by the customer on Razorpay's hosted page.
+// The in-place upgrade flow (subscription-upgrade) is for moving UP and charges a prorated difference now. It also must not touch a
+// subscription billed in another currency (credit, tax and payment would mix currencies); it refuses with CURRENCY_UPGRADE_UNSUPPORTED.
+// This is the alternative for both cases: a NEW Razorpay subscription for the new plan that STARTS WHEN THE CURRENT PERIOD ENDS (Razorpay
+// `start_at`), authorised by the customer on Razorpay's hosted page. Everything already paid for is used first, nothing is charged today,
+// and the new plan's features apply from the day it starts.
 //
 //   - The current subscription is left completely untouched until the customer has authorised the new one.
 //   - Once the new subscription is authenticated, the old one is set to cancel at the end of its cycle (never immediately), so it simply
@@ -43,7 +47,7 @@ export const subscriptionPlanChangeService = {
 
         const { rows } = await pool.query(
             `SELECT s.id, s.plan_id, s.razorpay_subscription_id, s.current_period_end, s.charged_currency, s.charged_amount, s.country_code,
-                    sp.slug, sp.name AS plan_name
+                    sp.slug, sp.name AS plan_name, sp.tier AS plan_tier, sp.billing_cycle AS plan_cycle
              FROM subscriptions s JOIN subscription_plans sp ON sp.id = s.plan_id
              WHERE s.salon_id = $1 AND s.status = 'active' AND (s.current_period_end IS NULL OR s.current_period_end > NOW())
              ORDER BY s.created_at DESC LIMIT 1`,
@@ -51,22 +55,26 @@ export const subscriptionPlanChangeService = {
         );
         const current = rows[0];
         if (!current) throw new AppError(409, "This salon has no active subscription to change.", "NO_SUBSCRIPTION");
-        const currency: string | null = current.charged_currency ?? null;
-        if (!currency || currency === "INR") {
-            throw new AppError(409, "This subscription is billed in INR; change it from Billing & Plans with the upgrade option.", "USE_UPGRADE_FLOW");
-        }
-        if (!current.razorpay_subscription_id || !current.current_period_end) {
+        // A subscription with no recorded currency is an INR one (the original behaviour).
+        const currency: string = current.charged_currency ?? "INR";
+        // Without a Razorpay subscription (a plan assigned by SalonOx) there is nothing to stop later: it simply ends on its date and the new
+        // one starts then. A fixed end date is all that is needed.
+        if (!current.current_period_end) {
             throw new AppError(409, "This subscription has no fixed billing period, so the change can't be scheduled online. Please contact support.", "NOT_SCHEDULABLE");
         }
-        const periodEnd = new Date(current.current_period_end);
+        const periodEnd = dbDate(current.current_period_end) ?? new Date(current.current_period_end);
         if (periodEnd.getTime() - Date.now() < MIN_LEAD_MS) {
             throw new AppError(409, "Your current period ends very soon. Wait for the renewal, then change your plan.", "PLAN_CHANGE_TOO_LATE");
         }
 
-        // Priced by the server, in the subscription's own currency and country.
-        const { base, quote } = await subscriptionPricingService.quote(tier, cycle, current.country_code);
+        // Priced by the server, in the subscription's own currency and country. An INR subscription is priced from the Indian list (price + GST),
+        // exactly what its renewals charge, whatever country the customer picked.
+        const { base, quote } = await subscriptionPricingService.quote(tier, cycle, currency === "INR" ? "IN" : current.country_code);
         if (base.id === current.plan_id) throw new AppError(409, "That is already your current plan.", "SAME_PLAN");
-        if (quote.charge.currency !== currency || quote.charge.fallback) {
+        const currentTier = tierOfPlan({ tier: current.plan_tier, name: current.plan_name, slug: current.slug });
+        const currentCycle = normalizeCycle(current.plan_cycle) ?? normalizeCycle(/-(monthly|quarterly|yearly)$/.exec(String(current.slug ?? ""))?.[1]);
+        const kind = currentCycle ? changeKindOf({ tier: currentTier, cycle: currentCycle }, { tier, cycle }) : "upgrade";
+        if (quote.charge.currency !== currency || (quote.charge.fallback && currency !== "INR")) {
             throw new AppError(
                 409,
                 `Subscriptions in ${currency} are not available right now, so this plan change can't be scheduled. Contact support.`,
@@ -94,12 +102,16 @@ export const subscriptionPlanChangeService = {
             const when = periodEnd.toLocaleDateString("en-IN", { day: "numeric", month: "long", year: "numeric" });
             throw new AppError(
                 409,
-                `${base.name} will start on ${when}, when your current plan ends, at ${money(quote.charge.total, currency)} per ${cycle === "yearly" ? "year" : cycle === "quarterly" ? "quarter" : "month"}. Your current plan stays active until then and you are not charged twice.`,
+                `${base.name} will start on ${when}, when your current plan ends, at ${money(quote.charge.total, currency)}${quote.charge.tax > 0 ? ` (incl. ${quote.charge.tax_percent}% GST)` : ""} per ${cycle === "yearly" ? "year" : cycle === "quarterly" ? "quarter" : "month"}. Your current plan stays active until then and you are not charged twice.`,
                 "PLAN_CHANGE_CONFIRMATION_REQUIRED",
                 {
                     consent_status: check.reason,
-                    current: { plan_name: current.plan_name, currency, amount: current.charged_amount == null ? null : Number(current.charged_amount), ends_at: periodEnd.toISOString() },
-                    next: { plan_name: base.name, tier, cycle, currency, amount: quote.charge.total, starts_at: periodEnd.toISOString() },
+                    kind,
+                    current: { plan_name: current.plan_name, tier: currentTier, cycle: currentCycle, currency, amount: current.charged_amount == null ? null : Number(current.charged_amount), ends_at: periodEnd.toISOString() },
+                    next: {
+                        plan_name: base.name, tier, cycle, currency, amount: quote.charge.total, starts_at: periodEnd.toISOString(),
+                        subtotal: quote.charge.subtotal, tax: quote.charge.tax, tax_percent: quote.charge.tax_percent,
+                    },
                     confirmation_token: issuePlanChangeToken(binding),
                 },
             );
@@ -119,7 +131,10 @@ export const subscriptionPlanChangeService = {
                 quantity: 1,
                 customer_notify: 1,
                 start_at: Math.floor(periodEnd.getTime() / 1000),
-                notes: { salon_id: salonId, user_id: userId, plan_slug: base.slug, replaces: current.razorpay_subscription_id, country: quote.country, charge_currency: currency },
+                notes: {
+                    salon_id: salonId, user_id: userId, plan_slug: base.slug, country: quote.country, charge_currency: currency,
+                    ...(current.razorpay_subscription_id ? { replaces: current.razorpay_subscription_id } : {}),
+                },
             });
         } catch (err: any) {
             if (err instanceof AppError) throw err;

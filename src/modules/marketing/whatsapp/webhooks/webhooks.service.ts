@@ -272,7 +272,10 @@ export const webhooksService = {
         timestamp instanceof Date && !isNaN(timestamp.getTime())
       ) {
         try {
-          const matched = await whatsappAutomationService.handleDeliveryStatus(wamid, type, timestamp)
+          const matched = await whatsappAutomationService.handleDeliveryStatus(
+            wamid, type, timestamp,
+            type === 'FAILED' ? { code: errorCode, message: errorMsg } : null
+          )
           logger.debug(`[WA-AUTO] handleDeliveryStatus ${matched ? 'matched a log row' : 'found NO matching log row'} for wamid=${wamid}`)
         } catch (err: any) {
           logger.warn('[WA-AUTO] handleDeliveryStatus error:', err?.message)

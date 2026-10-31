@@ -16,6 +16,8 @@ export type ProductRecommendation = {
     name: string;
     // Real values from the products table — never from the model.
     retail_price: string | number | null;
+    // retail | consumable | both, straight from the products table.
+    product_type: string | null;
     in_stock: boolean;
     why: string;
     // Taken only from the product's own text; empty if the product has none.
@@ -104,6 +106,7 @@ Respond with JSON only: {"recommendations":[{"product_id":"","why":"","benefits"
             product_id: product.id,
             name: product.name,
             retail_price: product.retail_price,
+            product_type: product.product_type ?? null,
             in_stock: product.amount > 0,
             why: String(pick.why ?? "").slice(0, 300),
             benefits: Array.isArray(pick.benefits) ? pick.benefits.map((b: unknown) => String(b).slice(0, 120)).slice(0, 5) : [],
