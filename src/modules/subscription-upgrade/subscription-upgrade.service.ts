@@ -181,6 +181,7 @@ function quoteView(b: BuiltQuote) {
         target: { plan_name: b.target.name, tier: b.target.tier, cycle: b.target.cycle, price: Math.round(b.target.price * b.fxRate * 100) / 100 },
         total_days: q.totalDays,
         remaining_days: q.remainingDays,
+        bonus_days: q.bonusDays,
         new_plan_charge: fromPaise(q.newPlanChargePaise),
         credit_applied: fromPaise(q.creditAppliedPaise),
         unused_credit_not_refunded: fromPaise(q.unusedCreditPaise),

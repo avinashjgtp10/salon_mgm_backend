@@ -9,10 +9,14 @@
 //     not reset or extended) and the salon pays only the prorated difference.
 //  4. A different billing cycle (e.g. Advance monthly -> Growth yearly) is a "term change": a new full term starts today at the
 //     full new price, less the unused credit.
-//  5. Credit never exceeds the new charge, and leftover credit is not refunded or carried forward.
+//  5. Credit never exceeds the new charge. On a term change (rule 4) any credit left after paying for the new term is turned into
+//     extra whole days of the new plan at its daily price (so paid time is not lost); on a same-cycle upgrade the end date is
+//     kept and leftover credit is not refunded or carried forward. Any remainder under one day is not refunded.
 //  6. GST is charged on what remains after credit (the taxable value), at the plan GST rate.
 //  7. All arithmetic is in whole paise with half-up rounding at each step, so the same inputs always give the same total.
-//  8. Downgrades are not handled here: a lower plan takes effect at the next renewal.
+//  8. Downgrades (a lower tier) and shorter billing cycles are not handled here: they are SCHEDULED to start when the current
+//     period ends (subscription-plan-change.service.ts), so everything already paid for is used first, nothing is charged today
+//     and nobody is charged twice for the same period.
 //
 // Set UPGRADE_CREDIT_ENABLED=false to turn rule 1 off (the new plan is then charged without any credit).
 

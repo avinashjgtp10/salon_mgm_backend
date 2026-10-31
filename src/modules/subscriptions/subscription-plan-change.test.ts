@@ -99,11 +99,7 @@ describe("the in-place upgrade refuses non-INR subscriptions", () => {
 });
 
 describe("scheduling a plan change", () => {
-  it("only applies to non-INR subscriptions and to salons that have one", async () => {
-    currentRow = current({ charged_currency: "INR" });
-    await expect(subscriptionPlanChangeService.schedule(SALON, USER, "advance", "monthly")).rejects.toMatchObject({ code: "USE_UPGRADE_FLOW" });
-    currentRow = current({ charged_currency: null });
-    await expect(subscriptionPlanChangeService.schedule(SALON, USER, "advance", "monthly")).rejects.toMatchObject({ code: "USE_UPGRADE_FLOW" });
+  it("only applies to salons that have an active subscription, and to valid plans", async () => {
     currentRow = null;
     await expect(subscriptionPlanChangeService.schedule(SALON, USER, "advance", "monthly")).rejects.toMatchObject({ code: "NO_SUBSCRIPTION" });
     await expect(subscriptionPlanChangeService.schedule(null, USER, "advance", "monthly")).rejects.toMatchObject({ statusCode: 403 });
@@ -186,6 +182,79 @@ describe("scheduling a plan change", () => {
     await expect(subscriptionPlanChangeService.schedule(SALON, USER, "advance", "monthly", token)).rejects.toMatchObject({ statusCode: 502, code: "RAZORPAY_ERROR" });
     expect(writes(/INSERT INTO subscriptions|UPDATE subscriptions/)).toHaveLength(0);
     expect(rzpCancel).not.toHaveBeenCalled();
+  });
+});
+
+describe("scheduling a plan change on an INR subscription (downgrades and shorter billing cycles)", () => {
+  const inrCurrent = (slug: string, tier: string, cycle: string, over: Record<string, unknown> = {}) => current({
+    charged_currency: "INR", country_code: "IN", charged_amount: null, slug, plan_name: `SalonOx ${tier}`, plan_id: `plan-${tier}-${cycle}`,
+    plan_tier: tier, plan_cycle: cycle, ...over,
+  });
+  const mkCycle = (tier: "basic" | "advance" | "growth", cycle: "monthly" | "quarterly" | "yearly", price: number): BasePlan =>
+    ({ ...mk(tier, price), id: `plan-${tier}-${cycle}`, slug: `salonox-${tier}-${cycle}`, cycle });
+  const askFor = async (tier: "basic" | "advance" | "growth", cycle: "monthly" | "quarterly" | "yearly", token?: unknown) => {
+    try { return await subscriptionPlanChangeService.schedule(SALON, USER, tier, cycle, token); } catch (e: any) { return e; }
+  };
+
+  it("Growth monthly -> Advance monthly: priced in INR with GST, nothing charged today, starts when the period ends", async () => {
+    currentRow = inrCurrent("salonox-growth-monthly", "growth", "monthly");
+    target(mkCycle("advance", "monthly", 999), ["INR"]);
+    const e = await askFor("advance", "monthly");
+    expect(e).toMatchObject({ code: "PLAN_CHANGE_CONFIRMATION_REQUIRED" });
+    expect(e.details.kind).toBe("downgrade");
+    expect(e.details.next).toMatchObject({ currency: "INR", subtotal: 999, tax: 179.82, tax_percent: 18, amount: 1178.82, starts_at: periodEnd.toISOString() });
+    expect(e.details.current).toMatchObject({ tier: "growth", cycle: "monthly", ends_at: periodEnd.toISOString() });
+    expect(e.message).toMatch(/incl\. 18% GST/);
+    expect(rzpCreate).not.toHaveBeenCalled();
+
+    const r = await subscriptionPlanChangeService.schedule(SALON, USER, "advance", "monthly", e.details.confirmation_token);
+    expect(r).toMatchObject({ starts_at: periodEnd.toISOString(), already_pending: false });
+    expect(resolvePlan).toHaveBeenCalledWith(expect.objectContaining({ slug: "salonox-advance-monthly" }), "INR", 999, expect.any(Number));
+    expect(rzpCreate).toHaveBeenCalledWith(expect.objectContaining({ start_at: Math.floor(periodEnd.getTime() / 1000) }));
+    // the paid plan is left running until its own end date
+    expect(rzpCancel).not.toHaveBeenCalled();
+    expect(writes(/UPDATE subscriptions/)).toHaveLength(0);
+  });
+
+  it("Growth yearly -> Advance monthly: allowed, starts when the paid year ends (no paid time is cut short)", async () => {
+    const yearEnd = new Date(Date.now() + 300 * 24 * 3600 * 1000);
+    currentRow = inrCurrent("salonox-growth-yearly", "growth", "yearly", { current_period_end: yearEnd.toISOString() });
+    target(mkCycle("advance", "monthly", 999), ["INR"]);
+    const e = await askFor("advance", "monthly");
+    expect(e.details.kind).toBe("downgrade");
+    expect(e.details.next.starts_at).toBe(yearEnd.toISOString());
+  });
+
+  it("the same plan on a shorter cycle is a billing-cycle change", async () => {
+    currentRow = inrCurrent("salonox-advance-yearly", "advance", "yearly");
+    target(mkCycle("advance", "monthly", 999), ["INR"]);
+    const e = await askFor("advance", "monthly");
+    expect(e.details.kind).toBe("cycle_change");
+  });
+
+  it("an INR subscription is never moved to another currency, even for a customer in another country", async () => {
+    currentRow = inrCurrent("salonox-growth-monthly", "growth", "monthly", { country_code: "US" });
+    target(mkCycle("advance", "monthly", 999), ["INR", "USD"]);
+    const e = await askFor("advance", "monthly");
+    expect(e.details.next.currency).toBe("INR");
+    expect(quoteMock).toHaveBeenCalledWith("advance", "monthly", "IN");
+  });
+
+  it("a plan assigned by SalonOx (no Razorpay subscription) can also be scheduled: it simply ends on its date", async () => {
+    currentRow = inrCurrent("salonox-growth-monthly", "growth", "monthly", { razorpay_subscription_id: null });
+    target(mkCycle("advance", "monthly", 999), ["INR"]);
+    const e = await askFor("advance", "monthly");
+    await subscriptionPlanChangeService.schedule(SALON, USER, "advance", "monthly", e.details.confirmation_token);
+    const notes = rzpCreate.mock.calls[0][0].notes;
+    expect(notes).not.toHaveProperty("replaces");
+  });
+
+  it("still refuses the plan the salon is already on, and a subscription with no end date", async () => {
+    currentRow = inrCurrent("salonox-growth-monthly", "growth", "monthly");
+    target(mkCycle("growth", "monthly", 1299), ["INR"]);
+    expect(await askFor("growth", "monthly")).toMatchObject({ code: "SAME_PLAN" });
+    currentRow = inrCurrent("salonox-growth-monthly", "growth", "monthly", { current_period_end: null });
+    expect(await askFor("advance", "monthly")).toMatchObject({ code: "NOT_SCHEDULABLE" });
   });
 });
 
