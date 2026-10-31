@@ -250,7 +250,12 @@ export const whatsappAutomationService = {
 
   // ── Webhook Delivery Handler ──────────────────────────────────────────────
   // Called from webhooks.service.ts — returns true if handled
-  async handleDeliveryStatus(wamid: string, type: string, timestamp: Date): Promise<boolean> {
+  async handleDeliveryStatus(
+    wamid: string,
+    type: string,
+    timestamp: Date,
+    error?: { code: string | null; message: string | null } | null
+  ): Promise<boolean> {
     const log = await whatsappAutomationRepository.findByWamid(wamid)
     if (!log) return false
 
@@ -259,8 +264,8 @@ export const whatsappAutomationService = {
     } else if (type === 'READ') {
       await whatsappAutomationRepository.markRead(wamid, timestamp)
     } else if (type === 'FAILED') {
-      const reason = 'FAILED via webhook'
-      await whatsappAutomationRepository.markFailedByWamid(wamid, reason)
+      const reason = error?.message ? `${error.message} (Meta code ${error.code ?? '—'})` : 'FAILED via webhook'
+      await whatsappAutomationRepository.markFailedByWamid(wamid, reason, error ?? null)
       // The scheduled-message row (if any) was already marked SENT right
       // after Meta's initial "accepted" response — this webhook is the only
       // signal that it actually failed, so correct it now or the table would

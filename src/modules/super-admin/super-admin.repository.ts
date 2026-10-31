@@ -1,6 +1,7 @@
 import pool from "../../config/database";
 import bcrypt from "bcrypt";
 import { purgeSalon, clearSalonData as clearSalonDataRows } from "../salons/salons.repository";
+import { getPlatformSalonId } from "../client-announcements/platform-salon";
 
 export const superAdminRepository = {
 
@@ -168,6 +169,8 @@ export const superAdminRepository = {
   async getAllSalons(search?: string, kind?: "real" | "dummy") {
     const param = search ? `%${search}%` : null;
     const dummyFilter = kind ? (kind === "dummy" ? "AND s.is_dummy = true" : "AND s.is_dummy = false") : "";
+    // The hidden salon behind Client Announcements is SalonOx's own, not a customer: keep it out of these lists.
+    const platformSalonId = await getPlatformSalonId().catch(() => null);
     const { rows } = await pool.query(`
       SELECT
         s.id,
@@ -217,8 +220,9 @@ export const superAdminRepository = {
          OR u.phone         ILIKE $1
          OR u.first_name    ILIKE $1)
       ${dummyFilter}
+      AND ($2::text IS NULL OR s.id::text <> $2::text)
       ORDER BY s.created_at DESC
-    `, [param]);
+    `, [param, platformSalonId]);
 
     // Developers assigned to each salon (via its client requirements). Kept as a separate, guarded query so the
     // salons list still loads if the requirements tables are not migrated yet.
