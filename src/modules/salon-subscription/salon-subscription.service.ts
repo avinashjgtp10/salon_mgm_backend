@@ -2,6 +2,20 @@ import { AppError } from "../../middleware/error.middleware";
 import { salonSubscriptionRepository as repo } from "./salon-subscription.repository";
 
 const DAY = 24 * 60 * 60 * 1000;
+const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+
+/**
+ * Days left as CALENDAR days: the end day (the date part of the stored value, which is the day the admin picked) minus today's date in
+ * India. The old Math.ceil on the time between now and the stored timestamp gave 31 or 32 for the same end day depending on the
+ * time of day and on whether it was stored as midnight or 23:59:59. The Super Admin screens (utils/subscriptionDays.ts on the
+ * frontend) use the same rule, so every figure agrees.
+ */
+export function calendarDaysLeft(end: string | Date, nowMs: number = Date.now()): number {
+    const endDay = typeof end === "string" ? end.slice(0, 10) : end.toISOString().slice(0, 10);
+    const today = new Date(nowMs + IST_OFFSET_MS).toISOString().slice(0, 10);
+    const toUtcDay = (ymd: string) => { const [y, m, d] = ymd.split("-").map(Number); return Date.UTC(y, m - 1, d); };
+    return Math.round((toUtcDay(endDay) - toUtcDay(today)) / DAY);
+}
 
 function parseDate(v: unknown, field: string): Date {
     const d = typeof v === "string" && v ? new Date(v) : null;
@@ -28,7 +42,7 @@ export const salonSubscriptionService = {
                 ...h,
                 ends_at: end ?? null,
                 is_live: live,
-                days_remaining: live && end ? Math.max(0, Math.ceil((new Date(end).getTime() - now) / DAY)) : 0,
+                days_remaining: live && end ? Math.max(0, calendarDaysLeft(end, now)) : 0,
             };
         });
         return { current: withState[0] ?? null, history: withState };
