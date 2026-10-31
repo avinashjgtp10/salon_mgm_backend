@@ -30,6 +30,8 @@ export interface UpgradeQuote {
     periodEnd: Date;
     totalDays: number;
     remainingDays: number;
+    /** Extra days added to a new term from credit that exceeded its price (0 unless the billing cycle changed). */
+    bonusDays: number;
     currentPaidPaise: number;
     newPlanChargePaise: number;
     creditAppliedPaise: number;
@@ -64,6 +66,22 @@ export function relationOf(current: { tier: Tier | null; cycle: Cycle } | null, 
     if (tierRank(target.tier) > tierRank(current.tier)) return "upgrade";
     if (tierRank(target.tier) === tierRank(current.tier) && CYCLE_MONTHS[target.cycle] > CYCLE_MONTHS[current.cycle]) return "upgrade";
     return "change";
+}
+
+export type ChangeKind = "current" | "upgrade" | "downgrade" | "cycle_change";
+
+/**
+ * What kind of move a target plan is, for labels and messages (relationOf above decides HOW it is carried out):
+ *   upgrade       - a higher tier (at any billing cycle)
+ *   downgrade     - a lower tier (at any billing cycle)
+ *   cycle_change  - the same tier on another billing cycle (longer or shorter)
+ * With no known current tier every real plan counts as an upgrade.
+ */
+export function changeKindOf(current: { tier: Tier | null; cycle: Cycle } | null, target: { tier: Tier; cycle: Cycle }): ChangeKind {
+    if (!current) return "upgrade";
+    if (current.tier === target.tier && current.cycle === target.cycle) return "current";
+    if (current.tier === target.tier) return "cycle_change";
+    return tierRank(target.tier) > tierRank(current.tier) ? "upgrade" : "downgrade";
 }
 
 /**
@@ -123,7 +141,7 @@ export function calculateUpgradeQuote(input: {
 
     // Rule 3 / 4: what period the salon will have after paying, and what the new plan costs for it.
     const periodStart = now;
-    const periodEnd = sameCycle ? current.periodEnd : addCycle(now, target.cycle);
+    let periodEnd = sameCycle ? current.periodEnd : addCycle(now, target.cycle);
     const newPlanChargePaise = sameCycle
         ? Math.round((target.pricePaise * remainingDays) / totalDays)
         : target.pricePaise;
@@ -133,7 +151,21 @@ export function calculateUpgradeQuote(input: {
         ? Math.round((current.paidSubtotalPaise * remainingDays) / totalDays)
         : 0;
     const creditAppliedPaise = Math.min(earnedCreditPaise, newPlanChargePaise);   // rule 5
-    const unusedCreditPaise = earnedCreditPaise - creditAppliedPaise;
+    let unusedCreditPaise = earnedCreditPaise - creditAppliedPaise;
+
+    // Rule 5b: on a new term (different cycle) the credit left after paying for it is turned into extra days of the new plan, at its
+    // own daily price, instead of being lost (e.g. Advance yearly -> Growth monthly, with months of the year still unused).
+    // Only whole days are added; the remainder (less than one day of the new plan) is not refunded.
+    let bonusDays = 0;
+    if (!sameCycle && unusedCreditPaise > 0) {
+        const termDays = Math.max(1, Math.round((periodEnd.getTime() - now.getTime()) / DAY_MS));
+        const paisePerDay = target.pricePaise / termDays;
+        bonusDays = Math.floor(unusedCreditPaise / paisePerDay);
+        if (bonusDays > 0) {
+            periodEnd = new Date(periodEnd.getTime() + bonusDays * DAY_MS);
+            unusedCreditPaise = Math.max(0, unusedCreditPaise - Math.round(bonusDays * paisePerDay));
+        }
+    }
 
     // Rule 6: GST on the taxable value that remains.
     const subtotalPaise = newPlanChargePaise - creditAppliedPaise;
@@ -141,7 +173,7 @@ export function calculateUpgradeQuote(input: {
     const totalPaise = subtotalPaise + gstPaise;
 
     return {
-        kind, periodStart, periodEnd, totalDays, remainingDays,
+        kind, periodStart, periodEnd, totalDays, remainingDays, bonusDays,
         currentPaidPaise: current.paidSubtotalPaise,
         newPlanChargePaise, creditAppliedPaise, unusedCreditPaise,
         subtotalPaise, gstPercent, gstPaise, totalPaise,

@@ -34,7 +34,7 @@ export const salonSubscriptionRepository = {
         const { rows } = await pool.query(
             `SELECT s.id, s.status, s.is_trial, s.current_period_start, s.current_period_end,
                     ${purchase}
-                    s.trial_end, s.created_at, sp.name AS plan_name, sp.price, sp.billing_cycle
+                    s.trial_end, s.created_at, sp.name AS plan_name, sp.slug AS plan_slug, sp.tier AS plan_tier_col, sp.price, sp.billing_cycle
              FROM subscriptions s
              LEFT JOIN subscription_plans sp ON sp.id = s.plan_id
              WHERE s.salon_id = $1

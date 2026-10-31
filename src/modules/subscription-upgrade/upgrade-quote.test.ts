@@ -1,7 +1,7 @@
 // The upgrade price rules (see upgrade-policy.ts). Every expected figure below is worked out by hand in whole paise,
 // independently of the code under test.
 
-import { calculateUpgradeQuote, convertUpgradeQuote, relationOf, UpgradeError, toPaise } from "./upgrade-quote";
+import { calculateUpgradeQuote, changeKindOf, convertUpgradeQuote, relationOf, UpgradeError, toPaise } from "./upgrade-quote";
 import { loadUpgradePolicy } from "./upgrade-policy";
 import { addCycle, normalizeCycle, tierOfPlan } from "../subscription-billing/plan-tier";
 import { deriveSubscriptionState, daysRemaining } from "../subscription-billing/subscription-status";
@@ -133,6 +133,84 @@ describe("relationOf", () => {
         expect(relationOf(cur, { tier: "basic", cycle: "yearly" })).toBe("change");         // lower tier
         expect(relationOf(null, { tier: "basic", cycle: "monthly" })).toBe("upgrade");       // no plan yet: any plan is a purchase
         expect(relationOf({ tier: null, cycle: "yearly" }, { tier: "basic", cycle: "monthly" })).toBe("upgrade");
+    });
+});
+
+describe("every plan and billing cycle can be reached from every other (3 plans x 3 cycles = 81 moves)", () => {
+    const TIERS = ["basic", "advance", "growth"] as const;
+    const CYCLES = ["monthly", "quarterly", "yearly"] as const;
+    const RANK = { basic: 1, advance: 2, growth: 3 };
+    const MONTHS = { monthly: 1, quarterly: 3, yearly: 12 };
+    const PRICE_PAISE = { basic: 79_900, advance: 99_900, growth: 129_900 };   // monthly list prices; longer cycles are multiples
+    const priceOf = (t: (typeof TIERS)[number], c: (typeof CYCLES)[number]) => PRICE_PAISE[t] * MONTHS[c];
+    const period = (c: (typeof CYCLES)[number]) => {
+        const start = D("2026-10-01T00:00:00Z");
+        return { periodStart: start, periodEnd: addCycle(start, c) };
+    };
+
+    for (const ct of TIERS) for (const cc of CYCLES) for (const tt of TIERS) for (const tc of CYCLES) {
+        const label = `${ct} ${cc} -> ${tt} ${tc}`;
+        const cur = { tier: ct, cycle: cc };
+        const tgt = { tier: tt, cycle: tc };
+        const same = ct === tt && cc === tc;
+        const higher = RANK[tt] > RANK[ct];
+        const lower = RANK[tt] < RANK[ct];
+        const kind = same ? "current" : higher ? "upgrade" : lower ? "downgrade" : "cycle_change";
+        // paid immediately: a higher plan, or the same plan on a longer cycle; scheduled for the end of the period: everything else
+        const relation = same ? "current" : higher || (!lower && MONTHS[tc] > MONTHS[cc]) ? "upgrade" : "change";
+
+        it(`${label}: ${kind}, ${relation === "upgrade" ? "paid now" : relation === "change" ? "scheduled for the period end" : "already current"}`, () => {
+            expect(changeKindOf(cur, tgt)).toBe(kind);
+            expect(relationOf(cur, tgt)).toBe(relation);
+
+            const run = () => calculateUpgradeQuote({
+                now: D("2026-10-11T00:00:00Z"), gstPercent: 18, policy: POLICY,
+                current: { ...cur, ...period(cc), paidSubtotalPaise: priceOf(ct, cc) },
+                target: { ...tgt, pricePaise: priceOf(tt, tc) },
+            });
+            if (relation === "current") return expect(run).toThrow(expect.objectContaining({ code: "SAME_PLAN" }));
+            if (relation === "change") return expect(run).toThrow(expect.objectContaining({ code: "NOT_AN_UPGRADE" }));
+
+            const q = run();
+            expect(q.kind).toBe(cc === tc ? "upgrade" : "term_change");
+            expect(q.subtotalPaise).toBe(q.newPlanChargePaise - q.creditAppliedPaise);
+            expect(q.gstPaise).toBe(Math.round((q.subtotalPaise * 18) / 100));
+            expect(q.totalPaise).toBe(q.subtotalPaise + q.gstPaise);
+            expect(q.creditAppliedPaise).toBeLessThanOrEqual(q.newPlanChargePaise);
+            expect(q.totalPaise).toBeGreaterThanOrEqual(0);
+            expect(q.periodEnd.getTime()).toBeGreaterThan(D("2026-10-11T00:00:00Z").getTime());
+            if (cc === tc) expect(q.periodEnd.toISOString()).toBe(period(cc).periodEnd.toISOString());   // same cycle keeps the end date
+        });
+    }
+
+    it("a new term turns credit left over after paying for it into extra days, so paid time is not lost (Advance yearly -> Growth monthly)", () => {
+        const q = calculateUpgradeQuote({
+            now: D("2026-10-21T00:00:00Z"), gstPercent: 18, policy: POLICY,
+            current: { tier: "advance", cycle: "yearly", periodStart: D("2026-08-17T00:00:00Z"), periodEnd: D("2027-08-17T00:00:00Z"), paidSubtotalPaise: 1_200_000 },
+            target: { tier: "growth", cycle: "monthly", pricePaise: 130_000 },
+        });
+        // credit 1,200,000 x 300/365 = 986,301; the month costs 130,000; the other 856,301 buys floor(856,301 / (130,000 / 31 days)) = 204 days
+        expect(q.creditAppliedPaise).toBe(130_000);
+        expect(q.totalPaise).toBe(0);
+        expect(q.zeroPayable).toBe(true);
+        expect(q.bonusDays).toBe(204);
+        expect(q.periodEnd.toISOString()).toBe("2027-06-13T00:00:00.000Z");   // 21 Nov 2026 (one month) + 204 days
+        expect(q.unusedCreditPaise).toBe(817);                                  // less than one day of the new plan: not refunded
+    });
+
+    it("no extra days when the credit does not cover the new term, or on a same-cycle upgrade", () => {
+        const q = calculateUpgradeQuote({
+            now: NOW, gstPercent: 18, policy: POLICY, current: advanceMonthlyPaid200,
+            target: { tier: "growth", cycle: "yearly", pricePaise: 4_000_000 },
+        });
+        expect(q.bonusDays).toBe(0);
+        const same = calculateUpgradeQuote({
+            now: D("2026-10-01T00:00:00Z"), gstPercent: 18, policy: POLICY,
+            current: { tier: "basic", cycle: "yearly", periodStart: D("2026-10-01T00:00:00Z"), periodEnd: D("2027-10-01T00:00:00Z"), paidSubtotalPaise: 5_000_000 },
+            target: { tier: "advance", cycle: "yearly", pricePaise: 2_000_000 },
+        });
+        expect(same.bonusDays).toBe(0);
+        expect(same.unusedCreditPaise).toBe(3_000_000);
     });
 });
 

@@ -2,7 +2,8 @@ import pool from "../../config/database";
 import { GST_PERCENT } from "../plan-pricing/plan-pricing.service";
 import { CYCLES, TIERS, dbDate, normalizeCycle, tierOfPlan, type Cycle, type Tier } from "./plan-tier";
 import { daysRemaining, deriveSubscriptionState, isLiveState, type SubscriptionState } from "./subscription-status";
-import { relationOf, type PlanRelation } from "../subscription-upgrade/upgrade-quote";
+import { changeKindOf, relationOf, type ChangeKind, type PlanRelation } from "../subscription-upgrade/upgrade-quote";
+import { billingSchemaReady } from "../subscription-pricing/billing-schema";
 import { loadUpgradePolicy } from "../subscription-upgrade/upgrade-policy";
 
 // What the Billing & Plans page shows. Everything is read from the salon's own subscription rows and from VERIFIED payment
@@ -191,13 +192,38 @@ export const subscriptionBillingService = {
         }
 
         const live = subscription ? isLiveState(subscription.status) : false;
+        // relations: HOW a plan is reached from the current one (current / upgrade = pay now / change = scheduled for the end of the period).
+        // kinds: WHAT the move is (upgrade / downgrade / cycle_change), for the button and the messages. Any plan at any cycle can be reached.
         const relations = {} as Record<Tier, Record<Cycle, PlanAction>>;
+        const kinds = {} as Record<Tier, Record<Cycle, ChangeKind | "new">>;
         for (const t of TIERS) {
             relations[t] = {} as Record<Cycle, PlanAction>;
+            kinds[t] = {} as Record<Cycle, ChangeKind | "new">;
             for (const c of CYCLES) {
-                relations[t][c] = live && subscription?.cycle
-                    ? relationOf({ tier: subscription.tier, cycle: subscription.cycle }, { tier: t, cycle: c })
-                    : "new";
+                const here = live && subscription?.cycle ? { tier: subscription.tier, cycle: subscription.cycle } : null;
+                relations[t][c] = here ? relationOf(here, { tier: t, cycle: c }) : "new";
+                kinds[t][c] = here ? changeKindOf(here, { tier: t, cycle: c }) : "new";
+            }
+        }
+
+        // A plan change already scheduled to start when this period ends (waiting for the customer to authorise it, or authorised).
+        let scheduled: { plan_name: string; tier: Tier | null; cycle: Cycle | null; status: string; starts_at: string | null } | null = null;
+        if (current && live && (await billingSchemaReady())) {
+            const { rows: sc } = await pool.query(
+                `SELECT s.status, sp.name AS plan_name, sp.tier AS plan_tier, sp.slug AS plan_slug, sp.billing_cycle AS plan_cycle
+                 FROM subscriptions s JOIN subscription_plans sp ON sp.id = s.plan_id
+                 WHERE s.replaces_subscription_id = $1 AND s.status IN ('created', 'authenticated')
+                 ORDER BY s.created_at DESC LIMIT 1`,
+                [current.id]
+            );
+            if (sc[0]) {
+                scheduled = {
+                    plan_name: sc[0].plan_name,
+                    tier: tierOfPlan({ tier: sc[0].plan_tier, name: sc[0].plan_name, slug: sc[0].plan_slug }),
+                    cycle: normalizeCycle(sc[0].plan_cycle),
+                    status: sc[0].status,
+                    starts_at: subscription?.period_end ?? null,
+                };
             }
         }
 
@@ -218,7 +244,9 @@ export const subscriptionBillingService = {
             is_live: live,
             gst_percent: GST_PERCENT,
             relations,
+            kinds,
             pending: {
+                change: scheduled,
                 upgrade: upRows[0]
                     ? { id: upRows[0].id, plan_name: upRows[0].plan_name, tier: upRows[0].to_tier, cycle: upRows[0].to_cycle,
                         total: Number(upRows[0].total), created_at: dbDate(upRows[0].created_at)?.toISOString() ?? null }

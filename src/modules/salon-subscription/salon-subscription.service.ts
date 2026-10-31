@@ -1,5 +1,6 @@
 import { AppError } from "../../middleware/error.middleware";
 import { salonSubscriptionRepository as repo } from "./salon-subscription.repository";
+import { tierOfPlan } from "../subscription-billing/plan-tier";
 
 const DAY = 24 * 60 * 60 * 1000;
 const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
@@ -40,12 +41,19 @@ export const salonSubscriptionService = {
             const live = (h.status === "active" || h.status === "trialing") && (!end || new Date(end).getTime() > now);
             return {
                 ...h,
+                // Basic / Advance / Growth, whichever way the plan row records it (null for a custom or test plan).
+                plan_tier: tierOfPlan({ tier: h.plan_tier_col, name: h.plan_name, slug: h.plan_slug }),
                 ends_at: end ?? null,
                 is_live: live,
                 days_remaining: live && end ? Math.max(0, calendarDaysLeft(end, now)) : 0,
             };
         });
-        return { current: withState[0] ?? null, history: withState };
+        // The plan the salon is on: the live one if there is one, else the newest that was really theirs (an unfinished checkout or a
+        // scheduled replacement that has not started yet is not "the plan they bought").
+        const current = withState.find((h) => h.is_live)
+            ?? withState.find((h) => h.status !== "created" && h.status !== "authenticated")
+            ?? withState[0] ?? null;
+        return { current, history: withState };
     },
 
     // Moves the end date of the salon's current subscription to the END of `end_date` (UTC) - used to add or take
