@@ -36,7 +36,7 @@ const corsOptions: CorsOptionsDelegate<Request> = (req, callback) => {
       origin: true,
       credentials: true,
       methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-      allowedHeaders: ["Content-Type", "Authorization", "x-api-key", "x-timezone", "x-currency"],
+      allowedHeaders: ["Content-Type", "Authorization", "x-api-key", "x-timezone", "x-currency", "x-platform-context"],
       exposedHeaders: ["Content-Disposition"],
     });
   }
@@ -48,7 +48,7 @@ const corsOptions: CorsOptionsDelegate<Request> = (req, callback) => {
       origin: true,
       credentials: true,
       methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-      allowedHeaders: ["Content-Type", "Authorization", "x-api-key", "x-timezone", "x-currency", "x-salon-id"],
+      allowedHeaders: ["Content-Type", "Authorization", "x-api-key", "x-timezone", "x-currency", "x-salon-id", "x-platform-context"],
       exposedHeaders: ["Content-Disposition"],
     });
 

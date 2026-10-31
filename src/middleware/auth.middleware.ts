@@ -3,6 +3,7 @@ import jwt from "jsonwebtoken";
 import { AppError } from "./error.middleware";
 import { isSessionActive, getSessionPlatform } from "../modules/auth/session.util";
 import { clientActivityTracker } from "../modules/client-activity/client-activity.tracker";
+import { getPlatformSalonId, isPlatformPath } from "../modules/client-announcements/platform-salon";
 
 export const authMiddleware = async (
   req: Request & { user?: any },
@@ -62,6 +63,24 @@ export const authMiddleware = async (
           url: req.originalUrl, ip: req.ip, userAgent: String(req.headers["user-agent"] || ""),
         });
       }
+    }
+
+    // Super Admin > Client Announcements runs the Marketing screens against the platform salon (the salon that holds
+    // SalonOx's own Meta account). The page marks those requests with this header; only the Marketing endpoints listed in
+    // platform-salon.ts can be reached this way, and only by a super admin. Errors go straight to next() so they are not
+    // mistaken for a bad token (which would sign the super admin out).
+    if (decoded?.role === "super_admin" && req.headers["x-platform-context"] === "client-announcements" && isPlatformPath(req.originalUrl)) {
+      let platformSalonId: string | null = null;
+      try {
+        platformSalonId = await getPlatformSalonId();
+      } catch {
+        return next(new AppError(503, "Could not look up the platform salon. Please try again.", "SERVICE_UNAVAILABLE"));
+      }
+      if (!platformSalonId) {
+        return next(new AppError(409, "Choose the platform salon in Client Announcements first.", "PLATFORM_SALON_NOT_SET"));
+      }
+      req.user = { ...decoded, role: "salon_owner", salonId: platformSalonId, platformContext: true };
+      return next();
     }
 
     req.user = decoded;
