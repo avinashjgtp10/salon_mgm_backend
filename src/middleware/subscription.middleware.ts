@@ -1,3 +1,4 @@
+import logger from '../config/logger';
 import { Request, Response, NextFunction } from "express";
 import pool from "../config/database";
 import { getSalonId } from "../modules/utils/salon.util";
@@ -7,7 +8,6 @@ const EXEMPT_PREFIXES = [
     "/api/v1/oauth",
     "/api/v1/billing",
     "/api/v1/subscriptions",
-    "/api/v1/plan-payments", // an expired salon must still be able to pay
     "/api/v1/webhooks",
     "/api/v1/profile",
     "/api/v1/users/me",
@@ -91,7 +91,7 @@ export async function subscriptionMiddleware(
                      SET status = 'inactive', updated_at = NOW()
                      WHERE salon_id = $1 AND status = 'trialing' AND trial_ends_at < NOW()`,
                     [salonId]
-                ).catch((err) => console.error("[subscriptionMiddleware] expire trial error:", err));
+                ).catch((err) => logger.error("[subscriptionMiddleware] expire trial error:", err));
 
                 res.status(403).json(BLOCKED);
                 return;
@@ -100,7 +100,7 @@ export async function subscriptionMiddleware(
 
         next();
     } catch (err) {
-        console.error("[subscriptionMiddleware] DB error:", err);
+        logger.error("[subscriptionMiddleware] DB error:", err);
         res.status(503).json({
             success: false,
             error: {

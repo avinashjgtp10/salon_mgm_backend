@@ -22,11 +22,18 @@ export const errorHandler = (
   res: Response,
   _next: NextFunction
 ) => {
+  const requestId = (req as any).requestId as string | undefined;
+  // Tells the request logger this failure is already logged with its reason,
+  // so the same request isn't logged twice.
+  res.locals.errorLogged = true;
+
   if (err instanceof AppError) {
-    logger.error(`AppError: ${err.message}`, {
+    // Expected client errors (4xx) are warnings; only 5xx AppErrors are errors.
+    logger.log(err.statusCode >= 500 ? 'error' : 'warn', `AppError: ${err.message}`, {
+      requestId,
       code: err.code,
       statusCode: err.statusCode,
-      url: req.url,
+      url: req.path,
       method: req.method,
     });
 
@@ -129,8 +136,9 @@ export const errorHandler = (
   }
 
   logger.error(`Unhandled error: ${err.message}`, {
+    requestId,
     stack: err.stack,
-    url: req.url,
+    url: req.path,
     method: req.method,
   });
 

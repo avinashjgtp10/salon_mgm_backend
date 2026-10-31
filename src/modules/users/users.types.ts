@@ -41,6 +41,10 @@ export type SafeUser = {
     /** Real-time resolved permission map (staff only) — see permission.middleware.ts's
      * getEffectivePermissionsForUser(). null for owner/admin/client, who don't need it. */
     effective_permissions: Record<string, boolean> | null;
+    /** Modules a super admin has locked for this user's salon (Salon Customization).
+     * Every role gets it — it's the salon's entitlement, not a permission. */
+    locked_modules?: string[];
+    ai_enabled?: boolean;
 };
 
 export type { UpdateUserInput } from "./users.validator";

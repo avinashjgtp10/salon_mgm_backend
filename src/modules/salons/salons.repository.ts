@@ -296,7 +296,7 @@ const SALON_CLEAR_DATA_TABLES = [
   "device_tokens", "devices", "push_notification_receipts", "notifications",
   "support_tickets",
   "salon_brand_kits", "salon_invoice_counters", "salon_group_members",
-  "bot_questions", "subscription_permission_audit_log",
+  "bot_questions",
 ];
 
 /**

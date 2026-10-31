@@ -4,7 +4,11 @@ import { usersRepo } from "./users.repository";
 import { SafeUser, UpdateUserInput } from "./users.types";
 import logger from "../../config/logger";
 import { getEffectivePermissionsForUser } from "../../middleware/permission.middleware";
+import { loadLockedModules } from "../../middleware/moduleLock.middleware";
+import { isLunoxEnabled } from "../ai-credentials/ai-credentials.service";
 import { rolesRepository } from "../roles/roles.repository";
+import { salonsService } from "../salons/salons.service";
+
 
 // A user's WhatsApp Alerts list: the primary users.phone plus up to this many numbers in total.
 const MAX_ALERT_NUMBERS = 5;
@@ -68,8 +72,8 @@ function toSafeUser(u: any, effectivePermissions: Record<string, boolean> | null
 
 export const usersService = {
 
-  async me(userId: string, sessionSalonId?: string | null) {
-    logger.info(`Fetching current user profile`, { userId });
+  async me(userId: string, sessionSalonId?: string | null, opts?: { includeSalon?: boolean }) {
+    logger.debug(`Fetching current user profile`, { userId });
 
     const user = await usersRepo.findByIdWithStaffPermissions(userId, sessionSalonId);
 
@@ -93,8 +97,29 @@ export const usersService = {
       );
     }
 
-    logger.info(`User profile fetched successfully`, { userId });
-    return toSafeUser(user, effectivePermissions);
+    // Salon Customization: which modules are locked for this salon. The session's
+    // salon wins (owner, staff and impersonation all carry it); a user with no
+    // salon yet (super admin, mid-onboarding) simply has none.
+    const lockSalonId = sessionSalonId ?? user.staff_salon_id ?? null;
+    const lockedModules = lockSalonId ? Array.from(await loadLockedModules(lockSalonId)) : [];
+
+    // LUNOX (AI) is on only for salons Super Admin has saved a Cloudflare key for; the UI shows "Upgrade" otherwise.
+    const aiEnabled = lockSalonId ? await isLunoxEnabled(lockSalonId).catch(() => false) : false;
+
+    const safeUser = { ...toSafeUser(user, effectivePermissions), locked_modules: lockedModules, ai_enabled: aiEnabled };
+    if (!opts?.includeSalon) {
+      logger.debug(`User profile fetched successfully`, { userId });
+      return safeUser;
+    }
+
+    // Exactly what GET /salons/current returns (owner's own salon, else the session's salon, slug
+    // ensured), so the app can load the user and the salon in ONE request instead of two. A user with
+    // no salon yet (not onboarded, super admin) simply gets salon: null.
+    // Only requested with ?include=salon, so every other /users/profile caller is unaffected.
+    const salon = await salonsService.mySalon(userId, sessionSalonId).catch(() => null);
+
+    logger.debug(`User profile (with salon) fetched successfully`, { userId });
+    return { ...safeUser, salon };
   },
 
   async list() {

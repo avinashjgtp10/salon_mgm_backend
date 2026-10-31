@@ -1,7 +1,9 @@
+import logger from '../../config/logger';
 import { botQuestionsRepository } from "./bot-questions.repository";
 import { LogBotQuestionInput, BotQuestionListFilters, SaveAnswerInput } from "./bot-questions.types";
 
-const RETENTION_DAYS = 30;
+// Chat messages are removed this many hours after their last activity (see botQuestionsRepository.deleteOlderThan).
+export const RETENTION_HOURS = 24;
 
 export const botQuestionsService = {
   // Fire-and-forget from bot.routes.ts — logging failures must never break
@@ -10,7 +12,7 @@ export const botQuestionsService = {
     try {
       await botQuestionsRepository.logQuestion(input);
     } catch (err: any) {
-      console.warn("[BOT-QUESTIONS] Failed to log question:", err?.message);
+      logger.warn("[BOT-QUESTIONS] Failed to log question:", err?.message);
     }
   },
 
@@ -27,7 +29,7 @@ export const botQuestionsService = {
   },
 
   async runRetentionCleanup(): Promise<number> {
-    return botQuestionsRepository.deleteOlderThan(RETENTION_DAYS);
+    return botQuestionsRepository.deleteOlderThan(RETENTION_HOURS);
   },
 
   async replyDirect(id: string, reply: string) {

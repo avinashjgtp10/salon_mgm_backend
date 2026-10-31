@@ -2,6 +2,7 @@ import ExcelJS from "exceljs";
 import { randomUUID } from "crypto";
 import logger from "../../config/logger";
 import { AppError } from "../../middleware/error.middleware";
+import { assertModuleUnlocked } from "../../middleware/moduleLock.middleware";
 import { appointmentsRepository } from "./appointments.repository";
 import { salesRepository } from "../sales/sales.repository";
 import type { SaleItem } from "../sales/sales.types";
@@ -28,7 +29,8 @@ import { staffService } from "../staff/staff.service";
 import { clientsRepository } from "../clients/clients.repository";
 import { sendReceiptDocument } from "../sales/receipt-whatsapp.service";
 import { sendPurchaseReceipt, getPurchaseReceiptPdf } from "../sales/receipt-send.helper";
-import { computeBillTotals, rowsTotal, normalizeDiscountAppliesTo, ActiveTaxRow } from "../pricing/pricing.engine";
+import type { ActiveTaxRow } from "../pricing/pricing.engine";
+import { computeAppointmentTotals } from "./appointment-totals";
 import { getActiveTaxes } from "../settings/tax.util";
 import { paymentsRepository } from "../payments/payments.repository";
 import { clientPackagesService } from "../client-packages/client-packages.service";
@@ -58,69 +60,6 @@ import {
 // been collected, that payment's tax_breakdown is authoritative (reflects
 // wallet/coupon actually applied) and must never be overridden by a fresh
 // recompute here.
-// Shared by backfillTaxBreakdown (read-time display) and update() (the
-// paid/partial recompute-and-branch decision below) — both need "what would
-// this appointment's bill actually total, from its raw stored inputs."
-function computeAppointmentTotals(appt: {
-    services?: any[]; package_items?: any[]; product_items?: any[]; membership_items?: any[];
-    discount_type?: string; discount_value?: number; discount_applies_to?: unknown;
-    ex_charges?: number; tip_amount?: number; tip_added_to_salon?: boolean;
-    include_gst?: boolean; membership_discount_used?: number | string;
-}, activeTaxes: ActiveTaxRow[]) {
-    const toRow = (items: any[] = []) => (items || []).map((i) => ({
-        price: Number(i?.price) || 0,
-        // Stored appointment service/item rows use "qty" (see
-        // useAppointment.ts::buildServiceApiItems on the frontend) — never
-        // "quantity". Reading only .quantity here silently defaulted every
-        // row to qty=1, which is why increasing an item's quantity on a
-        // paid/partial appointment kept recomputing (and even re-persisting,
-        // via update()'s reprice branches below) the bill at its original
-        // qty=1 total. payments.service.ts already guards both keys; match
-        // that here so this is the one place that needs the fallback.
-        qty: Number(i?.quantity) || Number(i?.qty) || 1,
-        isPackageService: !!i?.is_package_service,
-    }));
-    return computeBillTotals({
-        actualAmounts: {
-            // Package-covered rows are excluded from the taxable base — the
-            // customer already paid for those sessions when they bought the
-            // package, so this read-time recompute must not tax (or even
-            // count) that value again. Mirrors payments.service.ts's own
-            // `serviceTotal` filter; without it, this backfill silently
-            // taxed the full pre-coverage subtotal on every read where the
-            // cached tax_breakdown looked stale (see needsTaxBackfill).
-            service:    rowsTotal(toRow(appt.services).filter((r) => !r.isPackageService)),
-            packages:   rowsTotal(toRow(appt.package_items)),
-            product:    rowsTotal(toRow(appt.product_items)),
-            membership: rowsTotal(toRow(appt.membership_items)),
-        },
-        discountType: (appt.discount_type === "percentage" ? "percentage" : "flat"),
-        discountValue: Number(appt.discount_value) || 0,
-        // This bill's own "Apply to" selection. NULL on any appointment
-        // predating the column, which normalizes to undefined = legacy scope,
-        // so a read-time backfill reproduces exactly what that bill was
-        // charged instead of re-pricing it under the new rule.
-        discountAppliesTo: normalizeDiscountAppliesTo(appt.discount_applies_to),
-        // A percentage/loyalty membership discount is a genuine pre-tax price
-        // cut, same as the manual discount above — already collected onto
-        // this appointment via findById()/listBySalonId()'s payments
-        // subquery (MAX per appointment, not a per-call delta). Without this,
-        // a read-time backfill (any appointment whose tax_breakdown is empty
-        // or stale) recomputed computed_grand_total as if no membership
-        // discount had ever been applied, overstating it by exactly that
-        // amount — see ComputeBillTotalsInput.membershipDiscountAmount for
-        // why this must go directly into grandTotal, not the discRatio.
-        membershipDiscountAmount: Number(appt.membership_discount_used) || 0,
-        // Respect this appointment's own persisted "Include GST" choice —
-        // without this gate, a bill deliberately saved with GST excluded
-        // gets the salon's active taxes silently added back in on every
-        // read-time backfill/reprice (see include_gst on the Appointment type).
-        taxes: appt.include_gst === false ? [] : activeTaxes,
-        exCharges: Number(appt.ex_charges) || 0,
-        tip: Number(appt.tip_amount) || 0,
-        tipAddedToSalon: !!appt.tip_added_to_salon,
-    });
-}
 
 // Single source of truth for "does this appointment's cached tax_breakdown
 // need recomputing" — a payment's snapshot is only trustworthy if nothing has
@@ -274,6 +213,52 @@ function deriveDisplayStatus(appt: Appointment): Appointment {
     return { ...appt, status: "no-show" };
 }
 
+// ── Job card (staff handoff workflow) ─────────────────────────────────────────
+// Every staff-performed row of an appointment, in the order the client moves
+// through them: services, then packages, then memberships, each in booking order.
+type JobCardRow = AppointmentServiceItem & { status?: string };
+
+function jobCardRows(appt: Pick<Appointment, "services" | "package_items" | "membership_items">): JobCardRow[] {
+    return [...(appt.services ?? []), ...(appt.package_items ?? []), ...(appt.membership_items ?? [])] as JobCardRow[];
+}
+
+// The earliest unfinished row, owned by a different staff member, that comes
+// before rows[index] — or null when rows[index] is ready to start. Unassigned
+// rows never block, since nobody could finish them.
+function waitingOn(rows: JobCardRow[], index: number): JobCardRow | null {
+    const row = rows[index];
+    if (!row) return null;
+    return rows.slice(0, index).find((earlier) =>
+        earlier.staff_id && earlier.staff_id !== row.staff_id && earlier.status !== "completed") ?? null;
+}
+
+// After a row is completed, tell each staff member whose pending service has
+// just become ready that it's their turn — once per staff member.
+async function notifyNewlyReadyStaff(before: Appointment, after: Appointment, salonId: string): Promise<void> {
+    const beforeRows = jobCardRows(before);
+    const afterRows = jobCardRows(after);
+    const readyByStaff = new Map<string, string[]>();
+
+    afterRows.forEach((row, index) => {
+        if (!row.staff_id || (row.status ?? "pending") !== "pending") return;
+        if (waitingOn(afterRows, index) || !waitingOn(beforeRows, index)) return;
+        readyByStaff.set(row.staff_id, [...(readyByStaff.get(row.staff_id) ?? []), row.name]);
+    });
+
+    for (const [staffId, serviceNames] of readyByStaff) {
+        const staff = await staffService.getById(staffId, salonId).catch(() => null);
+        if (!staff?.is_active || !staff.user_id) continue;
+        await notificationsService.create({
+            salon_id: salonId,
+            type: "appointment",
+            reference_id: after.id,
+            target_staff_user_id: staff.user_id,
+            title: "It's your turn",
+            body: `${after.client_name ?? "Walk-in"} is ready for ${serviceNames.join(", ")}`,
+        });
+    }
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 // DD-MM-YYYY — matches the frontend's app-wide standard date format (see
@@ -325,6 +310,20 @@ function assignItemRowIds(items?: { id?: string }[]): void {
     for (const item of items) {
         if (!item.id) item.id = randomUUID();
     }
+}
+
+// Salon Customization: a salon with Packages/Memberships locked can't add NEW
+// package/membership rows to a bill. Rows already on the appointment are left
+// alone so editing or paying an existing bill keeps working.
+async function assertNoNewLockedItems(
+    salonId: string | null | undefined,
+    incoming: { id?: string }[] | null | undefined,
+    existing: { id?: string }[] | null | undefined,
+    key: "packages" | "memberships"
+): Promise<void> {
+    if (!incoming || incoming.length === 0) return;
+    const known = new Set((existing ?? []).map((i) => i.id).filter(Boolean));
+    if (incoming.some((i) => !i.id || !known.has(i.id))) await assertModuleUnlocked(salonId, key);
 }
 
 // Looks up, once per flattenServiceConsumables() call, every distinct
@@ -566,6 +565,8 @@ export const appointmentsService = {
         // this just peels the declared recipe/actual-qty data off the JSONB
         // services array and stages it for a relational write once the
         // appointment row (and therefore its id) exists.
+        await assertNoNewLockedItems(body.salon_id, body.package_items, null, "packages");
+        await assertNoNewLockedItems(body.salon_id, body.membership_items, null, "memberships");
         assignServiceRowIds(body.services);
         assignItemRowIds(body.package_items);
         assignItemRowIds(body.membership_items);
@@ -736,8 +737,9 @@ export const appointmentsService = {
         itemId: string;
         salonId: string;
         status: "in_progress" | "completed";
+        requesterRole?: string;
     }): Promise<Appointment> {
-        const { appointmentId, itemId, salonId, status } = params;
+        const { appointmentId, itemId, salonId, status, requesterRole } = params;
         const existing = await appointmentsRepository.findById(appointmentId);
         if (!existing || existing.salon_id !== salonId) {
             throw new AppError(404, "Appointment not found", "NOT_FOUND");
@@ -747,6 +749,21 @@ export const appointmentsService = {
         const arrayKey = (["services", "package_items", "membership_items"] as const)
             .find((key) => (existing[key] as { id?: string }[] | undefined)?.some((row) => row.id === itemId));
         if (!arrayKey) throw new AppError(404, "Service/package/membership row not found", "NOT_FOUND");
+
+        // Job card: a staff member can only start their service once every
+        // earlier service owned by someone else is finished. Owners/admins
+        // can start any row; handoffItem() stays the explicit override.
+        if (status === "in_progress" && requesterRole !== "salon_owner" && requesterRole !== "admin") {
+            const rows = jobCardRows(existing);
+            const blocker = waitingOn(rows, rows.findIndex((row) => row.id === itemId));
+            if (blocker) {
+                throw new AppError(
+                    409,
+                    `Not ready yet: waiting for ${blocker.staff_name || "another staff member"} to finish ${blocker.name}.`,
+                    "NOT_READY"
+                );
+            }
+        }
 
         const now = new Date().toISOString();
         const items = (existing[arrayKey] as (AppointmentServiceItem & { status?: string })[]).map((row) => {
@@ -768,6 +785,15 @@ export const appointmentsService = {
         });
 
         await appointmentsRepository.update(appointmentId, { [arrayKey]: items } as UpdateAppointmentBody);
+
+        if (status === "completed") {
+            notifyNewlyReadyStaff(existing, { ...existing, [arrayKey]: items }, salonId).catch((err: any) => {
+                logger.error("Job card next-staff notification failed", {
+                    appointmentId, itemId, message: err?.message, stack: err?.stack, error: err,
+                });
+            });
+        }
+
         return appointmentsService.getById(appointmentId);
     },
 
@@ -892,6 +918,8 @@ export const appointmentsService = {
         let patch = params.patch;
         const existing = await appointmentsRepository.findById(appointmentId);
         if (!existing) throw new AppError(404, "Appointment not found", "NOT_FOUND");
+        await assertNoNewLockedItems(existing.salon_id, patch.package_items, existing.package_items, "packages");
+        await assertNoNewLockedItems(existing.salon_id, patch.membership_items, existing.membership_items, "memberships");
 
         // "no-show" is the one non-terminal terminal state: a reschedule (time,
         // staff, or duration change) brings it back to "booked" instead of being
@@ -935,7 +963,7 @@ export const appointmentsService = {
             const totals = computeAppointmentTotals(merged, activeTaxes);
             const newGrandTotal = totals.grandTotal;
             const existingPaid = await paymentsRepository.getTotalPaidForAppointment(appointmentId);
-            logger.info("[DEBUG update() reprice]", {
+            logger.debug("[update() reprice]", {
                 appointmentId, existingStatus: existing.status, isContentEdit,
                 newGrandTotal, existingPaid, activeTaxesCount: activeTaxes.length,
                 patchKeys: Object.keys(patch),
@@ -1242,7 +1270,7 @@ export const appointmentsService = {
         // ── Live calendar update ───────────────────────────────────────────────
         // create()/cancel() already push a "notification" socket event that the
         // calendar listens to for a live refresh — update() (reschedule, staff
-        // reassignment, or LUNOX's modifyAppointmentServices changing what's
+        // reassignment, or a services edit changing what's
         // booked/its duration) never did, so any of these silently required a
         // manual page refresh to appear correctly.
         //
@@ -1437,9 +1465,9 @@ export const appointmentsService = {
             try {
                 const ownerEmail = await salonsRepository.findOwnerEmailById(existing.salon_id);
                 if (!ownerEmail) { logger.warn("[email] appointmentCancelled (owner): no owner email, skipping"); return; }
-                logger.info(`[email] appointmentCancelled (owner) → to=${ownerEmail}`);
+                logger.debug(`[email] appointmentCancelled (owner) → to=${ownerEmail}`);
                 const allowed = await canSendEmail(existing.salon_id, "appointmentCancelled");
-                if (!allowed) { logger.info("[email] appointmentCancelled (owner): skipped (preference off)"); return; }
+                if (!allowed) { logger.debug("[email] appointmentCancelled (owner): skipped (preference off)"); return; }
                 await emailService.sendAppointmentCancelledOwnerEmail({
                     to:            ownerEmail,
                     salonName:     (existing as any).salon_name ?? "your salon",
@@ -1448,7 +1476,7 @@ export const appointmentsService = {
                     time:          formatTime(existing.scheduled_at),
                     appointmentId: existing.id,
                 });
-                logger.info(`[email] appointmentCancelled (owner) sent to ${ownerEmail}`);
+                logger.debug(`[email] appointmentCancelled (owner) sent to ${ownerEmail}`);
             } catch (err: any) { logger.error("[email] appointmentCancelled (owner) failed:", err?.message ?? err); }
         })();
 
@@ -1541,7 +1569,7 @@ export const appointmentsService = {
         // In that case: use the existing sale, fire commission on it, mark appointment paid.
         const preExistingSale = await salesRepository.findByAppointmentId(appointmentId);
         if (preExistingSale) {
-            logger.info("appointmentsService.checkout: using pre-existing sale from payments", {
+            logger.debug("appointmentsService.checkout: using pre-existing sale from payments", {
                 appointmentId, saleId: preExistingSale.id,
             });
 
@@ -1638,7 +1666,6 @@ export const appointmentsService = {
                 (async () => {
                     try {
                         const won = await whatsappAutomationRepository.guardInsertIfNotExists(`receipt-pdf-auto:${preExistingSale.id}`);
-                        console.log(`[BILL_RECEIPT] appointments.service.ts checkout() preExistingSale branch — guard won=${won} saleId=${preExistingSale.id}`);
                         if (!won) return;
 
                         // Same redemption/tax figures resolveReceiptContext()
@@ -1958,9 +1985,9 @@ export const appointmentsService = {
             try {
                 const ownerEmail = await salonsRepository.findOwnerEmailById(existing.salon_id);
                 if (!ownerEmail) { logger.warn("[email] newPayment (checkout): owner has no email, skipping"); return; }
-                logger.info(`[email] newPayment (checkout) → to=${ownerEmail}`);
+                logger.debug(`[email] newPayment (checkout) → to=${ownerEmail}`);
                 const allowed = await canSendEmail(existing.salon_id, "newPayment");
-                if (!allowed) { logger.info("[email] newPayment: skipped (preference off)"); return; }
+                if (!allowed) { logger.debug("[email] newPayment: skipped (preference off)"); return; }
                 await emailService.sendNewPaymentEmail({
                     to:            ownerEmail,
                     salonName:     (existing as any).salon_name ?? "your salon",
@@ -1969,7 +1996,7 @@ export const appointmentsService = {
                     paymentMethod: params.payment_method        ?? "N/A",
                     invoiceId:     sale.invoice_number ?? "",
                 });
-                logger.info(`[email] newPayment sent to ${ownerEmail}`);
+                logger.debug(`[email] newPayment sent to ${ownerEmail}`);
             } catch (err: any) { logger.error("[email] newPayment (checkout) failed:", err?.message ?? err); }
         })();
 

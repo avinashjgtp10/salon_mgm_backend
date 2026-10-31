@@ -50,7 +50,7 @@ export const servicesController = {
         page: q.page ? Number(q.page) : undefined,
         limit: q.limit ? Number(q.limit) : undefined,
       };
-      logger.info("GET /services", { query, salonId });
+      logger.debug("GET /services", { query, salonId });
       const result = await servicesService.list(query, salonId);
       return sendSuccess(res, 200, result, "Services list fetched successfully");
     } catch (err) {
@@ -355,7 +355,7 @@ export const bundlesController = {
         page: q.page ? Number(q.page) : undefined,
         limit: q.limit ? Number(q.limit) : undefined,
       };
-      logger.info("GET /bundles", { query, salonId });
+      logger.debug("GET /bundles", { query, salonId });
       const result = await bundlesService.list(query, salonId);
       return sendSuccess(res, 200, result, "Bundles list fetched successfully");
     } catch (err) {

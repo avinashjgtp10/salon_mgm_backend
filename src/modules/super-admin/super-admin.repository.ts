@@ -1,6 +1,7 @@
 import pool from "../../config/database";
 import bcrypt from "bcrypt";
 import { purgeSalon, clearSalonData as clearSalonDataRows } from "../salons/salons.repository";
+import { getPlatformSalonId } from "../client-announcements/platform-salon";
 
 export const superAdminRepository = {
 
@@ -168,12 +169,15 @@ export const superAdminRepository = {
   async getAllSalons(search?: string, kind?: "real" | "dummy") {
     const param = search ? `%${search}%` : null;
     const dummyFilter = kind ? (kind === "dummy" ? "AND s.is_dummy = true" : "AND s.is_dummy = false") : "";
+    // The hidden salon behind Client Announcements is SalonOx's own, not a customer: keep it out of these lists.
+    const platformSalonId = await getPlatformSalonId().catch(() => null);
     const { rows } = await pool.query(`
       SELECT
         s.id,
         COALESCE(s.business_name, s.slug, 'Unnamed')                                    AS name,
         u.id                                                                              AS owner_id,
         u.email                                                                           AS owner_email,
+        u.phone                                                                           AS owner_phone,
         TRIM(CONCAT(u.first_name,' ',COALESCE(u.last_name,'')))                         AS owner_name,
         CASE WHEN s.is_active THEN 'active' ELSE 'inactive' END                         AS status,
         COALESCE(u.is_onboarding_complete, false)                                       AS is_onboarding_complete,
@@ -188,7 +192,8 @@ export const superAdminRepository = {
         ), false)                                                                         AS meta_setup_complete,
         s.created_at,
         s.is_dummy,
-        (SELECT COUNT(*)::int  FROM staff        WHERE salon_id = s.id)                  AS staff_count,
+        NULLIF(CONCAT_WS(', ', NULLIF(TRIM(s.city), ''), NULLIF(TRIM(s.state), ''), NULLIF(TRIM(s.country), '')), '')   AS location,
+        (SELECT COUNT(*)::int  FROM staff       WHERE salon_id = s.id)                  AS staff_count,
         (SELECT COUNT(*)::int  FROM clients      WHERE salon_id = s.id)                  AS client_count,
         (SELECT COUNT(*)::int  FROM appointments WHERE salon_id = s.id)                  AS total_bookings,
         COALESCE((
@@ -196,32 +201,66 @@ export const superAdminRepository = {
           WHERE salon_id = s.id AND status IN ('completed','partial')
         ), 0)::numeric                                                                    AS revenue,
         sub.status                                                                        AS subscription_status,
-        -- The plan Super Admin assigned (Plans & Subscriptions → Salon Customization)
-        -- is what the salon's own Billing page and feature gating use, so it wins;
-        -- the subscription row's plan is the fallback for salons never customized.
-        COALESCE(spd.name, sp.name)                                                       AS plan_name,
-        spc.base_tier                                                                     AS plan_tier,
-        COALESCE(sub.trial_end, sub.current_period_end, spc.expiry_date)                  AS plan_expires_at
+        sp.name                                                                           AS plan_name,
+        COALESCE(sub.trial_end, sub.current_period_end)                                   AS plan_expires_at
       FROM salons s
       LEFT JOIN users u ON u.id = s.owner_id
       LEFT JOIN LATERAL (
         SELECT * FROM subscriptions
         WHERE salon_id = s.id
+          AND status NOT IN ('created', 'authenticated')   -- an unfinished Razorpay checkout (created/authenticated) is not a subscription; it must never hide the real one
         ORDER BY created_at DESC
         LIMIT 1
       ) sub ON true
       LEFT JOIN subscription_plans sp ON sp.id = sub.plan_id
-      LEFT JOIN salon_plan_customizations spc ON spc.salon_id = s.id
-      LEFT JOIN salon_plan_definitions spd ON spd.tier = spc.base_tier
       WHERE ($1::text IS NULL
          OR s.business_name ILIKE $1
          OR s.slug          ILIKE $1
          OR u.email         ILIKE $1
+         OR u.phone         ILIKE $1
          OR u.first_name    ILIKE $1)
       ${dummyFilter}
+      AND ($2::text IS NULL OR s.id::text <> $2::text)
       ORDER BY s.created_at DESC
-    `, [param]);
-    return rows;
+    `, [param, platformSalonId]);
+
+    // Developers assigned to each salon (via its client requirements). Kept as a separate, guarded query so the
+    // salons list still loads if the requirements tables are not migrated yet.
+    // Direct assignments (Actions > Assign Developer) plus developers on the salon's requirements.
+    const devsBySalon = new Map<string, Set<string>>();
+    const directIdsBySalon = new Map<string, string[]>();
+    const addName = (salonId: string, name: string) => {
+      const set = devsBySalon.get(salonId) ?? new Set<string>();
+      set.add(name);
+      devsBySalon.set(salonId, set);
+    };
+    try {
+      const { rows: reqRows } = await pool.query(`
+        SELECT DISTINCT r.salon_id, d.name
+        FROM client_requirements r
+        JOIN client_requirement_assignees cra ON cra.requirement_id = r.id
+        JOIN developers d ON d.id = cra.developer_id
+      `);
+      for (const d of reqRows) addName(d.salon_id, d.name);
+    } catch {
+      /* requirements tables missing: no developer info */
+    }
+    try {
+      const { rows: directRows } = await pool.query(`
+        SELECT sd.salon_id, d.id, d.name FROM salon_developers sd JOIN developers d ON d.id = sd.developer_id
+      `);
+      for (const d of directRows) {
+        addName(d.salon_id, d.name);
+        directIdsBySalon.set(d.salon_id, [...(directIdsBySalon.get(d.salon_id) ?? []), d.id]);
+      }
+    } catch {
+      /* salon_developers not created yet: nothing assigned directly */
+    }
+    return rows.map((r) => ({
+      ...r,
+      developers: [...(devsBySalon.get(r.id) ?? [])].sort((a, b) => a.localeCompare(b)),
+      assigned_developer_ids: directIdsBySalon.get(r.id) ?? [],
+    }));
   },
 
   // Owner (from salons.owner_id/users) plus every row in `staff` for this
@@ -311,13 +350,11 @@ export const superAdminRepository = {
         u.id                                                                  AS owner_user_id,
         bs.status                                                             AS subscription_status,
         bp.name                                                               AS plan_name,
-        spc.base_tier                                                         AS plan_tier,
         bp.price_per_unit                                                     AS plan_price
       FROM salons s
       LEFT JOIN users u               ON u.id     = s.owner_id
       LEFT JOIN billing_subscriptions bs ON bs.salon_id = s.id AND bs.status IN ('active','trialing')
       LEFT JOIN billing_plans bp      ON bp.id    = bs.plan_id
-      LEFT JOIN salon_plan_customizations spc ON spc.salon_id = s.id
       WHERE s.id = $1 LIMIT 1
     `, [id]);
     return rows[0] || null;
@@ -467,187 +504,6 @@ export const superAdminRepository = {
     return rows[0];
   },
 
-  // ── SUBSCRIPTION PERMISSIONS ──────────────────────────────────────────────────
-  // Same salon_settings key-value pattern as role_permissions above, under its
-  // own key so the two feature areas don't collide. Controls which
-  // subscription-related actions (view/renew/upgrade/downgrade/cancel/billing
-  // history/payment methods) an ACCOUNT (owner/admin included, not just staff)
-  // is allowed to perform — enforced by requireSubscriptionPermission()
-  // middleware on every request, so changes apply without requiring logout.
-
-  // Every salon's subscription lifecycle (trial or paid) is tracked in the
-  // Razorpay-integrated `subscriptions` table, not `billing_subscriptions`
-  // (that one is only ever written by the legacy/manual-comp paid-checkout
-  // path and a super-admin "grant days" action, so it's empty for almost
-  // every real account — trial_start/trial_end cover trial accounts,
-  // current_period_start/end cover paid ones).
-  async searchSalonsForSubscriptionPermissions(query: string) {
-    const param = query ? `%${query.trim()}%` : "%";
-    const { rows } = await pool.query(`
-      SELECT
-        s.id,
-        COALESCE(s.business_name, s.slug, 'Unnamed')           AS name,
-        s.is_active,
-        u.email                                                  AS owner_email,
-        TRIM(CONCAT(u.first_name,' ',COALESCE(u.last_name,''))) AS owner_name,
-        sp.name                                                  AS plan_name,
-        spc.base_tier                                            AS plan_tier,
-        sub.status                                               AS subscription_status,
-        COALESCE(sub.trial_start, sub.current_period_start)      AS subscription_start_date,
-        COALESCE(sub.trial_end, sub.current_period_end)          AS subscription_end_date,
-        sub.cancel_at_period_end                                 AS subscription_cancel_at_period_end,
-        sub.cancelled_at                                         AS subscription_cancelled_at,
-        sub.is_trial                                             AS subscription_is_trial,
-        ss.value                                                 AS subscription_permissions
-      FROM salons s
-      JOIN  users u  ON u.id = s.owner_id
-      LEFT JOIN LATERAL (
-        SELECT * FROM subscriptions
-        WHERE salon_id = s.id
-        ORDER BY created_at DESC
-        LIMIT 1
-      ) sub ON true
-      LEFT JOIN subscription_plans sp ON sp.id = sub.plan_id
-      LEFT JOIN salon_plan_customizations spc ON spc.salon_id = s.id
-      LEFT JOIN salon_settings ss ON ss.salon_id = s.id AND ss.key = 'subscription_permissions'
-      WHERE (
-        s.business_name ILIKE $1
-        OR s.slug        ILIKE $1
-        OR u.email       ILIKE $1
-        OR u.first_name  ILIKE $1
-        OR u.last_name   ILIKE $1
-      )
-      ORDER BY s.business_name ASC
-      LIMIT 50
-    `, [param]);
-    return rows;
-  },
-
-  async getSubscriptionPermissionsById(salonId: string) {
-    const { rows } = await pool.query(`
-      SELECT
-        s.id,
-        COALESCE(s.business_name, s.slug, 'Unnamed')           AS name,
-        s.is_active,
-        u.email                                                  AS owner_email,
-        TRIM(CONCAT(u.first_name,' ',COALESCE(u.last_name,''))) AS owner_name,
-        sp.name                                                  AS plan_name,
-        spc.base_tier                                            AS plan_tier,
-        sub.status                                               AS subscription_status,
-        COALESCE(sub.trial_start, sub.current_period_start)      AS subscription_start_date,
-        COALESCE(sub.trial_end, sub.current_period_end)          AS subscription_end_date,
-        sub.cancel_at_period_end                                 AS subscription_cancel_at_period_end,
-        sub.cancelled_at                                         AS subscription_cancelled_at,
-        sub.is_trial                                             AS subscription_is_trial,
-        ss.value                                                 AS subscription_permissions
-      FROM salons s
-      JOIN  users u  ON u.id = s.owner_id
-      LEFT JOIN LATERAL (
-        SELECT * FROM subscriptions
-        WHERE salon_id = s.id
-        ORDER BY created_at DESC
-        LIMIT 1
-      ) sub ON true
-      LEFT JOIN subscription_plans sp ON sp.id = sub.plan_id
-      LEFT JOIN salon_plan_customizations spc ON spc.salon_id = s.id
-      LEFT JOIN salon_settings ss ON ss.salon_id = s.id AND ss.key = 'subscription_permissions'
-      WHERE s.id = $1
-      LIMIT 1
-    `, [salonId]);
-    return rows[0] ?? null;
-  },
-
-  async updateSubscriptionPermissions(
-    salonId: string,
-    permissions: Record<string, boolean>,
-    changedByUserId: string
-  ) {
-    const client = await pool.connect();
-    try {
-      await client.query("BEGIN");
-
-      const { rows: prevRows } = await client.query(
-        `SELECT value FROM salon_settings WHERE salon_id = $1 AND key = 'subscription_permissions' LIMIT 1`,
-        [salonId]
-      );
-      const previousValue = prevRows[0]?.value ? JSON.parse(prevRows[0].value) : null;
-
-      const value = JSON.stringify(permissions);
-      const { rows } = await client.query(`
-        INSERT INTO salon_settings (salon_id, key, value, description)
-        VALUES ($1, 'subscription_permissions', $2, 'Per-account subscription action permissions managed by super admin')
-        ON CONFLICT (salon_id, key) DO UPDATE
-          SET value = EXCLUDED.value, updated_at = NOW()
-        RETURNING salon_id, key, updated_at
-      `, [salonId, value]);
-
-      await client.query(
-        `INSERT INTO subscription_permission_audit_log (salon_id, changed_by, previous_value, new_value)
-         VALUES ($1, $2, $3, $4)`,
-        [salonId, changedByUserId, previousValue ? JSON.stringify(previousValue) : null, value]
-      );
-
-      await client.query("COMMIT");
-      return rows[0];
-    } catch (err) {
-      await client.query("ROLLBACK");
-      throw err;
-    } finally {
-      client.release();
-    }
-  },
-
-  async getSubscriptionPermissionAuditLog(salonId: string, limit = 50) {
-    const { rows } = await pool.query(`
-      SELECT
-        al.id, al.previous_value, al.new_value, al.created_at,
-        TRIM(CONCAT(u.first_name,' ',COALESCE(u.last_name,''))) AS changed_by_name,
-        u.email AS changed_by_email
-      FROM subscription_permission_audit_log al
-      JOIN users u ON u.id = al.changed_by
-      WHERE al.salon_id = $1
-      ORDER BY al.created_at DESC
-      LIMIT $2
-    `, [salonId, limit]);
-    return rows;
-  },
-
-  // Reuses subscription_permission_audit_log for "grant N days" actions too —
-  // new_value carries { action: 'grant_days', days, new_current_period_end }
-  // so a single audit trail/UI can show both permission toggles and day
-  // grants for a salon, distinguished by the `action` field.
-  async logSubscriptionGrantDays(salonId: string, changedByUserId: string, days: number, newPeriodEnd: string) {
-    const value = JSON.stringify({ action: "grant_days", days, new_current_period_end: newPeriodEnd });
-    await pool.query(
-      `INSERT INTO subscription_permission_audit_log (salon_id, changed_by, previous_value, new_value)
-       VALUES ($1, $2, NULL, $3)`,
-      [salonId, changedByUserId, value]
-    );
-  },
-
-  // Reuses subscription_permission_audit_log for "apply subscription" (explicit
-  // start/end dates) too — new_value carries
-  // { action: 'apply_subscription', start_date, end_date }.
-  async logSubscriptionApply(salonId: string, changedByUserId: string, startDate: string, endDate: string) {
-    const value = JSON.stringify({ action: "apply_subscription", start_date: startDate, end_date: endDate });
-    await pool.query(
-      `INSERT INTO subscription_permission_audit_log (salon_id, changed_by, previous_value, new_value)
-       VALUES ($1, $2, NULL, $3)`,
-      [salonId, changedByUserId, value]
-    );
-  },
-
-  // Reuses subscription_permission_audit_log for "remove subscription" too —
-  // new_value carries { action: 'remove_subscription' }.
-  async logSubscriptionRemove(salonId: string, changedByUserId: string) {
-    const value = JSON.stringify({ action: "remove_subscription" });
-    await pool.query(
-      `INSERT INTO subscription_permission_audit_log (salon_id, changed_by, previous_value, new_value)
-       VALUES ($1, $2, NULL, $3)`,
-      [salonId, changedByUserId, value]
-    );
-  },
-
   // ── USERS ─────────────────────────────────────────────────────────────────────
 
   async createUser(data: {
@@ -682,20 +538,11 @@ export const superAdminRepository = {
 
       if (data.business_name?.trim() && data.role === "salon_owner") {
         const slug = data.business_name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "") + "-" + Date.now();
-        const { rows: salonRows } = await client.query(`
+        await client.query(`
           INSERT INTO salons (owner_id, business_name, slug, address, is_active, onboarding_completed, is_dummy)
           VALUES ($1, $2, $3, $4, true, false, $5)
           RETURNING id
         `, [user.id, data.business_name.trim(), slug, data.address?.trim() ?? null, data.is_dummy === true]);
-
-        // New accounts default to the Pro tier so they aren't left on the
-        // implicit Basic fallback (see salon-plans.service.ts getCustomization)
-        // until a super admin manually customizes their plan.
-        await client.query(`
-          INSERT INTO salon_plan_customizations (salon_id, base_tier, updated_by)
-          VALUES ($1, 'pro', $2)
-          ON CONFLICT (salon_id) DO NOTHING
-        `, [salonRows[0].id, data.createdByUserId ?? user.id]);
       }
 
       await client.query("COMMIT");

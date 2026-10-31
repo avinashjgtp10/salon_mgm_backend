@@ -5,10 +5,9 @@ import { flowsService } from '../flows/flows.service'
 import { inboxRepository } from '../inbox/inbox.repository'
 import { whatsappAutomationService } from '../../../whatsapp-automation/whatsapp-automation.service'
 import { notificationsService } from '../../../notifications/notifications.service'
-import { aiEngineService } from '../../../ai-engine/ai-engine.service'
-import { aiEngineRepository } from '../../../ai-engine/ai-engine.repository'
 import pool from '../../../../config/database'
 import logger from '../../../../config/logger'
+import { summarizeAccountUpdate } from './webhooks.log'
 
 export const webhooksService = {
 
@@ -31,7 +30,7 @@ export const webhooksService = {
     )
 
     if (!rows[0]) {
-      logger.warn(`⚠️ Global webhook verify failed — token not found: ${token}`)
+      logger.warn('⚠️ Global webhook verify failed — token not found')
       throw new AppError(403, 'Webhook verification failed — token not found', 'WEBHOOK_VERIFY_FAILED')
     }
 
@@ -84,7 +83,7 @@ export const webhooksService = {
 
   async processCapabilityUpdate(value: any) {
     try {
-      logger.info('📊 business_capability_update received:', { value })
+      logger.info('📊 business_capability_update received:', summarizeAccountUpdate(value))
       const newLimit      = value?.max_daily_conversations_per_business
                          ?? value?.max_daily_conversation_per_phone
       const phoneNumberId = value?.phone_number_id ?? value?.phone_number
@@ -108,7 +107,7 @@ export const webhooksService = {
 
   async processQualityUpdate(value: any) {
     try {
-      logger.info('📊 phone_number_quality_update received:', { value })
+      logger.info('📊 phone_number_quality_update received:', summarizeAccountUpdate(value))
       const phoneNumberId = value?.phone_number
       const currentLimit  = value?.current_limit
       const qualityRating = value?.quality_rating ?? value?.quality_score ?? 'GREEN'
@@ -214,37 +213,17 @@ export const webhooksService = {
     }).catch((err: any) => {
       logger.error('WhatsApp inbound notification failed', {
         salonId,
-        phone: msg.from,
+        wamid: msg.id,
         message: err?.message,
         stack: err?.stack,
-        error: err,
       })
     })
 
-    // ── LUNOX AI receptionist — opt-in per salon, off by default ────────────
-    // handleIncomingMessage never throws (it catches internally), so this is
-    // safe to await without risking the webhook response. Plain text only, as
-    // before - button taps and media must not be fed to it as if typed.
-    const aiEnabled = msg.type === 'text'
-      ? await aiEngineRepository.isAiReceptionistEnabled(salonId).catch(() => false)
-      : false
-    if (aiEnabled) {
-      await aiEngineService.handleIncomingMessage({
-        salonId,
-        phone: msg.from,
-        name:  senderName,
-        text:  messageBody,
-      })
-    } else {
-      // Auto-send the booking form on a window-reopening reply (if the salon
-      // enabled it). Skipped when the AI receptionist is on - it books itself.
-      const aiOn = await aiEngineRepository.isAiReceptionistEnabled(salonId).catch(() => false)
-      if (!aiOn) {
-        flowsService.autoSendOnReply(salonId, msg.from, prevInboundAt).catch((err: any) =>
-          logger.warn('Booking form auto-send failed', { salonId, message: err?.message })
-        )
-      }
-    }
+    // Auto-send the booking form on a window-reopening reply (if the salon
+    // enabled it).
+    flowsService.autoSendOnReply(salonId, msg.from, prevInboundAt).catch((err: any) =>
+      logger.warn('Booking form auto-send failed', { salonId, message: err?.message })
+    )
   },
 
   async processStatus(status: any) {
@@ -262,13 +241,11 @@ export const webhooksService = {
     // previously left no trace at all, so there was no way to tell "webhook
     // never arrived" apart from "webhook arrived but was a status we don't
     // specially log".
-    logger.info(`📶 [WEBHOOK] status=${type} wamid=${wamid}`, { errorCode, errorMsg })
+    logger.debug(`📶 [WEBHOOK] status=${type} wamid=${wamid}`, { errorCode, errorMsg })
 
     if (type === 'FAILED') {
       logger.error('📛 Webhook FAILED payload:', {
         wamid, errorCode, errorMsg,
-        rawErrors: status.errors,
-        fullStatus: status,
       })
     }
 
@@ -295,8 +272,11 @@ export const webhooksService = {
         timestamp instanceof Date && !isNaN(timestamp.getTime())
       ) {
         try {
-          const matched = await whatsappAutomationService.handleDeliveryStatus(wamid, type, timestamp)
-          logger.info(`[WA-AUTO] handleDeliveryStatus ${matched ? 'matched a log row' : 'found NO matching log row'} for wamid=${wamid}`)
+          const matched = await whatsappAutomationService.handleDeliveryStatus(
+            wamid, type, timestamp,
+            type === 'FAILED' ? { code: errorCode, message: errorMsg } : null
+          )
+          logger.debug(`[WA-AUTO] handleDeliveryStatus ${matched ? 'matched a log row' : 'found NO matching log row'} for wamid=${wamid}`)
         } catch (err: any) {
           logger.warn('[WA-AUTO] handleDeliveryStatus error:', err?.message)
         }

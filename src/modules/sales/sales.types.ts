@@ -1,5 +1,7 @@
 export type SaleStatus = "draft" | "completed" | "cancelled" | "refunded";
-export type PaymentMethod = "cash" | "card" | "gift_card" | "split" | "upi" | "wallet" | "package" | "membership" | "pos_machine";
+// `string & {}` keeps editor completion for the built-ins while also admitting a
+// salon's own payment-method name (Settings > Payment Methods), stored as typed.
+export type PaymentMethod = "cash" | "card" | "gift_card" | "split" | "upi" | "wallet" | "package" | "membership" | "pos_machine" | (string & {});
 export type SaleItemType = "service" | "product" | "membership" | "gift_card" | "quick" | "package";
 
 // Per-staff share of tip_amount — purely an attribution record ("who

@@ -16,6 +16,21 @@ export const NON_TERMINAL_STATUSES: PosPaymentStatus[] = ['PENDING', 'PROCESSING
 
 export type PosProviderId = 'manual' | 'paytm';
 
+// What the machine is asked to accept: Card → 'CARD', UPI → 'QR'.
+export type PosPaymentMode = 'CARD' | 'QR';
+export const POS_PAYMENT_MODES: PosPaymentMode[] = ['CARD', 'QR'];
+
+// Recording a provider-confirmed payment is retried automatically up to this
+// many times (poll-through + scheduler) before it needs a person.
+export const MAX_RECORD_ATTEMPTS = 10;
+
+// review_reason prefixes for flags raised only because the outcome wasn't
+// known yet (an unconfirmed cancel, an inconclusive check at expiry). A later
+// definitive "not paid" from the provider answers them, so they're cleared
+// automatically then — every other flag waits for an explicit reconcile.
+export const REVIEW_CANCEL_UNCONFIRMED = 'Cancel requested but';
+export const REVIEW_EXPIRY_DEFERRED = 'Expiry reached without a confirmed outcome';
+
 export type PosPaymentRequest = {
   id: string;
   salon_id: string;
@@ -40,6 +55,14 @@ export type PosPaymentRequest = {
   created_at: string;
   completed_at: string | null;
   expires_at: string | null;
+  // Pos_payments_card_upi_recovery.sql columns — undefined on a database
+  // that hasn't run it yet.
+  payment_mode?: PosPaymentMode | null;
+  provider_terminal_id?: string | null;
+  provider_environment?: string | null;
+  record_attempts?: number;
+  last_record_error?: string | null;
+  checkout_settled_at?: string | null;
 };
 
 export type CreatePosPaymentBody = {
@@ -48,6 +71,9 @@ export type CreatePosPaymentBody = {
   appointment_id: string;
   client_id?: string;
   terminal_id?: string | null;
+  payment_mode?: PosPaymentMode | null;
+  provider_terminal_id?: string | null;
+  provider_environment?: string | null;
   amount: number;
   currency?: string;
   // The exact CreatePaymentBody the frontend already built for this bill —

@@ -15,6 +15,21 @@ export const campaignsController = {
     } catch (e) { return next(e) }
   },
 
+  async getLive(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = req.user?.salonId
+      if (!salonId) return res.status(400).json({ error: 'salonId missing from token' })
+      // ?ids=a,b,c - anything that isn't a UUID is dropped rather than reaching the query.
+      const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+      const raw = typeof req.query.ids === 'string' ? req.query.ids : ''
+      const ids = raw.split(',').map(s => s.trim()).filter(s => UUID.test(s)).slice(0, 200)
+      // Ids were asked for but none were valid: nothing to look up, and not "everything running".
+      if (raw.trim() && ids.length === 0) return sendSuccess(res, 200, [], 'Live campaigns fetched successfully')
+      const data = await campaignsService.getLive(salonId, ids)
+      return sendSuccess(res, 200, data, 'Live campaigns fetched successfully')
+    } catch (e) { return next(e) }
+  },
+
   async getById(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const salonId = req.user?.salonId

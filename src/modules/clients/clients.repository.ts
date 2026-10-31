@@ -113,6 +113,7 @@ export const clientsRepository = {
         OR LOWER(COALESCE(c.phone_number,'')) LIKE ${p}
         OR LOWER(COALESCE(c.additional_email,'')) LIKE ${p}
         OR LOWER(COALESCE(c.additional_phone_number,'')) LIKE ${p}
+        OR LOWER(COALESCE(c.client_code,'')) LIKE ${p}
       )`);
         }
 
@@ -265,14 +266,26 @@ export const clientsRepository = {
         // caller of this same method) is skipped too, not just projected out.
         const isListView = q.fields === "list";
         const selectCols = isListView
-            ? `c.id, c.first_name, c.last_name, c.email, c.referral_code,
+            ? `c.id, c.first_name, c.last_name, c.email, c.referral_code, c.client_code,
                c.phone_country_code, c.phone_number, c.gender, c.is_blocked,
-               c.reviews_avg, c.reviews_count, c.created_at`
+               c.created_at`
             : `c.*, COALESCE(rp.points_earned, 0) AS referral_points_earned`;
+        // clients.reviews_avg / reviews_count are never written by anything, so
+        // the real numbers are aggregated from the reviews table (the source
+        // the client's Feedback & Review tab reads).
+        const reviewsJoin = `
+      LEFT JOIN (
+        SELECT client_id, COUNT(*)::int AS cnt, ROUND(AVG(rating)::numeric, 1) AS avg
+        FROM reviews
+        WHERE salon_id = $1 AND client_id IS NOT NULL
+        GROUP BY client_id
+      ) rv ON rv.client_id = c.id`;
         const dataSql = `
-      SELECT ${selectCols}, COALESCE(ts.total_sales, 0) AS computed_total_sales
+      SELECT ${selectCols}, COALESCE(ts.total_sales, 0) AS computed_total_sales,
+             rv.avg AS computed_reviews_avg, COALESCE(rv.cnt, 0) AS computed_reviews_count
       FROM clients c
       ${tsJoin}
+      ${reviewsJoin}
       ${isListView ? "" : referralPointsJoin}
       ${whereSql}
       ORDER BY ${orderCol} ${so}
@@ -287,8 +300,13 @@ export const clientsRepository = {
 
         const total = countRes.rows[0]?.total ?? 0;
         const items = dataRes.rows.map((r: any) => {
-            const { computed_total_sales, ...rest } = r;
-            return { ...rest, total_sales: computed_total_sales };
+            const { computed_total_sales, computed_reviews_avg, computed_reviews_count, ...rest } = r;
+            return {
+                ...rest,
+                total_sales: computed_total_sales,
+                reviews_avg: computed_reviews_avg,
+                reviews_count: computed_reviews_count,
+            };
         });
         return {
             items,
@@ -310,7 +328,24 @@ export const clientsRepository = {
     ): Promise<Client> {
         const fullName = buildFullName(body.first_name, body.last_name);
 
-        const { rows } = await pool.query(
+        // A code typed by hand is kept as is. When it is left empty, the client gets the next number for this salon
+        // (1, 2, 3, ...): one more than the highest all-digit code already used. The per-salon lock keeps two clients
+        // created at the same moment from taking the same number.
+        const db = await pool.connect();
+        try {
+        await db.query("BEGIN");
+        await db.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`client-code:${salonId}`]);
+        const typedCode = typeof body.client_code === "string" ? body.client_code.trim() : "";
+        let clientCode: string = typedCode;
+        if (!clientCode) {
+            const next = await db.query(
+                `SELECT COALESCE(MAX(client_code::bigint), 0) + 1 AS n FROM clients WHERE salon_id = $1 AND client_code ~ '^[0-9]{1,9}$'`,
+                [salonId]
+            );
+            clientCode = String(next.rows[0].n);
+        }
+
+        const { rows } = await db.query(
             `INSERT INTO clients (
         salon_id,
         first_name,last_name,full_name,
@@ -373,7 +408,7 @@ export const clientsRepository = {
                 body.state ?? null,
                 body.pincode ?? null,
                 body.gst_number ?? null,
-                body.client_code ?? null,
+                clientCode,
                 body.identification_number ?? null,
                 body.credit_limit ?? 0,
                 body.credit_duration_days ?? 0,
@@ -382,8 +417,14 @@ export const clientsRepository = {
                 body.has_whatsapp ?? true,
             ]
         );
-
+        await db.query("COMMIT");
         return rows[0];
+        } catch (err) {
+            await db.query("ROLLBACK");
+            throw err;
+        } finally {
+            db.release();
+        }
     },
 
     // ---------------- REFERRAL ----------------
@@ -1009,13 +1050,14 @@ export const clientsRepository = {
         // manage/unblock a blocked client from the Clients list page, which
         // reads from a separate, unfiltered query.
         const { rows } = await pool.query(
-            `SELECT id, first_name, last_name, full_name, email,
+            `SELECT id, first_name, last_name, full_name, email, client_code,
                     phone_country_code, phone_number, avatar_url, is_active, is_blocked, created_at, updated_at
              FROM clients
              WHERE salon_id = $1 AND is_active = true AND is_blocked = false
                AND (
                    LOWER(full_name) LIKE $2
                 OR LOWER(COALESCE(phone_number, '')) LIKE $2
+                OR LOWER(COALESCE(client_code, '')) LIKE $2
                )
              ORDER BY
                CASE

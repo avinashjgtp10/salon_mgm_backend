@@ -463,14 +463,15 @@ export const whatsappAutomationRepository = {
     )
   },
 
-  async markFailedByWamid(wamid: string, reason: string): Promise<void> {
+  async markFailedByWamid(wamid: string, reason: string, metaResponse: any = null): Promise<void> {
     await pool.query(
       `UPDATE wa_automation_logs
        SET status         = 'FAILED',
            failure_reason = $1,
+           meta_response  = $3::jsonb,
            updated_at     = NOW()
        WHERE meta_message_id = $2`,
-      [reason, wamid]
+      [reason, wamid, metaResponse ? JSON.stringify(metaResponse) : null]
     )
   },
 

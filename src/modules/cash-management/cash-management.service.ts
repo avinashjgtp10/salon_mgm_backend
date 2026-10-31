@@ -1,3 +1,4 @@
+import { salonDashboardRepository } from "../salon-dashboard/salon-dashboard.repository";
 import { AppError } from "../../middleware/error.middleware";
 import { cashManagementRepository } from "./cash-management.repository";
 import { salonDashboardService } from "../salon-dashboard/salon-dashboard.service";
@@ -194,6 +195,36 @@ export const cashManagementService = {
     notifyOwnerCashCounterOpened(salonId, counter).catch(() => {});
 
     return counter;
+  },
+
+  // Everything the Close Counter modal shows, in ONE request that belongs to Cash Management itself.
+  // Before, the modal borrowed POST /api/v1/dashboard (the whole Home-page bundle: summary, appointments, revenue chart,
+  // birthdays, …) just to read three payment-mode figures, so it needed the Dashboard permission/plan and fetched a lot it
+  // never used. Today's Cash / UPI / Card come from the same split-aware breakdown the Home page's Overall Collection card
+  // reads (a Cash+UPI split credits each leg to its own method); opening balance and cash expense come from the counter.
+  // Expected closing = opening balance + today's cash − cash expense, computed here so the modal and any other screen
+  // can never disagree on it.
+  async getCloseSummary(salonId: string, cashManagementId?: string) {
+    const [counter, breakdown] = await Promise.all([
+      this.getDashboardSummary(salonId, cashManagementId),
+      salonDashboardRepository.getPaymentModeBreakdown(salonId, "today"),
+    ]);
+    const pick = (method: string) =>
+      Number(breakdown.entries.find((e) => String(e.method).toLowerCase() === method)?.amount ?? 0) || 0;
+    const cash = pick("cash");
+    const openingBalance = Number(counter.opening_balance ?? 0) || 0;
+    const cashExpense = Number(counter.cash_expense ?? 0) || 0;
+    return {
+      cash_management_id: counter.cash_management_id,
+      status: counter.status,
+      opening_balance: openingBalance,
+      cash_expense: cashExpense,
+      cash_amount: cash,
+      upi_amount: pick("upi"),
+      card_amount: pick("card"),
+      expected_closing: openingBalance + cash - cashExpense,
+      suggested_in_store_cash: Math.max(0, openingBalance + cash - cashExpense),
+    };
   },
 
   async getDashboardSummary(salonId: string, cashManagementId?: string) {

@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { authMiddleware } from "../../middleware/auth.middleware";
+import { requireModule } from "../../middleware/moduleLock.middleware";
 import { roleMiddleware } from "../../middleware/role.middleware";
 import { requirePermission, requireAnyPermission } from "../../middleware/permission.middleware";
 import { bundlesController, servicesController, servicesImportController } from "./services.controller";
@@ -41,37 +42,37 @@ router.get("/download/excel", ...authBase, viewServices, ...exportServiceExcel, 
 router.get("/download/csv",   ...authBase, viewServices, ...exportServiceCsv,   downloadCatalogueCsv);
 
 // ─── Import ───────────────────────────────────────────────────────────────────
-router.post("/import", ...authBase, ...importServices, upload.single("file"), servicesImportController.import);
+router.post("/import", ...authBase, requireModule("services"), ...importServices, upload.single("file"), servicesImportController.import);
 
 // ─── Services CRUD ────────────────────────────────────────────────────────────
 router.get("/",    ...authBase, viewServices, servicesController.list);
-router.post("/",   ...authBase, createServices, validateCreateService, servicesController.create);
+router.post("/",   ...authBase, requireModule("services"), createServices, validateCreateService, servicesController.create);
 router.get("/:id", ...authBase, viewServices, servicesController.getById);
-router.patch("/:id", ...authBase, editServices, validateUpdateService, servicesController.update);
-router.delete("/:id", ...authBase, deleteServices, servicesController.remove);
+router.patch("/:id", ...authBase, requireModule("services"), editServices, validateUpdateService, servicesController.update);
+router.delete("/:id", ...authBase, requireModule("services"), deleteServices, servicesController.remove);
 
 // ─── Add-on groups ────────────────────────────────────────────────────────────
 router.get("/:id/add-on-groups",          ...authBase, viewServices, servicesController.listAddOnGroups);
-router.post("/:id/add-on-groups",         ...authBase, createServices, validateCreateAddOnGroup, servicesController.createAddOnGroup);
-router.patch("/:id/add-on-groups/:groupId",  ...authBase, editServices, validateUpdateAddOnGroup, servicesController.updateAddOnGroup);
-router.delete("/:id/add-on-groups/:groupId", ...authBase, editServices, servicesController.deleteAddOnGroup);
+router.post("/:id/add-on-groups",         ...authBase, requireModule("services"), createServices, validateCreateAddOnGroup, servicesController.createAddOnGroup);
+router.patch("/:id/add-on-groups/:groupId",  ...authBase, requireModule("services"), editServices, validateUpdateAddOnGroup, servicesController.updateAddOnGroup);
+router.delete("/:id/add-on-groups/:groupId", ...authBase, requireModule("services"), editServices, servicesController.deleteAddOnGroup);
 
 // ─── Add-on options ───────────────────────────────────────────────────────────
-router.post("/:id/add-on-groups/:groupId/options",            ...authBase, createServices, validateCreateAddOnOption, servicesController.createAddOnOption);
-router.patch("/:id/add-on-groups/:groupId/options/:optionId", ...authBase, editServices, validateUpdateAddOnOption, servicesController.updateAddOnOption);
-router.delete("/:id/add-on-groups/:groupId/options/:optionId",...authBase, editServices, servicesController.deleteAddOnOption);
+router.post("/:id/add-on-groups/:groupId/options",            ...authBase, requireModule("services"), createServices, validateCreateAddOnOption, servicesController.createAddOnOption);
+router.patch("/:id/add-on-groups/:groupId/options/:optionId", ...authBase, requireModule("services"), editServices, validateUpdateAddOnOption, servicesController.updateAddOnOption);
+router.delete("/:id/add-on-groups/:groupId/options/:optionId",...authBase, requireModule("services"), editServices, servicesController.deleteAddOnOption);
 
 // ─── Consultation forms ───────────────────────────────────────────────────────
 router.get("/:id/consultation-forms",           ...authBase, viewServices, servicesController.listConsultationForms);
-router.post("/:id/consultation-forms",          ...authBase, createServices, validateCreateConsultationForm, servicesController.createConsultationForm);
-router.patch("/:id/consultation-forms/:formId", ...authBase, editServices, validateUpdateConsultationForm, servicesController.updateConsultationForm);
-router.delete("/:id/consultation-forms/:formId",...authBase, editServices, servicesController.deleteConsultationForm);
+router.post("/:id/consultation-forms",          ...authBase, requireModule("services"), createServices, validateCreateConsultationForm, servicesController.createConsultationForm);
+router.patch("/:id/consultation-forms/:formId", ...authBase, requireModule("services"), editServices, validateUpdateConsultationForm, servicesController.updateConsultationForm);
+router.delete("/:id/consultation-forms/:formId",...authBase, requireModule("services"), editServices, servicesController.deleteConsultationForm);
 
 // ─── Bundles CRUD ─────────────────────────────────────────────────────────────
 router.get("/bundles",    ...authBase, viewServices, bundlesController.list);
-router.post("/bundles",   ...authBase, createServices, validateCreateBundle, bundlesController.create);
+router.post("/bundles",   ...authBase, requireModule("services"), createServices, validateCreateBundle, bundlesController.create);
 router.get("/bundles/:id", ...authBase, viewServices, bundlesController.getById);
-router.patch("/bundles/:id", ...authBase, editServices, validateUpdateBundle, bundlesController.update);
-router.delete("/bundles/:id", ...authBase, editServices, bundlesController.remove);
+router.patch("/bundles/:id", ...authBase, requireModule("services"), editServices, validateUpdateBundle, bundlesController.update);
+router.delete("/bundles/:id", ...authBase, requireModule("services"), editServices, bundlesController.remove);
 
 export default router;

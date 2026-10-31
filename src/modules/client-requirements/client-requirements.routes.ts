@@ -14,10 +14,15 @@ router.get("/developers",         authMiddleware, superAdminMiddleware, clientRe
 // ── Manage Team (dev/ops super_admin accounts) ──────────────────────────────
 router.get("/team",               authMiddleware, superAdminMiddleware, clientRequirementsController.listAllDevelopers);
 router.post("/team",              authMiddleware, superAdminMiddleware, clientRequirementsController.createDeveloper);
+router.delete("/team/:id",       authMiddleware, superAdminMiddleware, clientRequirementsController.deleteDeveloper);
 router.patch("/team/:id/status",  authMiddleware, superAdminMiddleware, clientRequirementsController.setDeveloperStatus);
+
+router.put("/salons/:salonId/developers", authMiddleware, superAdminMiddleware, clientRequirementsController.setSalonDevelopers);
 
 router.get("/",                   authMiddleware, superAdminMiddleware, clientRequirementsController.getAll);
 router.get("/:id",                authMiddleware, superAdminMiddleware, clientRequirementsController.getById);
+router.delete("/:id",             authMiddleware, superAdminMiddleware, clientRequirementsController.remove);
+router.patch("/:id",              authMiddleware, superAdminMiddleware, clientRequirementsController.updateDetails);
 router.patch("/:id/assign",       authMiddleware, superAdminMiddleware, clientRequirementsController.assign);
 router.patch("/:id/status",       authMiddleware, superAdminMiddleware, clientRequirementsController.changeStatus);
 router.post("/:id/updates",       authMiddleware, superAdminMiddleware, clientRequirementsController.addUpdate);

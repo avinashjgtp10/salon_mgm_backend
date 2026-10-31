@@ -7,6 +7,9 @@ const SINGLE_METHOD_MAP: Record<string, PaymentMethod> = {
   upi: "upi",
 };
 
+/** lower-cased name → canonical name of the salon's own payment methods (active or not — history must keep resolving). */
+export type CustomMethodNames = Map<string, string>;
+
 export interface NormalizedPaymentMethod {
   method: PaymentMethod;
   /** The real per-method breakdown, stored as JSON in sales.payment_reference for split/wallet-in-split cases. */
@@ -25,8 +28,12 @@ export interface NormalizedPaymentMethod {
  */
 function resolveMoneyMethod(
   label: string,
-  splitDetails?: Record<string, number>
+  splitDetails?: Record<string, number>,
+  customNames?: CustomMethodNames
 ): NormalizedPaymentMethod {
+  // A salon-defined method (Settings > Payment Methods) behaves exactly like
+  // Cash/Card/UPI: a single one is stored by its own name, several are 'split'.
+  const customOf = (key: string): string | undefined => customNames?.get(key.trim().toLowerCase());
   const activeLegs = Object.entries(splitDetails ?? {}).filter(([, amount]) => Number(amount) > 0);
   const cashCardUpiLegs = activeLegs.filter(([key]) => key.toLowerCase() !== "ewallet");
 
@@ -40,6 +47,10 @@ function resolveMoneyMethod(
   // Exact single-method match.
   if (normalizedLabel in SINGLE_METHOD_MAP) {
     return { method: SINGLE_METHOD_MAP[normalizedLabel] };
+  }
+
+  if (customOf(normalizedLabel)) {
+    return { method: customOf(normalizedLabel)! };
   }
 
   // eWallet is its own payment method, not folded into "split".
@@ -66,7 +77,7 @@ function resolveMoneyMethod(
   // "+"-joined form. Only trust this if every joined part is itself a real method.
   if (normalizedLabel.includes("+")) {
     const parts = normalizedLabel.split("+").map((p) => p.trim());
-    if (parts.length > 1 && parts.every((p) => p in SINGLE_METHOD_MAP)) {
+    if (parts.length > 1 && parts.every((p) => p in SINGLE_METHOD_MAP || !!customOf(p))) {
       const reference = activeLegs.length > 0 ? JSON.stringify(Object.fromEntries(activeLegs)) : undefined;
       return { method: "split", reference };
     }
@@ -84,6 +95,9 @@ function resolveMoneyMethod(
   }
   if (activeLegs.length === 1 && activeLegs[0][0].toLowerCase() in SINGLE_METHOD_MAP) {
     return { method: SINGLE_METHOD_MAP[activeLegs[0][0].toLowerCase()] };
+  }
+  if (activeLegs.length === 1 && customOf(activeLegs[0][0])) {
+    return { method: customOf(activeLegs[0][0])! };
   }
 
   throw new UnrecognizedPaymentMethodError(label);
@@ -103,13 +117,14 @@ export interface PaymentSourceAmounts {
 export function normalizePaymentMethod(
   label: string,
   splitDetails?: Record<string, number>,
-  sourceAmounts?: PaymentSourceAmounts
+  sourceAmounts?: PaymentSourceAmounts,
+  customNames?: CustomMethodNames
 ): NormalizedPaymentMethod {
   const packageAmt = Number(sourceAmounts?.package) || 0;
   const membershipAmt = Number(sourceAmounts?.membership) || 0;
 
   if (packageAmt <= 0 && membershipAmt <= 0) {
-    return resolveMoneyMethod(label, splitDetails);
+    return resolveMoneyMethod(label, splitDetails, customNames);
   }
 
   // Real money actually collected this transaction (Cash/Card/UPI only —

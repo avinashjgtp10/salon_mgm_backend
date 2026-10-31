@@ -1382,6 +1382,15 @@ type SalesSummaryChartFilters = {
   include_gst?: boolean;
 };
 
+// The status an appointment really has right now, for the appointment reports. A booking that is still "booked" after its end time is a
+// No Show: the calendar already shows it that way (appointments.service deriveDisplayStatus), but the background sweep that writes
+// "no-show" into the table only runs now and then, so reading the raw column showed those bookings as "Booked" and the No Show filter
+// missed them. The older "no_show" spelling in the enum counts as the same status.
+const EFFECTIVE_APPT_STATUS_SQL = `(CASE
+    WHEN a.status::text = 'no_show' THEN 'no-show'
+    WHEN a.status::text = 'booked' AND a.ends_at < NOW() AND a.deleted_at IS NULL THEN 'no-show'
+    ELSE a.status::text END)`;
+
 export const reportsRepository = {
 
 _buildSalesSummaryWhere(
@@ -1557,6 +1566,7 @@ _buildSalesSummaryWhere(
     where.push(`(
       COALESCE(s.invoice_number, '') ILIKE $${idx}
       OR COALESCE(c.full_name, '') ILIKE $${idx}
+      OR COALESCE(c.client_code, '') ILIKE $${idx}
       OR COALESCE(c.phone_number, '') ILIKE $${idx}
     )`);
     values.push(`%${filters.search.trim()}%`);
@@ -1716,6 +1726,7 @@ _UNBILLED_APPOINTMENT_ROWS_CTE(
   if (filters.search?.trim()) {
     where.push(`(
       COALESCE(c.full_name, '') ILIKE $${idx}
+      OR COALESCE(c.client_code, '') ILIKE $${idx}
       OR COALESCE(c.phone_number, '') ILIKE $${idx}
     )`);
     values.push(`%${filters.search.trim()}%`);
@@ -2855,6 +2866,7 @@ _buildDailySheetWhere(
     where.push(`(
       COALESCE(s.invoice_number, '') ILIKE $${idx}
       OR COALESCE(c.full_name, '') ILIKE $${idx}
+      OR COALESCE(c.client_code, '') ILIKE $${idx}
       OR COALESCE(c.phone_number, '') ILIKE $${idx}
       OR COALESCE(si.name, '') ILIKE $${idx}
       OR COALESCE(TRIM(CONCAT(st.first_name, ' ', st.last_name)), '') ILIKE $${idx}
@@ -2942,6 +2954,7 @@ _UNBILLED_APPOINTMENT_DAILY_ROWS_CTE(
   if (filters.search?.trim()) {
     where.push(`(
       COALESCE(c.full_name, '') ILIKE $${idx}
+      OR COALESCE(c.client_code, '') ILIKE $${idx}
       OR COALESCE(c.phone_number, '') ILIKE $${idx}
       OR COALESCE(src.name, '') ILIKE $${idx}
       OR COALESCE(TRIM(CONCAT(st.first_name, ' ', st.last_name)), '') ILIKE $${idx}
@@ -3417,6 +3430,7 @@ _buildProductRetailWhere(
     where.push(`(
       COALESCE(s.invoice_number, '') ILIKE $${idx}
       OR COALESCE(c.full_name, '') ILIKE $${idx}
+      OR COALESCE(c.client_code, '') ILIKE $${idx}
       OR COALESCE(c.phone_number, '') ILIKE $${idx}
       OR COALESCE(si.name, '') ILIKE $${idx}
     )`);
@@ -4420,10 +4434,12 @@ _buildGstWhere(
     // Amount columns already break the invoice down by.
     item_types?: string[];
     payment_methods?: string[];
+    gst_mode?: "gst" | "non_gst";
   }
 ): { where: string; values: any[]; nextIndex: number } {
   const values: any[] = [salonId];
-  const where = ["s.salon_id = $1", "s.status <> 'draft'", "s.tax_amount::numeric > 0"];
+  // GST report = invoices that carry GST; Non-GST report = invoices with none.
+  const where = ["s.salon_id = $1", "s.status <> 'draft'", filters.gst_mode === "non_gst" ? "COALESCE(s.tax_amount::numeric, 0) = 0" : "s.tax_amount::numeric > 0"];
   let idx = 2;
 
   if (filters.start_date) {
@@ -4453,6 +4469,7 @@ _buildGstWhere(
     where.push(`(
       COALESCE(s.invoice_number, '') ILIKE $${idx}
       OR COALESCE(c.full_name, '') ILIKE $${idx}
+      OR COALESCE(c.client_code, '') ILIKE $${idx}
     )`);
     values.push(`%${filters.search.trim()}%`);
     idx++;
@@ -4465,7 +4482,7 @@ async getGstReportStats(
   salonId: string,
   filters: {
     start_date?: string; end_date?: string; staff_ids?: string[]; search?: string;
-    item_types?: string[]; payment_methods?: string[];
+    item_types?: string[]; payment_methods?: string[]; gst_mode?: "gst" | "non_gst";
   }
 ): Promise<GstReportStats> {
   const { where, values } = this._buildGstWhere(salonId, filters);
@@ -4493,7 +4510,7 @@ async getGstReportRows(
   salonId: string,
   filters: {
     start_date?: string; end_date?: string; staff_ids?: string[]; search?: string;
-    item_types?: string[]; payment_methods?: string[];
+    item_types?: string[]; payment_methods?: string[]; gst_mode?: "gst" | "non_gst";
     page?: number; limit?: number; is_export?: boolean;
   }
 ): Promise<{
@@ -4522,7 +4539,7 @@ async getGstReportRows(
       COALESCE(items.package_amount, 0) AS package_amount,
       COALESCE(items.membership_amount, 0) AS membership_amount,
       GREATEST(s.subtotal::numeric - s.discount_amount::numeric, 0) AS taxable_amount,
-      s.tax_amount::numeric AS tax_amount,
+      COALESCE(s.tax_amount::numeric, 0) AS tax_amount,
       s.total_amount::numeric AS total,
       COUNT(*) OVER() AS total_count
     FROM sales s
@@ -4751,6 +4768,7 @@ _buildRewardPointsWhere(
   if (filters.search?.trim()) {
     clientWhere.push(`(
       COALESCE(c.full_name, '') ILIKE $${idx}
+      OR COALESCE(c.client_code, '') ILIKE $${idx}
       OR COALESCE(c.phone_number, '') ILIKE $${idx}
     )`);
     values.push(`%${filters.search.trim()}%`);
@@ -4989,6 +5007,7 @@ _buildEwalletWhere(
   if (filters.search?.trim()) {
     where.push(`(
       COALESCE(c.full_name, '') ILIKE $${idx}
+      OR COALESCE(c.client_code, '') ILIKE $${idx}
       OR COALESCE(c.phone_number, '') ILIKE $${idx}
       OR COALESCE(c.email, '') ILIKE $${idx}
     )`);
@@ -6227,6 +6246,7 @@ _buildClientRevenueWhere(
   if (filters.search?.trim()) {
     where.push(`(
       COALESCE(c.full_name, '') ILIKE $${idx}
+      OR COALESCE(c.client_code, '') ILIKE $${idx}
       OR COALESCE(c.phone_number, '') ILIKE $${idx}
     )`);
     values.push(`%${filters.search.trim()}%`);
@@ -6356,6 +6376,7 @@ _buildCustomerSpendWhere(
   if (filters.search?.trim()) {
     where.push(`(
       COALESCE(c.full_name, '') ILIKE $${idx}
+      OR COALESCE(c.client_code, '') ILIKE $${idx}
       OR COALESCE(c.phone_number, '') ILIKE $${idx}
     )`);
     values.push(`%${filters.search.trim()}%`);
@@ -6845,6 +6866,7 @@ _buildAllClientsWhere(
   if (filters.search?.trim()) {
     where.push(`(
       COALESCE(c.full_name, '') ILIKE $${idx}
+      OR COALESCE(c.client_code, '') ILIKE $${idx}
       OR COALESCE(c.phone_number, '') ILIKE $${idx}
       OR COALESCE(c.email, '') ILIKE $${idx}
     )`);
@@ -7010,6 +7032,7 @@ async getAllClientsReportRows(
   const query = `
     SELECT
       c.id AS client_id,
+      NULLIF(TRIM(c.client_code), '') AS client_code,
       COALESCE(NULLIF(TRIM(c.full_name), ''), 'Unnamed Client') AS client_name,
       COALESCE(NULLIF(TRIM(CONCAT(COALESCE(c.phone_country_code, ''), ' ', COALESCE(c.phone_number, ''))), ''), '—') AS contact,
       NULLIF(TRIM(c.email), '') AS email,
@@ -7033,6 +7056,7 @@ async getAllClientsReportRows(
   const total = rows.length ? Number(rows[0].total_count) : 0;
   const items: AllClientsReportRow[] = rows.map((row: any) => ({
     client_id: row.client_id,
+    client_code: row.client_code ?? null,
     client_name: row.client_name,
     contact: row.contact,
     email: row.email,
@@ -7100,6 +7124,7 @@ _buildBirthdayWhere(
   if (filters.search?.trim()) {
     where.push(`(
       COALESCE(c.full_name, '') ILIKE $${idx}
+      OR COALESCE(c.client_code, '') ILIKE $${idx}
       OR COALESCE(c.phone_number, '') ILIKE $${idx}
       OR COALESCE(c.email, '') ILIKE $${idx}
     )`);
@@ -7276,6 +7301,7 @@ _buildAnniversaryWhere(
   if (filters.search?.trim()) {
     where.push(`(
       COALESCE(c.full_name, '') ILIKE $${idx}
+      OR COALESCE(c.client_code, '') ILIKE $${idx}
       OR COALESCE(c.phone_number, '') ILIKE $${idx}
       OR COALESCE(c.email, '') ILIKE $${idx}
     )`);
@@ -7440,6 +7466,7 @@ _buildNewClientFollowUpWhere(
   if (filters.search?.trim()) {
     where.push(`(
       COALESCE(c.full_name, '') ILIKE $${idx}
+      OR COALESCE(c.client_code, '') ILIKE $${idx}
       OR COALESCE(c.phone_number, '') ILIKE $${idx}
     )`);
     values.push(`%${filters.search.trim()}%`);
@@ -7553,6 +7580,7 @@ _buildCancellationRecoveryWhere(
   if (filters.search?.trim()) {
     where.push(`(
       COALESCE(c.full_name, '') ILIKE $${idx}
+      OR COALESCE(c.client_code, '') ILIKE $${idx}
       OR COALESCE(c.phone_number, '') ILIKE $${idx}
     )`);
     values.push(`%${filters.search.trim()}%`);
@@ -7717,6 +7745,7 @@ _buildMembershipOpportunityWhere(
   if (filters.search?.trim()) {
     where.push(`(
       COALESCE(c.full_name, '') ILIKE $${idx}
+      OR COALESCE(c.client_code, '') ILIKE $${idx}
       OR COALESCE(c.phone_number, '') ILIKE $${idx}
     )`);
     values.push(`%${filters.search.trim()}%`);
@@ -7873,6 +7902,7 @@ _buildNoShowRecoveryWhere(
   if (filters.search?.trim()) {
     where.push(`(
       COALESCE(c.full_name, '') ILIKE $${idx}
+      OR COALESCE(c.client_code, '') ILIKE $${idx}
       OR COALESCE(c.phone_number, '') ILIKE $${idx}
     )`);
     values.push(`%${filters.search.trim()}%`);
@@ -8329,6 +8359,7 @@ _buildCustomerFrequencyWhere(
   if (filters.search?.trim()) {
     where.push(`(
       COALESCE(c.full_name, '') ILIKE $${idx}
+      OR COALESCE(c.client_code, '') ILIKE $${idx}
       OR COALESCE(c.phone_number, '') ILIKE $${idx}
     )`);
     values.push(`%${filters.search.trim()}%`);
@@ -8730,6 +8761,7 @@ _buildServiceFrequencyWhere(
   if (filters.search?.trim()) {
     where.push(`(
       COALESCE(c.full_name, '') ILIKE $${idx}
+      OR COALESCE(c.client_code, '') ILIKE $${idx}
       OR COALESCE(c.phone_number, '') ILIKE $${idx}
       OR COALESCE(sv.name, si.name, '') ILIKE $${idx}
     )`);
@@ -9026,6 +9058,7 @@ _buildLostCustomersWhere(
   if (filters.search?.trim()) {
     where.push(`(
       COALESCE(c.full_name, '') ILIKE $${idx}
+      OR COALESCE(c.client_code, '') ILIKE $${idx}
       OR COALESCE(c.phone_number, '') ILIKE $${idx}
     )`);
     values.push(`%${filters.search.trim()}%`);
@@ -9546,6 +9579,7 @@ _buildPaymentCollectionWhere(
   if (filters.search?.trim()) {
     where.push(`(
       COALESCE(c.full_name, '') ILIKE $${idx}
+      OR COALESCE(c.client_code, '') ILIKE $${idx}
       OR COALESCE(c.phone_number, '') ILIKE $${idx}
       OR COALESCE(sl.invoice_number, '') ILIKE $${idx}
     )`);
@@ -10780,9 +10814,12 @@ async getStaffSalesReport(
   const offset = limit ? (page - 1) * limit : 0;
   const limitClause = limit ? `LIMIT $${idx++} OFFSET $${idx++}` : "";
   const limitValues = limit ? [limit, offset] : [];
-  const orderClause = filters.sort === "sales_desc" ? "ORDER BY price DESC, created_at DESC"
-    : filters.sort === "sales_asc" ? "ORDER BY price ASC, created_at DESC"
-    : "ORDER BY created_at DESC";
+  // Newest first by default. A bill's line items share one created_at (and so do rows booked in the same minute), so
+  // every order ends in id / line_item_id tie-breakers: without them equal rows came back in an arbitrary order that
+  // could change between requests, and page 2 could repeat or skip rows from page 1.
+  const orderClause = filters.sort === "sales_desc" ? "ORDER BY price DESC, created_at DESC, id DESC, line_item_id DESC NULLS LAST"
+    : filters.sort === "sales_asc" ? "ORDER BY price ASC, created_at DESC, id DESC, line_item_id DESC NULLS LAST"
+    : "ORDER BY created_at DESC, id DESC, line_item_id DESC NULLS LAST";
 
   const query = `
     WITH sales_side AS (
@@ -13300,7 +13337,7 @@ async getAppointmentDetailReport(
     // which safeQuery lets propagate, failing the whole report request
     // whenever any status filter is applied. Casting the column itself to
     // text lets it compare against the plain text[] array from the request.
-    where.push(`a.status::text = ANY($${idx++}::text[])`);
+    where.push(`${EFFECTIVE_APPT_STATUS_SQL} = ANY($${idx++}::text[])`);
     values.push(filters.statuses);
   }
   // No `else` branch excluding 'deleted' here on purpose — with no status
@@ -13360,13 +13397,13 @@ async getAppointmentDetailReport(
 
   const query = `
     WITH matched AS (
-      SELECT a.*
+      SELECT a.*, ${EFFECTIVE_APPT_STATUS_SQL} AS effective_status
       FROM appointments a
       WHERE ${where.join(" AND ")}
     ),
     exploded AS (
       SELECT
-        m.id, m.scheduled_at, m.duration_minutes, m.created_at, m.client_id, m.staff_id, m.status,
+        m.id, m.scheduled_at, m.duration_minutes, m.created_at, m.client_id, m.staff_id, m.effective_status AS status,
         'service' AS item_type,
         svc.value->>'name' AS item_name,
         NULLIF(svc.value->>'staff_id', '') AS item_staff_id,
@@ -13379,7 +13416,7 @@ async getAppointmentDetailReport(
       UNION ALL
 
       SELECT
-        m.id, m.scheduled_at, m.duration_minutes, m.created_at, m.client_id, m.staff_id, m.status,
+        m.id, m.scheduled_at, m.duration_minutes, m.created_at, m.client_id, m.staff_id, m.effective_status AS status,
         'product' AS item_type,
         prod.value->>'name' AS item_name,
         NULLIF(prod.value->>'staff_id', '') AS item_staff_id,
@@ -13392,7 +13429,7 @@ async getAppointmentDetailReport(
       UNION ALL
 
       SELECT
-        m.id, m.scheduled_at, m.duration_minutes, m.created_at, m.client_id, m.staff_id, m.status,
+        m.id, m.scheduled_at, m.duration_minutes, m.created_at, m.client_id, m.staff_id, m.effective_status AS status,
         'package' AS item_type,
         pkg.value->>'name' AS item_name,
         NULLIF(pkg.value->>'staff_id', '') AS item_staff_id,
@@ -13405,7 +13442,7 @@ async getAppointmentDetailReport(
       UNION ALL
 
       SELECT
-        m.id, m.scheduled_at, m.duration_minutes, m.created_at, m.client_id, m.staff_id, m.status,
+        m.id, m.scheduled_at, m.duration_minutes, m.created_at, m.client_id, m.staff_id, m.effective_status AS status,
         'membership' AS item_type,
         mem.value->>'name' AS item_name,
         NULLIF(mem.value->>'staff_id', '') AS item_staff_id,
@@ -13568,7 +13605,7 @@ async getOnlineAppointmentReport(
     values.push(`${filters.to}T00:00:00+05:30`);
   }
   if (filters.statuses && filters.statuses.length > 0) {
-    where.push(`a.status::text = ANY($${idx++}::text[])`);
+    where.push(`${EFFECTIVE_APPT_STATUS_SQL} = ANY($${idx++}::text[])`);
     values.push(filters.statuses);
   }
 
@@ -13608,13 +13645,13 @@ async getOnlineAppointmentReport(
 
   const query = `
     WITH matched AS (
-      SELECT a.*
+      SELECT a.*, ${EFFECTIVE_APPT_STATUS_SQL} AS effective_status
       FROM appointments a
       WHERE ${where.join(" AND ")}
     ),
     exploded AS (
       SELECT
-        m.id, m.scheduled_at, m.duration_minutes, m.created_at, m.client_id, m.staff_id, m.status,
+        m.id, m.scheduled_at, m.duration_minutes, m.created_at, m.client_id, m.staff_id, m.effective_status AS status,
         'service' AS item_type,
         svc.value->>'name' AS item_name,
         NULLIF(svc.value->>'staff_id', '') AS item_staff_id,
@@ -13627,7 +13664,7 @@ async getOnlineAppointmentReport(
       UNION ALL
 
       SELECT
-        m.id, m.scheduled_at, m.duration_minutes, m.created_at, m.client_id, m.staff_id, m.status,
+        m.id, m.scheduled_at, m.duration_minutes, m.created_at, m.client_id, m.staff_id, m.effective_status AS status,
         'product' AS item_type,
         prod.value->>'name' AS item_name,
         NULLIF(prod.value->>'staff_id', '') AS item_staff_id,
@@ -13640,7 +13677,7 @@ async getOnlineAppointmentReport(
       UNION ALL
 
       SELECT
-        m.id, m.scheduled_at, m.duration_minutes, m.created_at, m.client_id, m.staff_id, m.status,
+        m.id, m.scheduled_at, m.duration_minutes, m.created_at, m.client_id, m.staff_id, m.effective_status AS status,
         'package' AS item_type,
         pkg.value->>'name' AS item_name,
         NULLIF(pkg.value->>'staff_id', '') AS item_staff_id,
@@ -13653,7 +13690,7 @@ async getOnlineAppointmentReport(
       UNION ALL
 
       SELECT
-        m.id, m.scheduled_at, m.duration_minutes, m.created_at, m.client_id, m.staff_id, m.status,
+        m.id, m.scheduled_at, m.duration_minutes, m.created_at, m.client_id, m.staff_id, m.effective_status AS status,
         'membership' AS item_type,
         mem.value->>'name' AS item_name,
         NULLIF(mem.value->>'staff_id', '') AS item_staff_id,
@@ -22507,6 +22544,7 @@ _buildClientRatingWhere(
   if (filters.search?.trim()) {
     where.push(`(
       COALESCE(c.full_name, '') ILIKE $${idx}
+      OR COALESCE(c.client_code, '') ILIKE $${idx}
       OR COALESCE(c.phone_number, '') ILIKE $${idx}
       OR COALESCE(TRIM(CONCAT(st.first_name, ' ', st.last_name)), '') ILIKE $${idx}
     )`);
@@ -22665,6 +22703,7 @@ _buildRebookingRateWhere(
   if (filters.search?.trim()) {
     where.push(`(
       COALESCE(c.full_name, '') ILIKE $${idx}
+      OR COALESCE(c.client_code, '') ILIKE $${idx}
       OR COALESCE(c.phone_number, '') ILIKE $${idx}
     )`);
     values.push(`%${filters.search.trim()}%`);

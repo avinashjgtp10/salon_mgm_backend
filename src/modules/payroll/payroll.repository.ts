@@ -29,6 +29,16 @@ export const payrollEntryRepository = {
         return rows.map(mapEntry);
     },
 
+    // Removes an unpaid period's row (its adjustments go with it, ON DELETE CASCADE), which puts the period back to the
+    // live calculated figures. Paid / locked periods are never deleted.
+    async deleteUnpaid(id: string, salonId: string): Promise<boolean> {
+        const { rowCount } = await pool.query(
+            `DELETE FROM payroll_entries WHERE id = $1 AND salon_id = $2 AND status <> 'paid' AND locked_at IS NULL`,
+            [id, salonId]
+        );
+        return (rowCount ?? 0) > 0;
+    },
+
     // Creates the period's row on first touch (e.g. first adjustment) with
     // every amount defaulting to 0 — base_salary/commission/tips are never
     // stored as the source of truth (staff-summary always recomputes them

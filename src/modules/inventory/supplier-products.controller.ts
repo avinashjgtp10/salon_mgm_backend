@@ -29,7 +29,7 @@ export const supplierProductsController = {
             const salonId = getSalonId(req);
             const file = (req as any).file as Express.Multer.File | undefined;
             if (!file) throw new AppError(400, "No file uploaded", "VALIDATION_ERROR");
-            logger.info("POST /inventory/suppliers/:id/products/import called", { salonId, supplierId: req.params.id });
+            logger.debug("POST /inventory/suppliers/:id/products/import called", { salonId, supplierId: req.params.id });
             const result = await supplierProductsService.import({
                 supplierId: String(req.params.id), salonId, file: file.buffer, filename: file.originalname,
             });

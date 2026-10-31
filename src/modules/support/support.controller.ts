@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from "express";
 import { supportService } from "./support.service";
 import { botQuestionsService } from "../bot/bot-questions.service";
+import pool from "../../config/database";
 
 export const supportController = {
   // POST /api/v1/support — salon user submits a ticket
@@ -9,6 +10,13 @@ export const supportController = {
       const { subject, category, message, priority = "medium" } = req.body;
       if (!subject?.trim() || !message?.trim()) {
         return res.status(400).json({ success: false, error: { message: "Subject and message are required" } });
+      }
+
+      if (!["low", "medium", "high"].includes(priority)) {
+        return res.status(400).json({ success: false, error: { message: "Invalid priority" } });
+      }
+      if (subject.trim().length > 200 || message.trim().length > 5000 || String(category ?? "").length > 50) {
+        return res.status(400).json({ success: false, error: { message: "Subject, message or category is too long" } });
       }
 
       const salon_id = req.user?.salonId;
@@ -75,9 +83,16 @@ export const supportController = {
         botQuestionsService.stats(),
         botQuestionsService.list({ answered: "unanswered", page: 1, limit: 5 }),
       ]);
+      // Open Client Requirements (Issue Tracker) for the sidebar badge; optional table, so never fail the call.
+      let openIssues = 0;
+      try {
+        const { rows } = await pool.query(`SELECT COUNT(*)::int AS n FROM client_requirements WHERE status <> 'completed'`);
+        openIssues = rows[0]?.n ?? 0;
+      } catch { /* requirements tables not migrated */ }
       return res.json({
         success: true,
         data: {
+          open_issues: openIssues,
           support_stats: supportStats,
           chatbot_stats: botStats,
           recent_chatbot: unanswered.rows,
@@ -93,8 +108,28 @@ export const supportController = {
       if (!reply?.trim()) {
         return res.status(400).json({ success: false, error: { message: "Reply text is required" } });
       }
+      if (reply.trim().length > 2000) {
+        return res.status(400).json({ success: false, error: { message: "Reply must be 2000 characters or fewer" } });
+      }
       const ticket = await supportService.replyToTicket(String(req.params.id), reply.trim());
       return res.json({ success: true, data: ticket });
+    } catch (err) { next(err); }
+  },
+
+  // PATCH /api/v1/support/:id — super admin edits subject / category / message / priority
+  async updateTicket(req: Request, res: Response, next: NextFunction) {
+    try {
+      const { subject, category, message, priority } = req.body ?? {};
+      const ticket = await supportService.updateTicket(String(req.params.id), { subject, category, message, priority });
+      return res.json({ success: true, data: ticket });
+    } catch (err) { next(err); }
+  },
+
+  // DELETE /api/v1/support/:id — super admin deletes a ticket
+  async deleteTicket(req: Request, res: Response, next: NextFunction) {
+    try {
+      await supportService.deleteTicket(String(req.params.id));
+      return res.json({ success: true, data: { id: String(req.params.id) } });
     } catch (err) { next(err); }
   },
 

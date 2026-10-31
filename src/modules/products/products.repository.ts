@@ -108,8 +108,16 @@ export const productsRepository = {
             values.push(filters.brand_id);
         }
         if (filters.product_type) {
-            conditions.push(`${prefix}product_type = $${idx++}`);
-            values.push(filters.product_type);
+            // Accepts one type or a comma list ("retail,both") so callers
+            // like Quick Sale can ask for several types in one request.
+            const types = String(filters.product_type)
+                .split(",")
+                .map((t) => t.trim())
+                .filter((t) => ["retail", "consumable", "both"].includes(t));
+            if (types.length > 0) {
+                conditions.push(`${prefix}product_type::text = ANY($${idx++}::text[])`);
+                values.push(types);
+            }
         }
         if (filters.retail_sales_enabled !== undefined) {
             conditions.push(`${prefix}retail_sales_enabled = $${idx++}`);

@@ -78,12 +78,17 @@ export const webhooksRepository = {
         COUNT(*) FILTER (WHERE status = 'FAILED')                     AS failed_count,
         COUNT(*) FILTER (WHERE status = 'BLOCKED')                    AS blocked_count,
         COUNT(*) FILTER (WHERE status = 'SKIPPED')                    AS skipped_count,
+        COUNT(*) FILTER (WHERE status = 'PENDING')                    AS pending_count,
         COUNT(*)                                                       AS total
       FROM wa_campaign_contacts WHERE campaign_id = $1
     `, [campaignId])
 
     const done    = parseInt(c.sent_count) + parseInt(c.failed_count) + parseInt(c.blocked_count) + parseInt(c.skipped_count)
-    const allDone = done >= parseInt(c.total)
+    // COMPLETED requires that no contact is still PENDING (every contact had a
+    // send attempt), not just that the other counts add up. The status guard
+    // below also keeps a PAUSED / SCHEDULED / FAILED campaign from being flipped
+    // to COMPLETED by a delivery receipt arriving mid-way.
+    const allDone = parseInt(c.pending_count) === 0 && done >= parseInt(c.total)
 
     await pool.query(`
       UPDATE wa_campaigns SET
@@ -92,7 +97,7 @@ export const webhooksRepository = {
         read_count      = $3,
         failed_count    = $4,
         blocked_count   = $5,
-        ${allDone ? "status = 'COMPLETED', completed_at = NOW()," : ''}
+        ${allDone ? "status = CASE WHEN status IN ('SENDING', 'RUNNING') THEN 'COMPLETED' ELSE status END, completed_at = CASE WHEN status IN ('SENDING', 'RUNNING') THEN NOW() ELSE completed_at END," : ''}
         updated_at      = NOW()
       WHERE id = $6
     `, [c.sent_count, c.delivered_count, c.read_count, c.failed_count, c.blocked_count, campaignId])

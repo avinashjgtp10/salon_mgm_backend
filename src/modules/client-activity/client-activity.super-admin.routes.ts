@@ -41,6 +41,24 @@ router.get("/", async (req: Request, res: Response, next: NextFunction) => {
   } catch (e) { return next(e); }
 });
 
+// GET /client-activity/by-salon?inactive_days=0|7|15|30|60|90|<any 1-3650> &account_type=demo|real &platform=web|app &search=
+//     &sort=last_activity|days_inactive &dir=asc|desc &page= &limit=
+// One row per client (salon) with its latest tracked activity; clients that never used the web/app have last_activity_at = null.
+router.get("/by-salon", async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const accountType = req.query.account_type === "demo" || req.query.account_type === "real" ? req.query.account_type : undefined;
+    const data = await clientActivityRepository.bySalon({
+      inactiveDays: num(req.query.inactive_days, 0, 0, 3650),
+      accountType, platform: platformOf(req.query.platform),
+      search: String(req.query.search || "").trim() || undefined,
+      sort: req.query.sort === "last_activity" ? "last_activity" : "days_inactive",
+      dir: req.query.dir === "asc" ? "asc" : "desc",
+      page: num(req.query.page, 1, 1, 100000), limit: num(req.query.limit, 20, 1, 100),
+    });
+    return sendSuccess(res, 200, data, "Client inactivity fetched");
+  } catch (e) { return next(e); }
+});
+
 // GET /client-activity/:userId  -> the account, its Web + App summaries, and its event history
 router.get("/:userId", async (req: Request, res: Response, next: NextFunction) => {
   try {

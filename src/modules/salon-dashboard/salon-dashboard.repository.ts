@@ -621,7 +621,7 @@ export const salonDashboardRepository = {
                 CASE WHEN l.value ~ '^[0-9]+(\\.[0-9]+)?$' THEN l.value::numeric END AS val
          FROM split_pay sp
          CROSS JOIN LATERAL jsonb_each_text(COALESCE(sp.split_details, '{}'::jsonb)) AS l(key, value)
-         WHERE LOWER(l.key) IN ('cash', 'card', 'upi')
+         WHERE LOWER(l.key) NOT IN ('ewallet', 'wallet', 'package', 'membership', 'gift_card', 'gift card')
        ),
        pay_legs AS (
          SELECT pay_id, method, val FROM pay_legs_raw WHERE val > 0
@@ -633,10 +633,13 @@ export const salonDashboardRepository = {
          JOIN pay_legs v ON v.pay_id = sp.id
          UNION ALL
          -- A payment in a split appointment with no usable legs but a plain
-         -- Cash/Card/UPI method: take it whole rather than lose it.
+         -- single method (Cash/Card/UPI or a salon's own): take it whole
+         -- rather than lose it.
          SELECT LOWER(sp.payment_method), sp.paid_amount
          FROM split_pay sp
-         WHERE LOWER(sp.payment_method) IN ('cash', 'card', 'upi')
+         WHERE sp.payment_method IS NOT NULL
+           AND LOWER(sp.payment_method) NOT IN ('split', 'ewallet', 'wallet', 'package', 'membership', 'gift_card', 'gift card', 'payment machine', 'pos_machine')
+           AND sp.payment_method NOT LIKE '%+%'
            AND NOT EXISTS (SELECT 1 FROM pay_legs v WHERE v.pay_id = sp.id)
        ),
        -- Walk-in splits (no appointment/payments rows): legs come from the
@@ -650,7 +653,7 @@ export const salonDashboardRepository = {
                 THEN sr.payment_reference::jsonb ELSE '{}'::jsonb END
          ) AS l(key, value)
          WHERE sr.appointment_id IS NULL
-           AND LOWER(l.key) IN ('cash', 'card', 'upi')
+           AND LOWER(l.key) NOT IN ('ewallet', 'wallet', 'package', 'membership', 'gift_card', 'gift card')
        ),
        walkin_legs AS (
          SELECT rid, received, method, val FROM walkin_legs_raw WHERE val > 0

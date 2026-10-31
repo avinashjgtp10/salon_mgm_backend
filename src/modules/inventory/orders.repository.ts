@@ -17,8 +17,8 @@ export const ordersRepository = {
      *
      * Per-line math (see NewOrderPage): discount_percent is a percentage,
      * cost_price is entered tax-exclusive so cost_wo_tax === cost_price,
-     * total_cost_wo_tax = cost_wo_tax * qty, and total_tax is that same base
-     * multiplied by the order's flat tax_rate (Tax Group's rate, not a
+     * total_cost_wo_tax = cost_wo_tax * qty after the discount, and total_tax
+     * is that discounted base multiplied by the order's flat tax_rate (Tax Group's rate, not a
      * per-line rate — see CreateOrderDTO.tax_rate).
      */
     /**
@@ -95,12 +95,13 @@ export const ordersRepository = {
             for (const item of data.items) {
                 const discountPercent = item.discount_percent ?? 0;
                 const costWoTax = item.cost_price;
-                const totalCostWoTax = costWoTax * item.qty;
+                // Discount comes off the cost first; tax is charged on what is
+                // left. total_cost_wo_tax is therefore the discounted, pre-tax amount.
+                const totalCostWoTax = costWoTax * item.qty * (1 - discountPercent / 100);
                 const totalTax = totalCostWoTax * (taxRate / 100);
-                const lineSellingTotal = item.selling_price * item.qty * (1 - discountPercent / 100);
 
                 totalQuantity += item.qty;
-                totalPrice += lineSellingTotal;
+                totalPrice += totalCostWoTax;
 
                 const { rows: itemRows } = await client.query(
                     `INSERT INTO order_items (
@@ -154,12 +155,47 @@ export const ordersRepository = {
             await client.query("BEGIN");
 
             const { rows: existingRows } = await client.query(
-                `SELECT id FROM orders WHERE id = $1 AND salon_id = $2 FOR UPDATE`,
+                `SELECT id, status FROM orders WHERE id = $1 AND salon_id = $2 FOR UPDATE`,
                 [id, salonId],
             );
             if (!existingRows.length) {
                 await client.query("ROLLBACK");
                 return null;
+            }
+
+            // Only a draft or a placed ("sent") order can be edited. Once any stock
+            // has been received, or the order is closed, its lines are a record.
+            if (existingRows[0].status !== "draft" && existingRows[0].status !== "sent") {
+                throw new AppError(400, "Only a draft or an ordered order can be edited", "ORDER_NOT_EDITABLE");
+            }
+
+            // Items are replaced wholesale below, which would zero whatever the Verify
+            // Order tab (and Receive) already recorded. Capture it per product first and
+            // put it back on the re-inserted line. SELECT * + `?? 0` so a database that
+            // doesn't have the verified columns yet still works (nothing to preserve).
+            const { rows: oldItems } = await client.query(
+                `SELECT * FROM order_items WHERE order_id = $1`,
+                [id],
+            );
+            const carried = new Map<string, { received: number; damaged: number; verified: number; verifiedDamaged: number }>();
+            for (const old of oldItems) {
+                const prev = carried.get(old.product_id) ?? { received: 0, damaged: 0, verified: 0, verifiedDamaged: 0 };
+                prev.received        += Number(old.received_qty ?? 0);
+                prev.damaged         += Number(old.damaged_qty ?? 0);
+                prev.verified        += Number(old.verified_qty ?? 0);
+                prev.verifiedDamaged += Number(old.verified_damaged_qty ?? 0);
+                carried.set(old.product_id, prev);
+            }
+            for (const [productId, c] of carried) {
+                const kept = data.items.filter((i) => i.product_id === productId);
+                const newQty = kept.reduce((sum, i) => sum + i.qty, 0);
+                const accounted = Math.max(c.received + c.damaged, c.verified + c.verifiedDamaged);
+                if (accounted > 0 && !kept.length) {
+                    throw new AppError(400, "A product that has already been verified can't be removed from the order", "VALIDATION_ERROR");
+                }
+                if (accounted > 0 && newQty + 0.001 < accounted) {
+                    throw new AppError(400, `Quantity can't go below the ${accounted} already verified for a product`, "VALIDATION_ERROR");
+                }
             }
 
             await client.query(
@@ -188,12 +224,13 @@ export const ordersRepository = {
             for (const item of data.items) {
                 const discountPercent = item.discount_percent ?? 0;
                 const costWoTax = item.cost_price;
-                const totalCostWoTax = costWoTax * item.qty;
+                // Discount comes off the cost first; tax is charged on what is
+                // left. total_cost_wo_tax is therefore the discounted, pre-tax amount.
+                const totalCostWoTax = costWoTax * item.qty * (1 - discountPercent / 100);
                 const totalTax = totalCostWoTax * (taxRate / 100);
-                const lineSellingTotal = item.selling_price * item.qty * (1 - discountPercent / 100);
 
                 totalQuantity += item.qty;
-                totalPrice += lineSellingTotal;
+                totalPrice += totalCostWoTax;
 
                 const { rows: itemRows } = await client.query(
                     `INSERT INTO order_items (
@@ -206,7 +243,24 @@ export const ordersRepository = {
                         discountPercent, item.cost_price, costWoTax, totalCostWoTax, totalTax, item.expiry_date ?? null,
                     ],
                 );
-                items.push(itemRows[0]);
+                let insertedItem = itemRows[0];
+
+                // Hand the product's previously recorded received/verified quantities
+                // back to its first re-inserted line (see the capture above).
+                const c = carried.get(item.product_id);
+                if (c && (c.received > 0 || c.damaged > 0 || c.verified > 0 || c.verifiedDamaged > 0)) {
+                    carried.delete(item.product_id);
+                    const { rows: restored } = await client.query(
+                        `UPDATE order_items
+                            SET received_qty = $1, damaged_qty = $2,
+                                verified_qty = $3, verified_damaged_qty = $4
+                          WHERE id = $5
+                      RETURNING *`,
+                        [c.received, c.damaged, c.verified, c.verifiedDamaged, insertedItem.id],
+                    );
+                    insertedItem = restored[0];
+                }
+                items.push(insertedItem);
             }
 
             const totalTaxAmount = items.reduce((sum, item) => sum + Number(item.total_tax), 0);

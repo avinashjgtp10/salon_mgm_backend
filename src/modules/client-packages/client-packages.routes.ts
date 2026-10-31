@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { authMiddleware } from "../../middleware/auth.middleware";
+import { requireModule } from "../../middleware/moduleLock.middleware";
 import { roleMiddleware } from "../../middleware/role.middleware";
 import { requireSalon } from "../../middleware/salon.middleware";
 import { requirePermission, requireAnyPermission } from "../../middleware/permission.middleware";
@@ -30,10 +31,10 @@ const editPackage = requirePermission("edit_package");
 const deletePackage = requirePermission("delete_package");
 
 router.get("/",      ...auth, readPurchaseHistory, clientPackagesController.list);
-router.post("/",     ...auth, createPackage, validateCreateClientPackage, clientPackagesController.create);
+router.post("/",     ...auth, requireModule("packages"), createPackage, validateCreateClientPackage, clientPackagesController.create);
 router.get("/:id",    ...auth, readPurchaseHistory, clientPackagesController.getById);
-router.patch("/:id",  ...auth, editPackage, clientPackagesController.update);
-router.delete("/:id", ...auth, deletePackage, clientPackagesController.delete);
-router.post("/:id/sessions/complete", ...auth, editPackage, validateCompleteSession, clientPackagesController.completeSession);
+router.patch("/:id",  ...auth, requireModule("packages"), editPackage, clientPackagesController.update);
+router.delete("/:id", ...auth, requireModule("packages"), deletePackage, clientPackagesController.delete);
+router.post("/:id/sessions/complete", ...auth, requireModule("packages"), editPackage, validateCompleteSession, clientPackagesController.completeSession);
 
 export default router;

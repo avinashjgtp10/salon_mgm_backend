@@ -5,6 +5,16 @@ import { superAdminController } from "./super-admin.controller";
 import { salonClientInvoicesController } from "../salon-client-invoices/salon-client-invoices.controller";
 import waConfigSuperAdminRoutes from "../marketing/whatsapp/config/config.super-admin.routes";
 import clientActivityRoutes from "../client-activity/client-activity.super-admin.routes";
+import salonModulesRoutes from "../salon-modules/salon-modules.routes";
+import aiCredentialsRoutes from "../ai-credentials/ai-credentials.routes";
+import modulePlansRoutes from "../module-plans/module-plans.routes";
+import salonSubscriptionRoutes from "../salon-subscription/salon-subscription.routes";
+import planPricingRoutes from "../plan-pricing/plan-pricing.routes";
+import countryPricingRoutes from "../plan-pricing/country-pricing.routes";
+import paymentTrackingRoutes from "../payment-tracking/payment-tracking.routes";
+import paymentGatewayRoutes from "../payment-gateway/payment-gateway.routes";
+import subscriptionInvoiceRoutes from "../subscription-invoices/subscription-invoices.routes";
+import clientAnnouncementsRoutes from "../client-announcements/client-announcements.routes";
 
 const router = Router();
 
@@ -20,19 +30,26 @@ router.use("/client-activity", clientActivityRoutes);
 // A salon's WhatsApp (Meta Cloud API) connection — managed here, by us, not by the salon.
 router.use("/salons/:salonId/wa-config", waConfigSuperAdminRoutes);
 
+// Salon Customization: lock/unlock whole modules for one salon.
+router.use("/salon-modules", salonModulesRoutes);
+// LUNOX (AI): a salon's own Cloudflare key — present = LUNOX on for that salon, absent = locked.
+router.use("/ai-credentials", aiCredentialsRoutes);
+router.use("/module-plans", modulePlansRoutes);
+router.use("/salon-subscription", salonSubscriptionRoutes);
+router.use("/plan-pricing", planPricingRoutes);
+router.use("/country-pricing", countryPricingRoutes);
+// Manual customer / website payments, money added and the combined ledger (separate from Razorpay).
+router.use("/payment-tracking", paymentTrackingRoutes);
+// Platform-wide Razorpay keys (one set for all salons), stored encrypted.
+router.use("/payment-gateway", paymentGatewayRoutes);
+router.use("/subscription-invoices", subscriptionInvoiceRoutes);
+// Client Announcements: picks the platform salon and copies salon owners into its client list.
+router.use("/client-announcements", clientAnnouncementsRoutes);
+
 // Salon-specific permissions
 router.get("/salon-permissions/search",       superAdminController.searchSalonsForPermissions);
 router.get("/salon-permissions/:salonId",     superAdminController.getSalonPermissionsById);
 router.put("/salon-permissions/:salonId",     superAdminController.updateSalonPermissions);
-
-// Subscription permissions (per-account control over subscription actions)
-router.get("/subscription-permissions/search",              superAdminController.searchSalonsForSubscriptionPermissions);
-router.get("/subscription-permissions/:salonId",             superAdminController.getSubscriptionPermissionsById);
-router.put("/subscription-permissions/:salonId",             superAdminController.updateSubscriptionPermissions);
-router.get("/subscription-permissions/:salonId/audit-log",   superAdminController.getSubscriptionPermissionAuditLog);
-router.post("/subscription-permissions/:salonId/grant-days", superAdminController.grantSubscriptionDays);
-router.post("/subscription-permissions/:salonId/apply",      superAdminController.applySubscription);
-router.post("/subscription-permissions/:salonId/remove",     superAdminController.removeSubscription);
 
 // Recent / Frequent Logins & No-Plan Users
 router.get("/recent-logins",         superAdminController.getRecentLogins);
@@ -44,6 +61,8 @@ router.get("/stats",    superAdminController.getStats);
 
 // Dashboard (Overview page) — one POST returns stats, salons, payments, logins, support stats
 router.post("/dashboard", superAdminController.getDashboard);
+// Redesigned Overview page: everything it shows (KPIs, alerts, charts, activity, issue snapshot) in one GET.
+router.get("/overview", superAdminController.getOverview);
 
 // Salons
 router.get("/salons",                       superAdminController.getAllSalons);

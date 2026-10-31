@@ -40,7 +40,7 @@ export const staffController = {
     try {
       const salonId = req.user?.salonId ?? req.body?.salon_id;
       if (!salonId) throw new AppError(400, "salon_id is required", "VALIDATION_ERROR");
-      logger.info("GET /staff", { salonId });
+      logger.debug("GET /staff", { salonId });
 
       // Authenticated mobile staff can resolve only their own active profile.
       // Caller-supplied staff, user and branch filters never expand this scope.
@@ -124,7 +124,6 @@ export const staffController = {
   async create(req: AuthRequest, res: Response, _next: NextFunction) {
     try {
       const salonId = getSalonId(req);
-      console.log("[DEBUG] Controller: POST /staff - salonId:", salonId);
       const result = await staffService.create({
         salonId,
         requesterUserId: req.user?.userId || (req as any).user?.id,
@@ -133,7 +132,7 @@ export const staffController = {
       });
       return sendSuccess(res, 201, publicStaff(result as any), "Staff member created successfully");
     } catch (error: any) {
-      console.error("[DEBUG] Controller: POST /staff FAILED", {
+      logger.error("POST /staff failed", {
         message: error.message, code: error.code, stack: error.stack,
       });
       if (!(error instanceof AppError)) {
@@ -173,7 +172,7 @@ export const staffController = {
     try {
       const salonId = getSalonId(req);
       const id = String(req.params.id);
-      logger.info("GET /staff/:id", { id, salonId });
+      logger.debug("GET /staff/:id", { id, salonId });
       const staff = await staffService.getById(id, salonId);
       return sendSuccess(res, 200, publicStaff(staff as any), "Staff fetched successfully");
     } catch (err) { return next(err); }
@@ -283,12 +282,12 @@ export const staffController = {
           const sheetName = wb.SheetNames[0];
           if (!sheetName) throw new AppError(400, "Excel file has no sheets", "VALIDATION_ERROR");
           rows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { defval: "" });
-          // A DOJ/DOB cell formatted as an actual Excel date (rather than typed
+          // A DOJ cell formatted as an actual Excel date (rather than typed
           // as literal "dd-mm-YYYY" text) comes back from sheet_to_json as a JS
           // Date or a numeric day-serial, neither of which staffService's
           // dd-mm-YYYY string parser understands — normalize those columns to
           // the expected string format here, before validation ever sees them.
-          const DATE_COLUMN_ALIASES = ["DOJ(dd-mm-YYYY)", "DOJ", "doj", "DOB(dd-mm-YYYY)", "DOB", "dob"];
+          const DATE_COLUMN_ALIASES = ["DOJ(dd-mm-YYYY)", "DOJ", "doj"];
           const pad2 = (n: number) => String(n).padStart(2, "0");
           const toDDMMYYYY = (val: unknown): unknown => {
             if (val instanceof Date && !isNaN(val.getTime())) {
@@ -360,8 +359,6 @@ export const staffController = {
     { label: "Commission Type", value: "commission_type", width: 16 },
     { label: "Commission Value", value: "commission_value", width: 14 },
     { label: "Joined Date", value: "joined_date", width: 14 },
-    { label: "Birthday Day", value: "birthday_day", width: 12 },
-    { label: "Birthday Month", value: "birthday_month", width: 14 },
     { label: "Start Date Day", value: "start_date_day", width: 14 },
     { label: "Start Date Month", value: "start_date_month", width: 16 },
     { label: "Start Year", value: "start_year", width: 12 },
@@ -376,7 +373,7 @@ export const staffController = {
   async exportExcel(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const salonId = getSalonId(req);
-      logger.info("GET /staff/export/excel", { salonId });
+      logger.debug("GET /staff/export/excel", { salonId });
       const rows = await staffService.exportStaff(salonId, staffController._buildExportQuery(req));
       const headers = staffController._exportFields.map(f => f.label);
       const data = rows.map(row =>
@@ -408,7 +405,7 @@ export const staffController = {
   async exportCsv(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const salonId = getSalonId(req);
-      logger.info("GET /staff/export/csv", { salonId });
+      logger.debug("GET /staff/export/csv", { salonId });
       const rows = await staffService.exportStaff(salonId, staffController._buildExportQuery(req));
       const flatRows = rows.map(row => {
         const r: Record<string, unknown> = { ...(row as any) };
@@ -567,7 +564,7 @@ export const staffCommissionsController = {
     try {
       const staffId  = String(req.params.staffId);
       const category = req.query.category ? String(req.query.category) : undefined;
-      const data = await staffCommissionsService.getSlabs(staffId, category);
+      const data = await staffCommissionsService.getSlabs(staffId, getSalonId(req), category);
       return sendSuccess(res, 200, data, "Commission slabs fetched successfully");
     } catch (err) { return next(err); }
   },
@@ -582,7 +579,7 @@ export const staffCommissionsController = {
           throw new AppError(403, "You can only view your own commission history", "FORBIDDEN");
         }
       }
-      const data = await staffCommissionsService.getStaffHistory(staffId, {
+      const data = await staffCommissionsService.getStaffHistory(staffId, getSalonId(req), {
         month: req.query.month ? String(req.query.month) : undefined,
         start_date: req.query.start_date ? String(req.query.start_date) : undefined,
         end_date: req.query.end_date ? String(req.query.end_date) : undefined,

@@ -308,6 +308,13 @@ export const authRepository = {
     return rows.length > 0;
   },
 
+  /** Slides a session's expiry forward (called on every access-token refresh). */
+  async extendRefreshToken(id: string, expiresAt: Date) {
+    await safeQuery(() =>
+      pool.query(`UPDATE refresh_tokens SET expires_at = $2 WHERE id = $1`, [id, expiresAt]),
+    );
+  },
+
   /**
    * Delete refresh token
    */

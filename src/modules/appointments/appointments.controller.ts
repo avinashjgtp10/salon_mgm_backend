@@ -129,6 +129,7 @@ export const appointmentsController = {
             if (!salonId) throw new AppError(403, "Salon context required", "NO_SALON_CONTEXT");
             const appointment = await appointmentsService.updateItemStatus({
                 appointmentId: id, itemId, salonId, status: req.body.status,
+                requesterRole: req.user?.role,
             });
             return sendSuccess(res, 200, appointment, "Service status updated successfully");
         } catch (err) { return next(err); }

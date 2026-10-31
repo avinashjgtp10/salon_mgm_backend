@@ -70,6 +70,7 @@ interface Config {
 
   groq: {
     apiKey: string;
+    model: string;
   };
 
   gemini: {
@@ -78,6 +79,17 @@ interface Config {
 
   mistral: {
     apiKey: string;
+  };
+
+  // Cloudflare Workers AI: credentials are PER SALON (salon_ai_credentials, set in Super Admin) — only the model is global.
+  cloudflare: {
+    textModel: string;
+  };
+
+  aiAssistant: {
+    monthlyTokenCapPerSalon: number;
+    requestsPerMinutePerUser: number;
+    imagesPerDayPerSalon: number;
   };
 
   // MSG91 — transactional SMS. Indian transactional SMS is DLT-gated, so a
@@ -129,7 +141,8 @@ const config: Config = {
   publicBaseUrl: (process.env.PUBLIC_BASE_URL || process.env.APP_BASE_URL || '').replace(/\/$/, ''),
 
   logging: {
-    level: process.env.LOG_LEVEL || 'info',
+    // Production defaults to info (debug off); override with LOG_LEVEL.
+    level: process.env.LOG_LEVEL || (process.env.NODE_ENV === 'production' ? 'info' : 'debug'),
   },
 
   smtp: {
@@ -146,6 +159,7 @@ const config: Config = {
 
   groq: {
     apiKey: process.env.GROQ_API_KEY || '',
+    model: process.env.GROQ_MODEL || 'openai/gpt-oss-120b',
   },
 
   gemini: {
@@ -154,6 +168,16 @@ const config: Config = {
 
   mistral: {
     apiKey: process.env.MISTRAL_API_KEY || '',
+  },
+
+  cloudflare: {
+    textModel: process.env.CLOUDFLARE_TEXT_MODEL || '@cf/openai/gpt-oss-120b',
+  },
+
+  aiAssistant: {
+    monthlyTokenCapPerSalon: Number(process.env.AI_ASSISTANT_MONTHLY_TOKEN_CAP) || 2_000_000,
+    requestsPerMinutePerUser: Number(process.env.AI_ASSISTANT_RPM) || 15,
+    imagesPerDayPerSalon: Number(process.env.AI_ASSISTANT_IMAGES_PER_DAY) || 10,
   },
 
   msg91: {

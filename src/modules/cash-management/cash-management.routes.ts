@@ -1,9 +1,9 @@
 import multer from "multer";
 import { Router } from "express";
 import { authMiddleware } from "../../middleware/auth.middleware";
+import { requireModule } from "../../middleware/moduleLock.middleware";
 import { roleMiddleware } from "../../middleware/role.middleware";
 import { requireSalon } from "../../middleware/salon.middleware";
-import { requirePlanFeature } from "../../middleware/planFeature.middleware";
 import { requirePermission } from "../../middleware/permission.middleware";
 import { cashManagementController } from "./cash-management.controller";
 
@@ -24,12 +24,12 @@ const addExpense = requirePermission("add_expense");
 const editExpense = requirePermission("edit_expense");
 const deleteExpense = requirePermission("delete_expense");
 
-// featureKey "cash_management" — Basic tier and up by default, revocable per
-// salon via feature_overrides.
-router.use(authMiddleware, requirePlanFeature("cash_management"));
+router.use(authMiddleware, requireModule("cash_management"));
 
 router.post("/open", ...guard, openCounter, cashManagementController.openCounter);
 router.get("/cashdashboard", ...guard, viewCash, cashManagementController.getDashboard);
+// Close Counter modal: its own small request (today's Cash/UPI/Card + expected closing) instead of the Home-page dashboard bundle.
+router.get("/close-summary", ...guard, closeCounter, cashManagementController.getCloseSummary);
 router.get("/", ...guard, viewCash, cashManagementController.listCounters);
 router.get("/income", ...guard, viewCash, cashManagementController.listCashIncomeEntries);
 router.get("/expenses", ...guard, viewCash, cashManagementController.listExpenses);

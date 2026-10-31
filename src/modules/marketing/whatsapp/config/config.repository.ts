@@ -74,17 +74,6 @@ export const configRepository = {
     await pool.query(`DELETE FROM whatsapp_configs WHERE salon_id = $1`, [salonId])
   },
 
-  async setAiReceptionistEnabled(salonId: string, enabled: boolean): Promise<WhatsAppConfig | null> {
-    const { rows } = await pool.query(`
-      UPDATE whatsapp_configs SET
-        ai_receptionist_enabled = $2,
-        updated_at              = NOW()
-      WHERE salon_id = $1
-      RETURNING *
-    `, [salonId, enabled])
-    return rows[0] || null
-  },
-
   // Only the shown phone number - used to fill in a connection that was saved without one.
   async setDisplayPhone(salonId: string, displayPhone: string): Promise<WhatsAppConfig | null> {
     const { rows } = await pool.query(

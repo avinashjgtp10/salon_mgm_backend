@@ -87,8 +87,6 @@ export type Staff = {
     avatar_url: string | null;
     additional_phone: string | null;
     country: string | null;
-    birthday_day: number | null;
-    birthday_month: number | null;
     calendar_color: CalendarColor;
     notes: string | null;
     invitation_status: InvitationStatus;
@@ -106,8 +104,6 @@ export type Staff = {
     custom_permissions: Record<string, boolean> | null;
     gender: string | null;
     address: string | null;
-    working_hours_per_day: number | null;
-    holidays: number | null;
     // Salon-owner-defined column order for the Scheduler's staff columns
     // (Reorder Staff popup) — independent of Staff List's own default sort.
     // NULL = never explicitly sequenced, sorts after any staff that have been.
@@ -152,13 +148,9 @@ export type CreateStaffBody = {
     custom_permissions?: Record<string, boolean> | null;
     /** ISO date string "YYYY-MM-DD" — date of joining */
     joined_date?: string;
-    birthday_day?: number;
-    birthday_month?: number;
     gender?: string;
     address?: string;
     avatar_url?: string;
-    working_hours_per_day?: number;
-    holidays?: number;
     /** Set by the frontend once the staff member's email OTP has been verified during creation. */
     email_verified?: boolean;
 };

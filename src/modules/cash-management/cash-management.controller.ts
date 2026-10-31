@@ -1,3 +1,4 @@
+import logger from '../../config/logger';
 import { NextFunction, Request, Response } from "express";
 import { AppError } from "../../middleware/error.middleware";
 import { sendSuccess } from "../utils/response.util";
@@ -81,6 +82,21 @@ export const cashManagementController = {
       );
 
       return sendSuccess(res, 200, summary, "Cash dashboard fetched successfully");
+    } catch (error) {
+      return next(error);
+    }
+  },
+
+  // GET /api/v1/cash-management/close-summary — the Close Counter modal's own data (see service.getCloseSummary).
+  async getCloseSummary(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = getSalonId(req);
+      const cashManagementId =
+        req.query.cash_management_id !== undefined
+          ? String(req.query.cash_management_id || "").trim() || undefined
+          : undefined;
+      const data = await cashManagementService.getCloseSummary(salonId, cashManagementId);
+      return sendSuccess(res, 200, data, "Close counter summary fetched successfully");
     } catch (error) {
       return next(error);
     }
@@ -295,7 +311,7 @@ export const cashManagementController = {
 
       return sendSuccess(res, 200, { sent: true }, "Daily summary email sent successfully");
     } catch (error) {
-      console.error("[cash-management-controller] Error sending summary email:", error);
+      logger.error("[cash-management-controller] Error sending summary email:", error);
       return next(error);
     }
   },

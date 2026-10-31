@@ -1,7 +1,7 @@
 import { Router } from 'express'
 import { authMiddleware } from '../../../../middleware/auth.middleware'
+import { requireModule } from '../../../../middleware/moduleLock.middleware';
 import { roleMiddleware } from '../../../../middleware/role.middleware'
-import { requirePlanFeature } from '../../../../middleware/planFeature.middleware'
 import { requirePermission, requireAnyPermission } from '../../../../middleware/permission.middleware'
 import { campaignsController } from './campaigns.controller'
 import { validateCreateCampaign } from './campaigns.validator'
@@ -25,15 +25,17 @@ const sendCampaign = requirePermission('send_campaign')
 // the list route the dashboard actually calls.
 const viewCampaignsOrDashboard = requireAnyPermission(['view_campaigns', 'view_marketing_dashboard'])
 
-// featureKey "marketing" — Advance tier and up (see
-// Migration/add_feature_key_to_salon_plans.sql). See inventory.routes.ts for
-// the same router.use() pattern and why authMiddleware needs repeating here
-// even though each route below also calls it.
-router.use(authMiddleware, requirePlanFeature('marketing'))
+router.use(authMiddleware, requireModule('marketing'));
 
 router.get('/',
   authMiddleware, ownerAdminStaff, viewCampaignsOrDashboard,
   campaignsController.getAll
+)
+
+// Before '/:id' so "live" is not read as a campaign id. Running campaigns only.
+router.get('/live',
+  authMiddleware, ownerAdminStaff, viewCampaigns,
+  campaignsController.getLive
 )
 
 router.get('/:id',

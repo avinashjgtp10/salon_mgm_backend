@@ -55,6 +55,15 @@ export const superAdminController = {
 
   // ── DASHBOARD ─────────────────────────────────────────────────────────────────
 
+  // GET /api/v1/super-admin/overview?from=YYYY-MM-DD&to=YYYY-MM-DD — the one call behind the Overview page.
+  async getOverview(req: Request, res: Response, next: NextFunction) {
+    try {
+      const str = (v: unknown) => (typeof v === "string" ? v : undefined);
+      const data = await superAdminService.getOverview(str(req.query.from), str(req.query.to), Number(req.query.active_days) || undefined);
+      return res.json({ success: true, data });
+    } catch (err) { return next(err); }
+  },
+
   // POST /api/v1/super-admin/dashboard — single call for the whole Overview page.
   async getDashboard(req: Request, res: Response, next: NextFunction) {
     try {
@@ -206,78 +215,6 @@ export const superAdminController = {
         return res.status(400).json({ success: false, error: { message: "permissions object required" } });
       }
       const data = await superAdminService.updateSalonPermissions(salonId, permissions);
-      return res.json({ success: true, data });
-    } catch (err) { return next(err); }
-  },
-
-  // ── SUBSCRIPTION PERMISSIONS ─────────────────────────────────────────────────
-
-  async searchSalonsForSubscriptionPermissions(req: Request, res: Response, next: NextFunction) {
-    try {
-      const q = typeof req.query.q === "string" ? req.query.q : "";
-      const data = await superAdminService.searchSalonsForSubscriptionPermissions(q);
-      return res.json({ success: true, data });
-    } catch (err) { return next(err); }
-  },
-
-  async getSubscriptionPermissionsById(req: Request, res: Response, next: NextFunction) {
-    try {
-      const salonId = String(req.params.salonId);
-      const data = await superAdminService.getSubscriptionPermissionsById(salonId);
-      return res.json({ success: true, data });
-    } catch (err) { return next(err); }
-  },
-
-  async updateSubscriptionPermissions(req: Request & { user?: { userId: string } }, res: Response, next: NextFunction) {
-    try {
-      const salonId = String(req.params.salonId);
-      const { permissions } = req.body;
-      if (!permissions || typeof permissions !== "object") {
-        return res.status(400).json({ success: false, error: { message: "permissions object required" } });
-      }
-      const changedByUserId = req.user?.userId;
-      if (!changedByUserId) return res.status(401).json({ success: false, error: { message: "Unauthorized" } });
-      const data = await superAdminService.updateSubscriptionPermissions(salonId, permissions, changedByUserId);
-      return res.json({ success: true, data });
-    } catch (err) { return next(err); }
-  },
-
-  async getSubscriptionPermissionAuditLog(req: Request, res: Response, next: NextFunction) {
-    try {
-      const salonId = String(req.params.salonId);
-      const data = await superAdminService.getSubscriptionPermissionAuditLog(salonId);
-      return res.json({ success: true, data });
-    } catch (err) { return next(err); }
-  },
-
-  async grantSubscriptionDays(req: Request & { user?: { userId: string } }, res: Response, next: NextFunction) {
-    try {
-      const salonId = String(req.params.salonId);
-      const days = Number(req.body?.days);
-      const changedByUserId = req.user?.userId;
-      if (!changedByUserId) return res.status(401).json({ success: false, error: { message: "Unauthorized" } });
-      const data = await superAdminService.grantSubscriptionDays(salonId, days, changedByUserId);
-      return res.json({ success: true, data });
-    } catch (err) { return next(err); }
-  },
-
-  async applySubscription(req: Request & { user?: { userId: string } }, res: Response, next: NextFunction) {
-    try {
-      const salonId = String(req.params.salonId);
-      const { start_date, end_date } = req.body;
-      const changedByUserId = req.user?.userId;
-      if (!changedByUserId) return res.status(401).json({ success: false, error: { message: "Unauthorized" } });
-      const data = await superAdminService.applySubscription(salonId, start_date, end_date, changedByUserId);
-      return res.json({ success: true, data });
-    } catch (err) { return next(err); }
-  },
-
-  async removeSubscription(req: Request & { user?: { userId: string } }, res: Response, next: NextFunction) {
-    try {
-      const salonId = String(req.params.salonId);
-      const changedByUserId = req.user?.userId;
-      if (!changedByUserId) return res.status(401).json({ success: false, error: { message: "Unauthorized" } });
-      const data = await superAdminService.removeSubscription(salonId, changedByUserId);
       return res.json({ success: true, data });
     } catch (err) { return next(err); }
   },

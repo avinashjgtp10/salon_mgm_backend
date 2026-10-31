@@ -5,6 +5,8 @@ import { whatsappMetaApi } from '../shared/whatsapp.api'
 import { buildOfferComponents } from '../shared/offer-components'
 import { inboxRepository } from '../inbox/inbox.repository'
 import { webhooksRepository } from '../webhooks/webhooks.repository'
+import { maskPhone } from '../../../utils/mask.util'
+import logger from '../../../../config/logger'
 
 // A template is not sent to the same number again within this many hours (see the cooldown block below).
 const TEMPLATE_COOLDOWN_HOURS = 24
@@ -26,11 +28,18 @@ export const campaignWorker = new Worker<CampaignJobData>(
   async (job: Job<CampaignJobData>) => {
     const { campaignId, salonId, contactIds } = job.data
 
+    const { rows: [salonRow] } = await pool.query(`SELECT business_name FROM salons WHERE id = $1`, [salonId])
+    const salonName = salonRow?.business_name ?? 'unknown'
+    const logCtx = { campaignId, salonId, salonName }
+
+    logger.info(`[WA-CAMPAIGN] batch START — salon "${salonName}"`, { ...logCtx, batchSize: contactIds.length, jobId: job.id })
+
     const { rows: [camp] } = await pool.query(
       `SELECT status FROM wa_campaigns WHERE id = $1`,
       [campaignId]
     )
     if (!camp || camp.status === 'PAUSED') {
+      logger.info(`[WA-CAMPAIGN] batch SKIPPED — campaign ${!camp ? 'not found' : 'paused'}`, { ...logCtx, jobId: job.id })
       return
     }
 
@@ -38,7 +47,7 @@ export const campaignWorker = new Worker<CampaignJobData>(
       `SELECT * FROM whatsapp_configs WHERE salon_id = $1`,
       [salonId]
     )
-    if (!waConfig) throw new Error(`WhatsApp not configured for salon ${salonId}`)
+    if (!waConfig) throw new Error(`WhatsApp not configured for salon ${salonId} (${salonName})`)
 
     const { rows: [campaign] } = await pool.query(`
       SELECT c.*, t.name AS template_name, t.body_text,
@@ -73,7 +82,7 @@ export const campaignWorker = new Worker<CampaignJobData>(
         WHERE id = $2
       `, [contactIds.length, campaignId])
 
-      console.error(`❌ Campaign ${campaignId} aborted: template "${campaign.template_name}" has ${campaign.header_type} header but no header_media_id in DB.`)
+      logger.error(`[WA-CAMPAIGN] ❌ aborted: template "${campaign.template_name}" has ${campaign.header_type} header but no header_media_id in DB.`, logCtx)
       return
     }
 
@@ -110,6 +119,13 @@ export const campaignWorker = new Worker<CampaignJobData>(
     let sent = 0, failed = 0, blocked = 0
 
     for (const contact of contacts) {
+      // Pause must stop sending NOW, not after the rest of this batch: re-check
+      // before every contact. The remaining contacts stay PENDING (this check
+      // runs before the claim below, so nothing is claimed and lost) and are
+      // picked up again by Resume.
+      const { rows: [live] } = await pool.query(`SELECT status FROM wa_campaigns WHERE id = $1`, [campaignId])
+      if (!live || live.status === 'PAUSED') break
+
       // ← normalize phone before sending — prevents duplicate conversations
       const normalizedPhone = normalizePhone(contact.phone)
 
@@ -189,6 +205,8 @@ export const campaignWorker = new Worker<CampaignJobData>(
           [wamid, contact.id]
         )
 
+        logger.info(`[WA-CAMPAIGN] ✅ SENT to ${maskPhone(normalizedPhone)} (wamid: ${wamid ?? 'none'})`, { ...logCtx, contactId: contact.id })
+
         // ── Save to inbox ────────────────────────────────────────────────────
         try {
           const messageBody = campaign.body_text ?? ''
@@ -220,8 +238,8 @@ export const campaignWorker = new Worker<CampaignJobData>(
             mediaType: hasMediaHeader ? campaign.header_type : null,
             mediaUrl:  hasMediaHeader ? campaign.header_media_id : null,
           })
-        } catch (inboxErr) {
-          console.error(`⚠️ Inbox write failed for ${normalizedPhone}:`, inboxErr)
+        } catch (inboxErr: any) {
+          logger.warn(`[WA-CAMPAIGN] Inbox write failed for ${maskPhone(normalizedPhone)}`, { ...logCtx, message: inboxErr?.message })
         }
 
         sent++
@@ -243,6 +261,7 @@ export const campaignWorker = new Worker<CampaignJobData>(
            WHERE id=$4`,
           [(isBlocked || isBilling) ? 'BLOCKED' : 'FAILED', code, msg, contact.id]
         );
+        logger.warn(`[WA-CAMPAIGN] ❌ ${(isBlocked || isBilling) ? 'BLOCKED' : 'FAILED'} to ${maskPhone(normalizedPhone)} — Meta [${code}] ${msg}`, { ...logCtx, contactId: contact.id })
         if (isBlocked || isBilling) { blocked++ } else { failed++ }
       }
 
@@ -258,7 +277,7 @@ export const campaignWorker = new Worker<CampaignJobData>(
     // fluctuate up/down and even exceed total_contacts in production. Using the
     // same idempotent recompute on both paths removes the race entirely. This
     // also flips the campaign to COMPLETED when everything is terminal.
-    void sent; void failed; void blocked;
+    logger.info(`[WA-CAMPAIGN] batch COMPLETE — salon "${salonName}" sent=${sent} failed=${failed} blocked=${blocked}`, { ...logCtx, jobId: job.id })
     await webhooksRepository.refreshCampaignCounts(campaignId)
   },
   // concurrency was 100 against a Postgres pool capped at 20 (config/database.ts) —
@@ -269,7 +288,7 @@ export const campaignWorker = new Worker<CampaignJobData>(
   { connection: redisConnection, concurrency: 10 }
 )
 
-campaignWorker.on('failed', (j, e) => console.error(
-  `❌ WA Job ${j?.id} (campaign ${j?.data?.campaignId}, batch ${j?.data?.batchIndex}, attempt ${j?.attemptsMade}/${j?.opts?.attempts}) failed:`,
-  e.message
+campaignWorker.on('failed', (j, e) => logger.error(
+  `[WA-CAMPAIGN] ❌ Job ${j?.id} (campaign ${j?.data?.campaignId}, salon ${j?.data?.salonId}, batch ${j?.data?.batchIndex}, attempt ${j?.attemptsMade}/${j?.opts?.attempts}) failed`,
+  { campaignId: j?.data?.campaignId, salonId: j?.data?.salonId, message: e.message }
 ))

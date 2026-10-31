@@ -1,13 +1,11 @@
 import { superAdminRepository } from "./super-admin.repository";
+import { getSuperAdminOverview } from "./super-admin.overview";
 import { getAllTimeRevenueBySalon } from "../salon-dashboard/salon-revenue";
 import { supportRepo } from "../support/support.repository";
 import { authRepository } from "../auth/auth.repository";
 import { demoRequestsService } from "../demo-requests/demo-requests.service";
 import { emailService } from "../utils/email.service";
 import { AppError } from "../../middleware/error.middleware";
-import { invalidateSubscriptionPermCache } from "../../middleware/subscriptionPermission.middleware";
-import { subscriptionsRepository } from "../subscriptions/subscriptions.repository";
-import { salonPlanInvoicesRepository, planDefinitionsRepository, salonCustomizationsRepository } from "../salon-plans/salon-plans.repository";
 import logger from "../../config/logger";
 import bcrypt from "bcrypt";
 import jwt, { Secret, SignOptions } from "jsonwebtoken";
@@ -84,6 +82,11 @@ export const superAdminService = {
     const revenue = await getAllTimeRevenueBySalon(ids);
     const total = ids.reduce((sum, id) => sum + (revenue.get(id) ?? 0), 0);
     return { ...stats, total_revenue: revenue.size > 0 ? total : stats.total_revenue };
+  },
+
+  // The redesigned Overview page: KPIs, alerts, charts, activity and issue snapshot in one response.
+  async getOverview(from?: string, to?: string, activeDays?: number) {
+    return getSuperAdminOverview(from, to, activeDays);
   },
 
   // Everything the super-admin Overview page renders, in one round trip.
@@ -237,193 +240,6 @@ export const superAdminService = {
     return result;
   },
 
-  // ── SUBSCRIPTION PERMISSIONS ──────────────────────────────────────────────────
-
-  async searchSalonsForSubscriptionPermissions(query: string) {
-    return superAdminRepository.searchSalonsForSubscriptionPermissions(query ?? "");
-  },
-
-  async getSubscriptionPermissionsById(salonId: string) {
-    const salon = await superAdminRepository.getSubscriptionPermissionsById(salonId);
-    if (!salon) throw new AppError(404, "Salon not found", "NOT_FOUND");
-    let permissions: Record<string, boolean> = {};
-    if (salon.subscription_permissions) {
-      try { permissions = JSON.parse(salon.subscription_permissions); } catch { permissions = {}; }
-    }
-    return {
-      salon: {
-        id: salon.id, name: salon.name, owner_email: salon.owner_email, owner_name: salon.owner_name,
-        plan_name: salon.plan_name, plan_tier: salon.plan_tier ?? null, is_active: salon.is_active,
-        subscription_status: salon.subscription_status,
-        subscription_start_date: salon.subscription_start_date,
-        subscription_end_date: salon.subscription_end_date,
-        subscription_cancel_at_period_end: salon.subscription_cancel_at_period_end,
-        subscription_cancelled_at: salon.subscription_cancelled_at,
-        subscription_is_trial: salon.subscription_is_trial,
-      },
-      permissions,
-    };
-  },
-
-  async updateSubscriptionPermissions(salonId: string, permissions: Record<string, boolean>, changedByUserId: string) {
-    if (!salonId) throw new AppError(400, "Salon ID required", "VALIDATION_ERROR");
-    if (!changedByUserId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
-    const result = await superAdminRepository.updateSubscriptionPermissions(salonId, permissions, changedByUserId);
-    if (!result) throw new AppError(404, "Salon not found", "NOT_FOUND");
-    // Applies immediately, no logout required — requireSubscriptionPermission()
-    // re-reads salon_settings per request (with a short cache); this
-    // invalidation makes the very next request see the new values instead of
-    // waiting out the cache TTL.
-    invalidateSubscriptionPermCache(salonId);
-    return result;
-  },
-
-  async getSubscriptionPermissionAuditLog(salonId: string) {
-    if (!salonId) throw new AppError(400, "Salon ID required", "VALIDATION_ERROR");
-    return superAdminRepository.getSubscriptionPermissionAuditLog(salonId);
-  },
-
-  // ── GRANT SUBSCRIPTION DAYS (manual comp/override) ────────────────────────────
-  // Enter N days, the account gets exactly N days — nothing more, nothing
-  // less. If a subscription row already exists, extends its
-  // current_period_end. If the account has NONE yet, creates one directly
-  // (no Razorpay, no plan picker) so this works for every account
-  // unconditionally. Either way, status is forced to 'active' — the exact
-  // field useSubscriptionPoller.ts reads to decide whether to show
-  // SubscriptionWall — so access is restored/extended immediately, no
-  // logout needed.
-  // Auto-creates a salon_plan_invoices row (the same table Plans &
-  // Subscriptions > Billing & Invoices tab reads) whenever a super admin
-  // grants/applies a subscription — previously grantSubscriptionDays/
-  // applySubscription only ever touched the `subscriptions` table, leaving
-  // no billing record behind at all. Amount follows the same "effective
-  // price" precedence getMyPlan() uses on the salon's own side: a per-salon
-  // custom_price override if one exists, else the tier's base list price.
-  // Marked 'paid' immediately — there's no separate payment step in this
-  // manual super-admin flow, unlike the Razorpay self-serve checkout.
-  async _createSubscriptionInvoice(salonId: string, changedByUserId: string, issuedDate: string, dueDate: string | null) {
-    try {
-      const customization = await salonCustomizationsRepository.findBySalonId(salonId);
-      const tier = customization?.base_tier ?? "basic";
-      const planDef = await planDefinitionsRepository.findByTier(tier);
-      const amount = Number(customization?.custom_price ?? planDef?.price ?? 0);
-      if (amount <= 0) return null;
-
-      const periodEnd = dueDate ?? issuedDate;
-      return await salonPlanInvoicesRepository.create(
-        {
-          salon_id: salonId, plan_tier: tier, billing_cycle: "monthly",
-          period_start: issuedDate, period_end: periodEnd,
-          amount, status: "paid", issued_date: issuedDate, due_date: dueDate ?? undefined,
-        },
-        changedByUserId
-      );
-    } catch (err) {
-      // Never let invoice bookkeeping block the actual subscription grant —
-      // the admin's primary action (restoring/extending access) must still
-      // succeed even if, say, no plan definitions are configured yet.
-      logger.error(`Failed to auto-create subscription invoice for salon ${salonId}`, { err });
-      return null;
-    }
-  },
-
-  async grantSubscriptionDays(salonId: string, days: number, changedByUserId: string) {
-    if (!salonId) throw new AppError(400, "Salon ID required", "VALIDATION_ERROR");
-    if (!Number.isFinite(days) || days <= 0) throw new AppError(400, "days must be a positive number", "VALIDATION_ERROR");
-    if (!changedByUserId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
-
-    const existing = await subscriptionsRepository.findMostRecentBySalonId(salonId);
-
-    let updated;
-    if (existing) {
-      updated = await subscriptionsRepository.extendSubscriptionDays(existing.id, days);
-    } else {
-      // subscriptions.plan_id is NOT NULL (FK to subscription_plans) — the
-      // caller only cares about days, not which plan, so just take any
-      // existing plan. Plans already exist for the normal Upgrade flow to
-      // work at all, so listPlans() returning empty here would itself be a
-      // pre-existing data problem, not something this feature should mask.
-      const plans = await subscriptionsRepository.listPlans();
-      if (plans.length === 0) {
-        throw new AppError(500, "No subscription plans exist to attach this grant to", "NO_PLANS_CONFIGURED");
-      }
-      updated = await subscriptionsRepository.createManualSubscription({
-        salon_id: salonId,
-        plan_id: plans[0].id,
-        days,
-      });
-    }
-
-    // Reuse the subscription_permission_audit_log table for this too — same
-    // "who changed what, when" shape the ticket asked for, just a different
-    // action type inside new_value instead of a permission map.
-    await superAdminRepository.logSubscriptionGrantDays(salonId, changedByUserId, days, updated.current_period_end as string);
-
-    const today = new Date().toISOString().slice(0, 10);
-    const dueDate = updated.current_period_end ? String(updated.current_period_end).slice(0, 10) : null;
-    const invoice = await this._createSubscriptionInvoice(salonId, changedByUserId, today, dueDate);
-
-    return { subscription: updated, days_granted: days, invoice };
-  },
-
-  // ── APPLY SUBSCRIPTION (explicit start/end dates) ─────────────────────────────
-  // Same shape as grantSubscriptionDays but takes explicit dates instead of a
-  // day count — for the super-admin "Apply Subscription" action with Start
-  // Date / End Date pickers. Reuses the salon's existing plan_id if it has a
-  // subscription already, otherwise falls back to the first available plan
-  // (same fallback grantSubscriptionDays uses) since subscriptions.plan_id
-  // is NOT NULL.
-  async applySubscription(salonId: string, startDate: string, endDate: string, changedByUserId: string) {
-    if (!salonId) throw new AppError(400, "Salon ID required", "VALIDATION_ERROR");
-    if (!startDate || !endDate) throw new AppError(400, "start_date and end_date are required", "VALIDATION_ERROR");
-    if (new Date(endDate) <= new Date(startDate)) throw new AppError(400, "end_date must be after start_date", "VALIDATION_ERROR");
-    if (!changedByUserId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
-
-    const existing = await subscriptionsRepository.findMostRecentBySalonId(salonId);
-
-    let updated;
-    if (existing) {
-      updated = await subscriptionsRepository.applySubscriptionDates(existing.id, startDate, endDate);
-    } else {
-      const plans = await subscriptionsRepository.listPlans();
-      if (plans.length === 0) {
-        throw new AppError(500, "No subscription plans exist to attach this subscription to", "NO_PLANS_CONFIGURED");
-      }
-      updated = await subscriptionsRepository.createManualSubscriptionWithDates({
-        salon_id: salonId,
-        plan_id: plans[0].id,
-        start_date: startDate,
-        end_date: endDate,
-      });
-    }
-
-    await superAdminRepository.logSubscriptionApply(salonId, changedByUserId, startDate, endDate);
-
-    const invoice = await this._createSubscriptionInvoice(salonId, changedByUserId, startDate, endDate);
-
-    return { subscription: updated, invoice };
-  },
-
-  // ── REMOVE SUBSCRIPTION (immediate deactivation) ──────────────────────────────
-  // Deactivates EVERY active/paused subscription row for the salon, not just
-  // the most recent one — fetchSubscriptionStatusThunk on the frontend grants
-  // access if ANY row for the salon is active/trialing, so leaving an older
-  // row untouched (e.g. a leftover trial row) would keep the account logged
-  // in and unblocked even after this "succeeds". No-op-but-success when the
-  // salon has no such rows at all — the admin's intent ("this account should
-  // have no active subscription") is already satisfied, so this shouldn't
-  // 404 and block the Remove button from ever working for those accounts.
-  async removeSubscription(salonId: string, changedByUserId: string) {
-    if (!salonId) throw new AppError(400, "Salon ID required", "VALIDATION_ERROR");
-    if (!changedByUserId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
-
-    const updated = await subscriptionsRepository.deactivateAllForSalon(salonId);
-
-    await superAdminRepository.logSubscriptionRemove(salonId, changedByUserId);
-
-    return { subscription: updated[0] ?? null, deactivated_count: updated.length };
-  },
-
   // ── USERS ─────────────────────────────────────────────────────────────────────
 
   async createUser(data: { first_name: string; last_name?: string; email: string; password: string; phone?: string; role: string; business_name?: string; address?: string; is_dummy?: boolean }, createdByUserId?: string) {
@@ -431,6 +247,7 @@ export const superAdminService = {
     if (!allowed.includes(data.role)) throw new AppError(400, "Invalid role", "VALIDATION_ERROR");
     if (!data.email?.trim()) throw new AppError(400, "Email is required", "VALIDATION_ERROR");
     if (!data.password || data.password.length < 6) throw new AppError(400, "Password must be at least 6 characters", "VALIDATION_ERROR");
+    if (/\s/.test(data.password)) throw new AppError(400, "Password cannot contain spaces", "VALIDATION_ERROR");
     if (!data.first_name?.trim()) throw new AppError(400, "First name is required", "VALIDATION_ERROR");
     if (data.role === "salon_owner" && !data.business_name?.trim()) throw new AppError(400, "Business name is required for Salon Owner", "VALIDATION_ERROR");
 
@@ -455,7 +272,7 @@ export const superAdminService = {
       email: data.email,
       password: data.password,
       role: data.role,
-    }).catch((err: any) => console.error("⚠️  Failed to send account-created email:", err?.message));
+    }).catch((err: any) => logger.error("⚠️  Failed to send account-created email:", err?.message));
 
     return { ...user, plainPassword: data.password };
   },

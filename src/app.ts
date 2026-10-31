@@ -6,6 +6,7 @@ import compression from "compression";
 import config from "./config/env";
 import logger from "./config/logger";
 import { errorHandler } from "./middleware/error.middleware";
+import { requestLogger } from "./middleware/request-logger.middleware";
 import usersRoutes from "./modules/users/users.routes";
 import authRoutes from "./modules/auth/auth.routes";
 import categoriesRoutes from "./modules/categories/categories.routes";
@@ -34,8 +35,6 @@ import spotlightRoutes from "./modules/spotlight/spotlight.routes";
 import billingRoutes from "./modules/billing/billing.routes";
 import pricingRoutes from "./modules/pricing/pricing.routes";
 import subscriptionsRoutes from "./modules/subscriptions/subscriptions.routes";
-import planPaymentsRoutes from "./modules/plan-payments/plan-payments.routes";
-import { planPaymentsController } from "./modules/plan-payments/plan-payments.controller";
 import marketingDashboardRoutes from './modules/marketing/whatsapp/dashboard/dashboard.routes'
 import marketingTemplatesRoutes from './modules/marketing/whatsapp/templates/templates.routes'
 import marketingCampaignsRoutes from './modules/marketing/whatsapp/campaigns/campaigns.routes'
@@ -49,6 +48,7 @@ import salonDashboardRoutes from "./modules/salon-dashboard/salon-dashboard.rout
 import paymentsRoutes from "./modules/payments/payments.routes";
 import posPaymentsRoutes from "./modules/pos-payments/pos-payments.routes";
 import paymentSettingsRoutes from "./modules/payment-settings/payment-settings.routes";
+import paymentMethodsRoutes from "./modules/payment-methods/payment-methods.routes";
 import couponsRoutes from "./modules/coupons/coupons.routes";
 import couponDesignsRoutes from "./modules/coupon-designs/coupon-designs.routes";
 import brandKitRoutes from "./modules/brand-kit/brand-kit.routes";
@@ -60,9 +60,8 @@ import assetsRoutes from "./modules/assets/assets.routes";
 import reviewsRoutes from './modules/reviews/reviews.routes'
 import reviewsPublicRoutes from './modules/reviews/reviews.public.routes'
 import botRoutes from "./modules/bot/bot.routes";
+import aiAssistantRoutes from "./modules/ai-assistant/ai-assistant.routes";
 import botQuestionsRoutes from "./modules/bot/bot-questions.routes";
-import aiEngineRoutes from "./modules/ai-engine/ai-engine.routes";
-import { ensureTable as ensureAiEngineTables } from "./modules/ai-engine/ai-engine.repository";
 import waAutomationRoutes from "./modules/whatsapp-automation/whatsapp-automation.routes";
 import waScheduledMessagesRoutes from "./modules/whatsapp-automation/wa-scheduled-messages.routes";
 import waPurchaseTemplatesRoutes from "./modules/whatsapp-automation/wa-purchase-templates.routes";
@@ -87,7 +86,6 @@ import { ensureTable as ensureDigitalMenuTables } from "./modules/digital-menu/d
 import superAdminRoutes from "./modules/super-admin/super-admin.routes";
 import branchOwnerRoutes from "./modules/branch-owner/branch-owner.routes";
 import { ensureBranchOwnerTables } from "./modules/branch-owner/branch-owner.repository";
-import salonPlansRoutes from "./modules/salon-plans/salon-plans.routes";
 import demoRequestsRoutes from "./modules/demo-requests/demo-requests.routes";
 import supportRoutes from "./modules/support/support.routes";
 import clientRequirementsRoutes from "./modules/client-requirements/client-requirements.routes";
@@ -160,11 +158,6 @@ ensureTipTables().catch(err =>
   logger.warn("tip tables init warning:", err?.message ?? err),
 );
 
-// Bootstrap ai-engine (LUNOX) tables (idempotent)
-ensureAiEngineTables().catch(err =>
-  logger.warn("ai-engine table init warning:", err?.message ?? err),
-);
-
 // purchases/purchase_items/salons.next_purchase_seq: NOT auto-run here — see
 // Migration/create_purchases_tables.sql, run by hand per environment.
 
@@ -178,17 +171,12 @@ app.use(corsMiddleware);
 // have their raw text body consumed by the global urlencoded parser.
 app.use("/iclock", admsRouter);
 
-// Razorpay webhook — mounted BEFORE the JSON body parser on purpose: the
-// signature is computed over the exact bytes Razorpay sent, so this route
-// needs the raw Buffer, not a parsed-and-re-serialised object.
-app.post(
-  "/api/v1/plan-payments/webhook",
-  express.raw({ type: "*/*", limit: "1mb" }),
-  planPaymentsController.webhook
-);
-
 // Body parsing middleware
-app.use(express.json({ limit: "10mb" }));
+// `verify` keeps the untouched bytes on req.rawBody — Razorpay signs the raw body, so the webhook needs it.
+app.use(express.json({
+  limit: "10mb",
+  verify: (req, _res, buf) => { (req as any).rawBody = buf; },
+}));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
 // Serve uploaded files as static assets
@@ -205,14 +193,9 @@ app.use("/uploads", express.static(path.join(__dirname, "../uploads"), {
 app.use(compression());
 
 // Logging
+app.use(requestLogger);
 if (config.env === "development") {
   app.use(morgan("dev"));
-} else {
-  app.use(
-    morgan("combined", {
-      stream: { write: (message) => logger.info(message.trim()) },
-    }),
-  );
 }
 
 // Health check
@@ -276,7 +259,6 @@ app.use("/api/v1/oauth", authRoutes);
 app.use("/api/v1/billing", billingRoutes);
 app.use("/api/v1/pricing", pricingRoutes);
 app.use("/api/v1/subscriptions", subscriptionsRoutes);
-app.use("/api/v1/plan-payments", planPaymentsRoutes);
 app.use("/api/v1/webhooks", marketingWebhooksRoutes);
 // Alias: some Meta app webhook configs point at a bare "/webhook" path. Accept
 // it too so inbound messages/verification work regardless of which callback URL
@@ -333,12 +315,13 @@ app.use("/api/v1/brand-kit", brandKitRoutes);
 app.use("/api/v1/payments", paymentsRoutes);
 app.use("/api/v1/pos-payments", posPaymentsRoutes);
 app.use("/api/v1/payment-settings", paymentSettingsRoutes);
+app.use("/api/v1/payment-methods", paymentMethodsRoutes);
 app.use("/api/v1/blocked-times", blockedTimesRoutes);
 app.use("/api/v1/assets", assetsRoutes);
 app.use("/api/v1/settings", settingsRoutes);
 app.use("/api/v1/bot", botRoutes);
+app.use("/api/v1/ai-assistant", aiAssistantRoutes);
 app.use("/api/v1/bot-questions", botQuestionsRoutes);
-app.use("/api/v1/ai-engine", aiEngineRoutes);
 app.use("/api/report", reportsRoutes);
 app.use("/api/v1/reports", legacyReportsRoutes);
 app.use("/api/v1/cash-management", cashManagementRoutes);
@@ -355,7 +338,6 @@ app.use("/api/v1/reward-points", rewardPointsRoutes);
 app.use("/api/v1/referral", referralRoutes);
 app.use("/api/v1/super-admin", superAdminRoutes);
 app.use("/api/v1/branch-owner", branchOwnerRoutes);
-app.use("/api/v1/salon-plans", salonPlansRoutes);
 app.use("/api/v1/demo-requests", demoRequestsRoutes);
 app.use("/api/v1/support", supportRoutes);
 app.use("/api/v1/requirements", clientRequirementsRoutes);

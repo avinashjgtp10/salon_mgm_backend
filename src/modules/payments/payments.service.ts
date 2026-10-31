@@ -3,6 +3,7 @@ import { couponsRepository } from '../coupons/coupons.repository';
 import { appointmentsRepository } from '../appointments/appointments.repository';
 import { recordTransaction } from '../transactions/transaction-recorder.service';
 import { describePaymentMethod } from '../transactions/payment-method.util';
+import { paymentMethodsService } from '../payment-methods/payment-methods.service';
 import { membershipsRepository } from '../memberships/memberships.repository';
 import { clientMembershipsService } from '../client-memberships/client-memberships.service';
 import { clientMembershipsRepository } from '../client-memberships/client-memberships.repository';
@@ -24,6 +25,9 @@ import { getIO, salonRoom, salonStaffRoom } from '../../config/socket';
 import { getActiveTaxes } from '../settings/tax.util';
 import { computeBillTotals, allocateMembershipDiscount } from '../pricing/pricing.engine';
 import pool from '../../config/database';
+import { AppError } from '../../middleware/error.middleware';
+import { assertNoBlockingPosPayment } from '../pos-payments/pos-payments.guard';
+import { posPaymentsRepository } from '../pos-payments/pos-payments.repository';
 
 interface DiscountEligibleItem {
   itemId?: string;
@@ -153,7 +157,64 @@ async function applyMembershipDiscountForBooking(
 
 export const paymentsService = {
 
-  async create(data: CreatePaymentBody, requesterUserId?: string): Promise<Payment> {
+  /**
+   * Records a payment. For an appointment payment, the appointment's payment
+   * lock is taken BEFORE anything is read or written and held until the
+   * payment row is committed, and a blocking Payment Machine transaction
+   * (still open, or flagged for review) is checked first under that lock —
+   * so a rejected payment leaves no side effects at all (referral ledger,
+   * membership-wallet deduction, …), and no POS request can start in
+   * between. `posPaymentRequestId` is passed only by pos-payments when it
+   * records a confirmed machine payment: the request may record its own
+   * payment, and does so exactly once — if a payment row for it already
+   * exists (a retry after a crash, or a concurrent recorder that got the
+   * lock first) that row is returned and nothing is written again.
+   */
+  async create(data: CreatePaymentBody, requesterUserId?: string, options: { posPaymentRequestId?: string } = {}): Promise<Payment> {
+    // Server-set only — never accept the machine-payment link from a request body.
+    const { pos_payment_request_id: _untrusted, ...clean } = data;
+    const posPaymentRequestId = options.posPaymentRequestId;
+    if (posPaymentRequestId && !clean.appointment_id) {
+      throw new AppError(400, 'A Payment Machine payment must belong to an appointment', 'VALIDATION_ERROR');
+    }
+    const body: CreatePaymentBody = posPaymentRequestId ? { ...clean, pos_payment_request_id: posPaymentRequestId } : clean;
+
+    // A custom payment method that has been deactivated can't take new money
+    // (history keeps its name; this only guards the new payment).
+    await paymentMethodsService.assertNotInactive(body.salon_id, body.payment_method, body.split_details);
+
+    if (!body.appointment_id) return paymentsService.recordPayment(body, requesterUserId, async () => {});
+    const lock = await posPaymentsRepository.acquireAppointmentPaymentLock(body.appointment_id);
+    try {
+      if (posPaymentRequestId) {
+        // Under the lock, which is held until the payment row commits — so a
+        // second recorder always sees the first one's row here.
+        const already = await paymentsRepository.findByPosPaymentRequestId(posPaymentRequestId);
+        if (already) return already;
+      }
+      await assertNoBlockingPosPayment(body.appointment_id, body.salon_id, { excludeRequestId: posPaymentRequestId });
+      try {
+        return await paymentsService.recordPayment(body, requesterUserId, lock.release);
+      } catch (err: any) {
+        // Belt-and-braces: the unique index refused a second row for the same
+        // machine transaction (e.g. another server process) — return the one that exists.
+        if (posPaymentRequestId && err?.code === '23505' && err?.constraint === 'payments_pos_payment_request_id_key') {
+          const existing = await paymentsRepository.findByPosPaymentRequestId(posPaymentRequestId);
+          if (existing) return existing;
+        }
+        throw err;
+      }
+    } finally {
+      await lock.release(); // idempotent — normally already released right after the payment row
+    }
+  },
+
+  /**
+   * create()'s body — always go through create(). `releaseLock` is called as
+   * soon as the payment row is committed, so the post-payment work below
+   * (sales, notifications, …) doesn't hold up other payments.
+   */
+  async recordPayment(data: CreatePaymentBody, requesterUserId: string | undefined, releaseLock: () => Promise<void>): Promise<Payment> {
     // ── Recompute financial fields from real appointment data ─────────────────
     // This prevents bugs where the frontend sends a wrong gross_amount
     // (e.g., partial-payment amount instead of the full bill total).
@@ -911,6 +972,7 @@ export const paymentsService = {
       } finally {
         txClient.release();
       }
+      await releaseLock();
 
       // ── WhatsApp Automation: Reward Points Used ─────────────────────────
       // Fired outside the transaction — network I/O has no business holding
@@ -939,6 +1001,7 @@ export const paymentsService = {
       }
     } else {
       payment = await paymentsRepository.create(data);
+      await releaseLock();
     }
 
     // ── eWallet: actually deduct the real balance now that the payment row exists ──
@@ -1388,7 +1451,6 @@ export const paymentsService = {
             // instead of both firing and the client getting two PDFs.
             (async () => {
               const won = await whatsappAutomationRepository.guardInsertIfNotExists(`receipt-pdf-auto:${enrichedSale.id}`);
-              console.log(`[BILL_RECEIPT] payments.service.ts guard won=${won} saleId=${enrichedSale.id}`);
               if (!won) return;
 
               const clientRecord = data.client_id ? await clientsRepository.findById(data.client_id, data.salon_id) : null;
@@ -1518,7 +1580,7 @@ export const paymentsService = {
       (appt?.membership_items?.length ? appt.membership_items : null) ??
       (data.membership_items?.length   ? data.membership_items   : null) ??
       [];
-    logger.info(`[payments/create] status=${data.status} client_id=${data.client_id} membership_items_src_count=${membershipItemsSrc.length} (db=${appt?.membership_items?.length ?? 0} body=${data.membership_items?.length ?? 0})`);
+    logger.debug(`[payments/create] status=${data.status} client_id=${data.client_id} membership_items_src_count=${membershipItemsSrc.length} (db=${appt?.membership_items?.length ?? 0} body=${data.membership_items?.length ?? 0})`);
     if (data.status === 'completed' && data.client_id && membershipItemsSrc.length > 0) {
       for (const item of membershipItemsSrc) {
         const pricePaid = Number(item.price ?? 0) * Number(item.quantity ?? 1);

@@ -194,6 +194,13 @@ export const branchOwnerController = {
     } catch (err) { return next(err); }
   },
 
+  async getSalonsBilling(req: AuthedRequest, res: Response, next: NextFunction) {
+    try {
+      const data = await branchOwnerService.getSalonsBilling(req.user!.userId);
+      return res.json({ success: true, data });
+    } catch (err) { return next(err); }
+  },
+
   async getSalonSubscription(req: AuthedRequest, res: Response, next: NextFunction) {
     try {
       const branchOwnerId = req.user!.userId;

@@ -29,7 +29,7 @@ export const usersController = {
     try {
       const userId = req.user?.userId;
 
-      logger.info("GET /users/profile called", {
+      logger.debug("GET /users/profile called", {
         userId,
         method: req.method,
         path: req.originalUrl,
@@ -43,9 +43,11 @@ export const usersController = {
         throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
       }
 
-      const user = await usersService.me(userId, req.user?.salonId);
+      // ?include=salon adds the business fields the Settings profile page needs, in this same call.
+      const includeSalon = String(req.query.include ?? "").split(",").map((s) => s.trim()).includes("salon");
+      const user = await usersService.me(userId, req.user?.salonId, { includeSalon });
 
-      logger.info("GET /users/profile success", {
+      logger.debug("GET /users/profile success", {
         userId,
         method: req.method,
         path: req.originalUrl,
@@ -68,14 +70,14 @@ export const usersController = {
    */
   async list(req: Request, res: Response, next: NextFunction) {
     try {
-      logger.info("GET /users called", {
+      logger.debug("GET /users called", {
         method: req.method,
         path: req.originalUrl,
       });
 
       const users = await usersService.list();
 
-      logger.info("GET /users success", {
+      logger.debug("GET /users success", {
         count: Array.isArray(users) ? users.length : undefined,
         method: req.method,
         path: req.originalUrl,
@@ -101,7 +103,7 @@ export const usersController = {
       const id = getParamString(req.params.id);
       const role = typeof req.body?.role === "string" ? req.body.role.trim() : "";
 
-      logger.info("PATCH /users/:id/role called", {
+      logger.debug("PATCH /users/:id/role called", {
         id,
         byUserId: req.user?.userId,
         byRole: req.user?.role,
@@ -157,7 +159,7 @@ export const usersController = {
     try {
       const id = getParamString(req.params.id);
 
-      logger.info("GET /users/:id called", {
+      logger.debug("GET /users/:id called", {
         id,
         method: req.method,
         path: req.originalUrl,
@@ -173,7 +175,7 @@ export const usersController = {
 
       const user = await usersService.getById(id);
 
-      logger.info("GET /users/:id success", {
+      logger.debug("GET /users/:id success", {
         id,
         method: req.method,
         path: req.originalUrl,
@@ -198,7 +200,7 @@ export const usersController = {
     try {
       const id = getParamString(req.params.id);
 
-      logger.info("PATCH /users/:id called", {
+      logger.debug("PATCH /users/:id called", {
         id,
         method: req.method,
         path: req.originalUrl,
@@ -239,7 +241,7 @@ export const usersController = {
     try {
       const id = getParamString(req.params.id);
 
-      logger.info("DELETE /users/:id called", {
+      logger.debug("DELETE /users/:id called", {
         id,
         method: req.method,
         path: req.originalUrl,
@@ -282,7 +284,7 @@ export const usersController = {
     try {
       const userId = req.user?.userId;
 
-      logger.info("PATCH /users/me called", {
+      logger.debug("PATCH /users/me called", {
         userId,
         method: req.method,
         path: req.originalUrl,
@@ -319,7 +321,7 @@ export const usersController = {
     try {
       const userId = req.user?.userId;
 
-      logger.info("POST /users/me/change-password called", { userId });
+      logger.debug("POST /users/me/change-password called", { userId });
 
       if (!userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
 
@@ -342,7 +344,7 @@ export const usersController = {
     try {
       const userId = req.user?.userId;
 
-      logger.info("POST /users/me/avatar called", {
+      logger.debug("POST /users/me/avatar called", {
         userId,
         method: req.method,
         path: req.originalUrl,

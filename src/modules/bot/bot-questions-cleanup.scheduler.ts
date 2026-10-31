@@ -1,26 +1,25 @@
 // ============================================================
 // SalonOx — Bot Question History Retention Scheduler
 // ============================================================
-// Deletes bot_questions rows older than 30 days so Super Admin's Question
-// History stops showing them. Runs once a day — retention doesn't need a
-// tight cadence like the no-show sweep.
+// Deletes bot_questions rows whose last activity is older than the retention
+// window (24 hours) so the Super Admin chat inbox clears itself. Runs hourly.
 
 import logger from '../../config/logger'
-import { botQuestionsService } from './bot-questions.service'
+import { botQuestionsService, RETENTION_HOURS } from './bot-questions.service'
 
 let schedulerInterval: NodeJS.Timeout | null = null
 
 async function runCleanup(): Promise<void> {
   const deleted = await botQuestionsService.runRetentionCleanup()
   if (deleted > 0) {
-    logger.info(`[BOT-QUESTIONS-CLEANUP] Deleted ${deleted} question(s) older than 30 days`)
+    logger.info(`[BOT-QUESTIONS-CLEANUP] Deleted ${deleted} question(s) older than ${RETENTION_HOURS} hours`)
   }
 }
 
 export function startBotQuestionsCleanupScheduler(): void {
   if (schedulerInterval) return
 
-  logger.info('[BOT-QUESTIONS-CLEANUP] ⏰ Started — running every 24 hours')
+  logger.info('[BOT-QUESTIONS-CLEANUP] ⏰ Started — running every hour')
 
   runCleanup().catch(err =>
     logger.error('[BOT-QUESTIONS-CLEANUP] Initial run error:', err?.message)
@@ -30,7 +29,7 @@ export function startBotQuestionsCleanupScheduler(): void {
     runCleanup().catch(err =>
       logger.error('[BOT-QUESTIONS-CLEANUP] Job error:', err?.message)
     )
-  }, 24 * 60 * 60 * 1000)
+  }, 60 * 60 * 1000)
 }
 
 export function stopBotQuestionsCleanupScheduler(): void {

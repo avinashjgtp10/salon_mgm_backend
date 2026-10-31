@@ -127,7 +127,7 @@ export const downloadCataloguePdf = async (
     if (!salonId) return res.status(403).json({ error: "Salon context required" });
 
     const rows = await fetchRows(req.query as Record<string, unknown>, salonId);
-    logger.info("GET /download/pdf", { total: rows.length });
+    logger.debug("GET /download/pdf", { total: rows.length });
 
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Content-Disposition", 'attachment; filename="catalogue.pdf"');
@@ -201,7 +201,7 @@ export const downloadCatalogueExcel = async (
     if (!salonId) return res.status(403).json({ error: "Salon context required" });
 
     const rows = await fetchRows(req.query as Record<string, unknown>, salonId);
-    logger.info("GET /download/excel", { total: rows.length });
+    logger.debug("GET /download/excel", { total: rows.length });
 
     const workbook = new ExcelJS.Workbook();
     workbook.creator = "Catalogue API";
@@ -270,7 +270,7 @@ export const downloadCatalogueCsv = async (
     if (!salonId) return res.status(403).json({ error: "Salon context required" });
 
     const rows = await fetchRows(req.query as Record<string, unknown>, salonId);
-    logger.info("GET /download/csv", { total: rows.length });
+    logger.debug("GET /download/csv", { total: rows.length });
 
     const fields = HEADERS.map((h) => ({ label: h.label, value: h.key }));
     const parser = new CsvParser<DownloadRow>({ fields });
