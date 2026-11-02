@@ -12,6 +12,8 @@ export type CreateProviderPaymentParams = {
   requestedAt: Date;      // pos_payment_requests.created_at — the original txn timestamp
   // What the machine should accept: CARD (Card) or QR (UPI). Null = the machine's default.
   paymentMode?: PosPaymentMode | null;
+  // Customer's mobile number, if known — Paytm sends the receipt to it.
+  customerPhone?: string | null;
 };
 
 /**
