@@ -168,6 +168,7 @@ export const posPaymentsService = {
         terminalProviderId,
         requestedAt: toRequestedAt(request.created_at),
         paymentMode,
+        customerPhone: (appt as any).client_phone ?? null,
       });
     } catch (err: any) {
       logger.error('[pos-payments] provider createPayment failed — nothing reached the machine', { requestId: request.id, message: err?.message });
