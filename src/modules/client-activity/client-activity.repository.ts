@@ -5,12 +5,18 @@ export type StatusFilter = "online" | "active" | "inactive";
 export interface ActivityListFilters {
   from: Date;
   to: Date;
-  platform?: "web" | "app";
-  status?: StatusFilter;
+  /** Each filter takes several values (ORed within a filter, ANDed across filters); empty/undefined = no filter. */
+  platform?: ("web" | "app")[];
+  status?: StatusFilter[];
   search?: string;
+  /** Named roles, or "other" for any role that is not named here. */
+  role?: ActivityRole[];
   page: number;
   limit: number;
 }
+
+export const NAMED_ACTIVITY_ROLES = ["salon_owner", "manager", "staff", "branch_owner"] as const;
+export type ActivityRole = (typeof NAMED_ACTIVITY_ROLES)[number] | "other";
 
 // Status is derived from what was actually tracked, never stored:
 //   online   - activity in the last 10 minutes and no logout after it
@@ -29,7 +35,14 @@ const NAME_SQL = `COALESCE(NULLIF(TRIM(CONCAT_WS(' ', u.first_name, u.last_name)
 function baseQuery(f: ActivityListFilters) {
   const params: any[] = [f.from.toISOString(), f.to.toISOString()];
   const where: string[] = [`u.role <> 'super_admin'`];
-  if (f.platform) { params.push(f.platform); where.push(`cas.platform = $${params.length}`); }
+  if (f.platform?.length) { params.push(f.platform); where.push(`cas.platform = ANY($${params.length}::text[])`); }
+  if (f.role?.length) {
+    const named = f.role.filter((r) => r !== "other");
+    const parts: string[] = [];
+    if (named.length) { params.push(named); parts.push(`u.role = ANY($${params.length}::text[])`); }
+    if (f.role.includes("other")) { params.push([...NAMED_ACTIVITY_ROLES]); parts.push(`NOT (u.role = ANY($${params.length}::text[]))`); }
+    where.push(`(${parts.join(" OR ")})`);
+  }
   if (f.search) {
     params.push(`%${f.search}%`);
     const i = params.length;
@@ -146,8 +159,8 @@ export const clientActivityRepository = {
   async list(f: ActivityListFilters) {
     const { sql, params } = baseQuery(f);
 
-    const statusClause = f.status ? `WHERE status = $${params.length + 1}` : "";
-    const statusParams = f.status ? [f.status] : [];
+    const statusClause = f.status?.length ? `WHERE status = ANY($${params.length + 1}::text[])` : "";
+    const statusParams = f.status?.length ? [f.status] : [];
     const offset = (f.page - 1) * f.limit;
 
     const [{ rows }, { rows: counts }] = await Promise.all([
