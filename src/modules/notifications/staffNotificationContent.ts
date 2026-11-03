@@ -2,6 +2,8 @@ export interface StaffAppointmentRow {
   user_id: string;
   staff_id: string;
   appointment_staff_id: string | null;
+  // Owner's mobile "Client name access" switch: full name instead of masked.
+  show_full_name?: boolean | null;
   client_name: string | null;
   invoice_number: string | number | null;
   status: string;
@@ -34,7 +36,9 @@ export function buildStaffNotificationContent(rows: StaffAppointmentRow[]): Staf
   }
   return [...groups].map(([userId, { row, names }]) => {
     const letters = Array.from(row.client_name?.trim() || "Walk-in");
-    const name = letters.slice(0, 2).join("") + "*".repeat(Math.max(0, letters.length - 2));
+    const name = row.show_full_name === true
+      ? letters.join("")
+      : letters.slice(0, 2).join("") + "*".repeat(Math.max(0, letters.length - 2));
     const number = String(row.invoice_number ?? "").trim();
     const invoice = number ? (number.startsWith("INV-") ? number : `INV-${number.padStart(5, "0")}`) : "Invoice not generated";
     return { userId, title: `${invoice} · ${row.status}`, body: `${name} — ${names.join(", ")}` };

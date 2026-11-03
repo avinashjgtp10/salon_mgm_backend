@@ -16,6 +16,7 @@ router.use(authMiddleware, roleMiddleware("staff"), requireMobileStaff);
 router.get("/me", mobileStaffController.me);
 router.get("/me/calendar-access", mobileStaffController.calendarAccess);
 router.get("/me/product-audit-access", mobileStaffController.productAuditAccess);
+router.get("/me/client-name-access", mobileStaffController.clientNameAccess);
 router.get("/me/addresses", mobileStaffController.addresses);
 router.get("/me/emergency-contacts", mobileStaffController.emergencyContacts);
 

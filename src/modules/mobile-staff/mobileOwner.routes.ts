@@ -20,4 +20,9 @@ router.get("/staff/product-audit-access", mobileOwnerController.listProductAudit
 router.get("/staff/:staffId/product-audit-access", mobileOwnerController.getProductAuditAccess);
 router.put("/staff/:staffId/product-audit-access", mobileOwnerController.setProductAuditAccess);
 
+// Per-staff "Client name access" switch — see mobileClientNameAccess.ts.
+router.get("/staff/client-name-access", mobileOwnerController.listClientNameAccess);
+router.get("/staff/:staffId/client-name-access", mobileOwnerController.getClientNameAccess);
+router.put("/staff/:staffId/client-name-access", mobileOwnerController.setClientNameAccess);
+
 export default router;
