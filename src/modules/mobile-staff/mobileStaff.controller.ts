@@ -13,7 +13,6 @@ import type { Staff } from "../staff/staff.types";
 import type { MobileStaffContext, MobileStaffRequest } from "./mobileStaff.middleware";
 import { getStaffMobileCalendarAccess } from "./mobileCalendarAccess";
 import { getStaffMobileProductAuditAccess } from "./mobileProductAuditAccess";
-import { getStaffMobileClientNameAccess } from "./mobileClientNameAccess";
 import { reportsRepository } from "../reports/reports.repository";
 
 // Every handler reads identity ONLY from req.staff (set by requireMobileStaff
@@ -113,16 +112,6 @@ export const mobileStaffController = {
       const { id, salonId } = getStaff(req);
       const productAuditAccess = await getStaffMobileProductAuditAccess(id, salonId);
       return sendSuccess(res, 200, { productAuditAccess }, "Product audit access fetched successfully");
-    } catch (err) { return next(err); }
-  },
-
-  // Owner-controlled switch (see mobileClientNameAccess.ts). The app reads it
-  // to decide whether this staff member sees clients' full names.
-  async clientNameAccess(req: MobileStaffRequest, res: Response, next: NextFunction) {
-    try {
-      const { id, salonId } = getStaff(req);
-      const clientNameAccess = await getStaffMobileClientNameAccess(id, salonId);
-      return sendSuccess(res, 200, { clientNameAccess }, "Client name access fetched successfully");
     } catch (err) { return next(err); }
   },
 
