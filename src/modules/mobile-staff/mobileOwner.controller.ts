@@ -12,6 +12,11 @@ import {
   listStaffMobileProductAuditAccess,
   setStaffMobileProductAuditAccess,
 } from "./mobileProductAuditAccess";
+import {
+  getStaffMobileClientNameAccess,
+  listStaffMobileClientNameAccess,
+  setStaffMobileClientNameAccess,
+} from "./mobileClientNameAccess";
 
 type AuthRequest = Request & { user?: { userId: string; role?: string; salonId?: string | null } };
 
@@ -77,6 +82,33 @@ export const mobileOwnerController = {
       }
       const productAuditAccess = await setStaffMobileProductAuditAccess(staffId, getSalonId(req), enabled);
       return sendSuccess(res, 200, { staffId, productAuditAccess }, "Product audit access updated successfully");
+    } catch (err) { return next(err); }
+  },
+
+  async listClientNameAccess(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const items = await listStaffMobileClientNameAccess(getSalonId(req));
+      return sendSuccess(res, 200, { items }, "Client name access fetched successfully");
+    } catch (err) { return next(err); }
+  },
+
+  async getClientNameAccess(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const staffId = getStaffId(req);
+      const clientNameAccess = await getStaffMobileClientNameAccess(staffId, getSalonId(req));
+      return sendSuccess(res, 200, { staffId, clientNameAccess }, "Client name access fetched successfully");
+    } catch (err) { return next(err); }
+  },
+
+  async setClientNameAccess(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const staffId = getStaffId(req);
+      const enabled = (req.body as { clientNameAccess?: unknown } | undefined)?.clientNameAccess;
+      if (typeof enabled !== "boolean") {
+        throw new AppError(400, "clientNameAccess is required and must be a boolean", "VALIDATION_ERROR");
+      }
+      const clientNameAccess = await setStaffMobileClientNameAccess(staffId, getSalonId(req), enabled);
+      return sendSuccess(res, 200, { staffId, clientNameAccess }, "Client name access updated successfully");
     } catch (err) { return next(err); }
   },
 };
