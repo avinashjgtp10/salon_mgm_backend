@@ -10,13 +10,8 @@ export async function appointmentRecipients(salonId: string, appointmentId?: str
 
 export async function appointmentStaffNotifications(salonId: string, appointmentId?: string) {
   if (!appointmentId) return [];
-  // show_full_name is the owner's mobile "Client name access" switch (see
-  // mobile-staff/mobileClientNameAccess.ts). Before
-  // add_staff_mobile_client_name_access.sql has run the column doesn't exist,
-  // so retry with names masked rather than dropping the notification.
-  const query = (showFullName: string) => pool.query<StaffAppointmentRow>(
+  const { rows } = await pool.query<StaffAppointmentRow>(
     `SELECT s.user_id, s.id::text AS staff_id, a.staff_id::text AS appointment_staff_id,
-       ${showFullName} AS show_full_name,
        a.services, a.status, c.full_name AS client_name, svc.name AS service_name,
        (SELECT sale.invoice_number FROM sales sale WHERE sale.appointment_id = a.id
         AND sale.deleted_at IS NULL ORDER BY sale.created_at DESC LIMIT 1) AS invoice_number
@@ -34,10 +29,6 @@ export async function appointmentStaffNotifications(salonId: string, appointment
            COALESCE(a.membership_items::jsonb, '[]'::jsonb)
          ) item
          WHERE item->>'staff_id' = s.id::text))`, [salonId, appointmentId]);
-  const { rows } = await query("s.mobile_client_name_access").catch((err) => {
-    if (err?.code !== "42703") throw err;
-    return query("false");
-  });
   return buildStaffNotificationContent(rows);
 }
 
