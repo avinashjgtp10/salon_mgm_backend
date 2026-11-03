@@ -3,6 +3,7 @@ import { AppError } from "../../middleware/error.middleware";
 import { emailService } from "../utils/email.service";
 import { superAdminRepository } from "../super-admin/super-admin.repository";
 import { clientRequirementsRepository } from "./client-requirements.repository";
+import { developerLogins, chooseNewPassword } from "../client-management/developer-logins";
 import type {
   ListRequirementsFilters,
   RequirementPriority,
@@ -106,21 +107,33 @@ export const clientRequirementsService = {
     return clientRequirementsRepository.listDevelopers();
   },
 
-  // "Manage Team" page — creates a plain developer contact record (name +
-  // email, no password, no login, no platform access). They exist solely
-  // to be assignable on a requirement and receive assignment/status emails.
-  async createDeveloper(data: { name: string; email: string; phone?: string; createdBy?: string | null }) {
+  // "Manage Team" page — creates a developer contact record (name + email). With a password it also creates their Super Admin
+  // login; without one they stay a plain contact who only receives assignment/status emails.
+  async createDeveloper(data: { name: string; email: string; phone?: string; password?: string; createdBy?: string | null }) {
     if (!data.name?.trim()) throw new AppError(400, "Name is required", "VALIDATION_ERROR");
     if (!data.email?.trim()) throw new AppError(400, "Email is required", "VALIDATION_ERROR");
+    // A password also gives the developer a Super Admin login (their email + this password). Checked before anything is saved.
+    const wantsLogin = data.password !== undefined && data.password !== null && data.password !== "";
+    if (wantsLogin) {
+      chooseNewPassword(data.password);
+      if (await developerLogins.emailInUse(data.email)) throw new AppError(409, "An account with this email already exists", "EMAIL_TAKEN");
+    }
 
-    return clientRequirementsRepository.createDeveloper({
+    const developer = await clientRequirementsRepository.createDeveloper({
       name: data.name.trim(),
       email: data.email,
       phone: data.phone?.trim(),
       createdBy: data.createdBy ?? null,
     });
+    if (!wantsLogin) return { ...developer, has_login: false };
+    try {
+      await developerLogins.create(developer.id, data.password);
+    } catch (err) {
+      await clientRequirementsRepository.deleteDeveloper(developer.id);   // don't leave a developer behind without the login that was asked for
+      throw err;
+    }
+    return { ...developer, has_login: true };
   },
-
   // Real Salons > Actions > Assign Developer: saves which developers look after a salon.
   async setSalonDevelopers(salonId: string, developerIds: unknown) {
     if (!Array.isArray(developerIds)) throw new AppError(400, "developer_ids (array) required", "VALIDATION_ERROR");
@@ -134,12 +147,14 @@ export const clientRequirementsService = {
   },
 
   async deleteDeveloper(id: string) {
+    await developerLogins.disableForDeveloper(id);   // a developer's Super Admin login must not outlive them
     const ok = await clientRequirementsRepository.deleteDeveloper(id);
     if (!ok) throw new AppError(404, "Developer not found", "NOT_FOUND");
   },
 
   async setDeveloperStatus(id: string, isActive: boolean) {
     const updated = await clientRequirementsRepository.setDeveloperStatus(id, isActive);
+    if (updated && !isActive) await developerLogins.disableForDeveloper(id);
     if (!updated) throw new AppError(404, "Developer not found", "NOT_FOUND");
     return updated;
   },
