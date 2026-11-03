@@ -1,3 +1,4 @@
+import { getSalonTimezone } from "../../config/salonTimezone";
 import pool from "../../config/database";
 import { AppError } from "../../middleware/error.middleware";
 import {
@@ -160,7 +161,7 @@ export const commissionRulesRepository = {
     },
 
     /**
-     * tiered_target progress for one rule row — reuses the exact same IST-month
+     * tiered_target progress for one rule row — reuses the exact same salon-local-month
      * cumulative-revenue query the calculation engine's threshold gate uses, so
      * the number shown here always matches what checkout actually applies.
      * Returns null for anything that isn't a staff-scoped tiered_target rule.
@@ -169,14 +170,14 @@ export const commissionRulesRepository = {
         const rule = await this.findById(id, salonId);
         if (!rule || rule.type !== "tiered_target" || rule.condition_target == null || !rule.scope_id) return null;
 
-        const IST = "Asia/Kolkata";
-        // Same window the calculation engine uses: per IST day for a Daily rule.
+        const salonTz = await getSalonTimezone(salonId);
+        // Same window the calculation engine uses: per salon-local day for a Daily rule.
         const unit = rule.frequency === "daily" ? "day" : "month";
         const { rows } = await pool.query(
             `SELECT COALESCE(SUM(revenue_amount),0)::float AS total
              FROM commission_earned
              WHERE staff_id = $1 AND rule_id = $2
-               AND date_trunc('${unit}', earned_at AT TIME ZONE '${IST}') = date_trunc('${unit}', NOW() AT TIME ZONE '${IST}')`,
+               AND date_trunc('${unit}', earned_at AT TIME ZONE '${salonTz}') = date_trunc('${unit}', NOW() AT TIME ZONE '${salonTz}')`,
             [rule.scope_id, id]
         );
         return { target: Number(rule.condition_target), achieved: parseFloat(rows[0]?.total ?? "0") };

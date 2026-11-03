@@ -28,6 +28,12 @@ const isTier = (v: unknown): v is Tier => (TIERS as readonly string[]).includes(
 const isCycle = (v: unknown): v is Cycle => (CYCLES as readonly string[]).includes(v as string);
 const fromUnix = (n: unknown) => (typeof n === "number" && n > 0 ? new Date(n * 1000) : null);
 
+// reconcilePending() asks Razorpay about an unfinished checkout at most this often, and only for checkouts this recent
+// (an abandoned payment link must not cost an API call on every page load forever).
+const RECONCILE_MIN_INTERVAL_MS = 30_000;
+const RECONCILE_MAX_AGE_DAYS = 30;
+const lastReconcileAt = new Map<string, number>();
+
 export const subscriptionCheckoutService = {
     // The customer's own currency cannot be charged (not enabled for subscriptions, or no live rate). Nothing is charged and nothing is
     // created: the answer is a 409 CURRENCY_NOT_ENABLED that explains why and lists what the customer can do. INR billing is one of those
@@ -188,6 +194,19 @@ export const subscriptionCheckoutService = {
                    AND id NOT IN (SELECT id FROM subscriptions WHERE user_id = $2 AND status = 'active')`,
                 [salonId, userId]
             );
+            // The payment was confirmed before this salon existed, so the activation had nobody to give the plan's features to
+            // (applyPlanFeatures needs the salon). Now that it has one, the paid plan's features are applied.
+            const { rows: paid } = await pool.query(
+                `SELECT razorpay_subscription_id FROM subscriptions
+                 WHERE salon_id = $1 AND status = 'active' AND razorpay_subscription_id IS NOT NULL
+                 ORDER BY created_at DESC LIMIT 1`,
+                [salonId]
+            );
+            if (paid[0]?.razorpay_subscription_id) {
+                await this.applyPlanFeatures(paid[0].razorpay_subscription_id).catch((err) =>
+                    logger.error("Applying plan features to the new salon failed", { salonId, error: err?.message })
+                );
+            }
         }
         if (rows.length) {
             logger.info("Attached pre-onboarding subscriptions to salon", { userId, salonId, count: rows.length });
@@ -213,6 +232,69 @@ export const subscriptionCheckoutService = {
         return rows[0]
             ? { paid: true, plan_name: rows[0].plan_name as string | null, ends_at: rows[0].current_period_end as string | null }
             : { paid: false, plan_name: null, ends_at: null };
+    },
+
+    // The webhook is the normal way a payment activates a subscription. If Razorpay can't reach us (webhook not registered in the
+    // dashboard, secret mismatch, downtime) a paid subscription would stay 'created' forever, so when its owner opens the app we ask
+    // Razorpay about their unfinished checkouts and apply exactly the event the webhook would have delivered. It goes through
+    // handleWebhook, so it is idempotent with the real webhook (row lock, payments de-duplicated by Razorpay payment id), throttled per
+    // subscription, and never throws: the page that called it must not break because Razorpay was slow.
+    // `userId`/`salonId` are always the caller's own, never taken from the URL.
+    async reconcilePending(userId: string, salonId: string | null): Promise<number> {
+        let activated = 0;
+        try {
+            const { rows } = await pool.query(
+                `SELECT razorpay_subscription_id AS rzp FROM subscriptions
+                 WHERE (user_id = $1 OR salon_id = $2) AND status IN ('created', 'authenticated')
+                   AND razorpay_subscription_id IS NOT NULL
+                   AND created_at > NOW() - ($3 || ' days')::interval
+                 ORDER BY created_at DESC LIMIT 3`,
+                [userId, salonId, String(RECONCILE_MAX_AGE_DAYS)]
+            );
+            for (const { rzp } of rows as { rzp: string }[]) {
+                const now = Date.now();
+                if (now - (lastReconcileAt.get(rzp) ?? 0) < RECONCILE_MIN_INTERVAL_MS) continue;
+                if (lastReconcileAt.size > 1000) lastReconcileAt.clear();
+                lastReconcileAt.set(rzp, now);
+                try {
+                    if (await this.reconcileOne(rzp)) activated++;
+                } catch (err: any) {
+                    const detail = err?.error?.description ?? err?.message;
+                    logger.warn("Reconciling a pending subscription with Razorpay failed", { razorpaySubscriptionId: rzp, detail });
+                }
+            }
+        } catch (err: any) {
+            logger.warn("Reconciling pending subscriptions failed", { userId, error: err?.message });
+        }
+        return activated;
+    },
+
+    // One pending checkout: if Razorpay says it is active, apply the same event the webhook would have sent.
+    async reconcileOne(razorpaySubscriptionId: string): Promise<boolean> {
+        const rz: any = await getRazorpay();
+        const sub = await rz.subscriptions.fetch(razorpaySubscriptionId);
+        if (sub?.status !== "active") return false;   // created / authenticated / cancelled ...: nothing was paid, or the webhook owns it
+
+        // The first payment, so the payment row and the tax invoice get recorded too (the Billing page shows "paid" from the invoice).
+        let payment: any = null;
+        try {
+            const invoices = await rz.invoices.all({ subscription_id: razorpaySubscriptionId });
+            const paidInvoice = (invoices?.items ?? []).find((i: any) => i?.status === "paid" && i?.payment_id);
+            if (paidInvoice) payment = await rz.payments.fetch(paidInvoice.payment_id);
+        } catch (err: any) {
+            logger.warn("Could not load the payment for a reconciled subscription; activating without it", { razorpaySubscriptionId, error: err?.message });
+        }
+        if (!payment) logger.warn("Reconciled subscription is active at Razorpay but no paid payment was found", { razorpaySubscriptionId });
+
+        const charged = Boolean(payment?.id);
+        const result = await this.handleWebhook({
+            event: charged ? "subscription.charged" : "subscription.activated",
+            payload: { subscription: { entity: sub }, ...(charged ? { payment: { entity: payment } } : {}) },
+        });
+        // handleWebhook applies the plan's features on "activated" only; this is the first activation, so do it for "charged" too.
+        if (charged) await this.applyPlanFeatures(razorpaySubscriptionId).catch((e: any) => logger.error("Applying plan features failed", { error: e?.message }));
+        logger.info("Pending subscription activated from Razorpay (webhook had not)", { razorpaySubscriptionId, result });
+        return true;
     },
 
     // Razorpay signs the exact raw body with the webhook secret (HMAC-SHA256, hex).

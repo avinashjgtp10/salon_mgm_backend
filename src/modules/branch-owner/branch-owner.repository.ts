@@ -2,6 +2,12 @@ import { randomUUID } from "crypto";
 import pool, { safeQuery } from "../../config/database";
 import { lowStockThresholdSql } from "../inventory/low-stock.sql";
 
+// A branch owner's salons can sit in different timezones, so every "local day"
+// below is taken in the timezone of the salon the row belongs to. Pass the SQL
+// expression for that row's salon id.
+const salonTz = (salonIdExpr: string) =>
+  `COALESCE((SELECT NULLIF(z.timezone, '') FROM salons z WHERE z.id = ${salonIdExpr}), 'Asia/Kolkata')`;
+
 // Mirrors salon-dashboard.repository.ts's revenue_events exactly (see the long
 // comments there): an appointment-linked sale counts what was actually collected
 // on it (payments.paid_amount), a walk-in sale counts its rounded total, an open
@@ -10,7 +16,7 @@ import { lowStockThresholdSql } from "../inventory/low-stock.sql";
 // Expects a `my_salons(salon_id)` CTE in scope.
 const REVENUE_EVENTS_CTES = `
       sales_rows AS (
-        SELECT COALESCE(a.scheduled_at, s.created_at) AS event_at,
+        SELECT s.salon_id, COALESCE(a.scheduled_at, s.created_at) AS event_at,
           CASE
             WHEN s.appointment_id IS NOT NULL THEN COALESCE(pay.paid_from_payments, 0)
             ELSE ROUND(s.total_amount)
@@ -27,7 +33,7 @@ const REVENUE_EVENTS_CTES = `
           AND (a.id IS NULL OR (a.status IN ('paid', 'partial') AND a.deleted_at IS NULL))
       ),
       open_partial_rows AS (
-        SELECT COALESCE(a.scheduled_at, p.created_at) AS event_at, p.paid_amount AS amount
+        SELECT p.salon_id, COALESCE(a.scheduled_at, p.created_at) AS event_at, p.paid_amount AS amount
         FROM payments p
         JOIN appointments a ON a.id = p.appointment_id
         WHERE p.salon_id IN (SELECT salon_id FROM my_salons)
@@ -39,9 +45,9 @@ const REVENUE_EVENTS_CTES = `
           )
       ),
       revenue_events AS (
-        SELECT event_at, amount FROM sales_rows
+        SELECT salon_id, event_at, amount FROM sales_rows
         UNION ALL
-        SELECT event_at, amount FROM open_partial_rows
+        SELECT salon_id, event_at, amount FROM open_partial_rows
       )`;
 
 export const branchOwnerRepository = {
@@ -109,7 +115,7 @@ export const branchOwnerRepository = {
         SELECT salon_id, COUNT(*)::int AS appointments_today
         FROM appointments
         WHERE deleted_at IS NULL AND status NOT IN ('cancelled', 'no-show')
-          AND (scheduled_at AT TIME ZONE 'Asia/Kolkata')::date = (NOW() AT TIME ZONE 'Asia/Kolkata')::date
+          AND (scheduled_at AT TIME ZONE ${salonTz('salon_id')})::date = (NOW() AT TIME ZONE ${salonTz('salon_id')})::date
         GROUP BY salon_id
       ) appt_counts ON appt_counts.salon_id = s.id
       LEFT JOIN (
@@ -137,7 +143,7 @@ export const branchOwnerRepository = {
         -- day this silently read as "yesterday" and reported ₹0/zero counts
         -- for genuinely-today activity. Same fix already applied to
         -- salon-dashboard.repository.ts's own revenue query.
-        WHERE (event_at AT TIME ZONE 'Asia/Kolkata')::date = (NOW() AT TIME ZONE 'Asia/Kolkata')::date
+        WHERE (event_at AT TIME ZONE ${salonTz('salon_id')})::date = (NOW() AT TIME ZONE ${salonTz('salon_id')})::date
         GROUP BY salon_id
       ) revenue ON revenue.salon_id = s.id
       WHERE bos.branch_owner_id = $1
@@ -200,7 +206,7 @@ export const branchOwnerRepository = {
           SELECT salon_id FROM branch_owner_salons WHERE branch_owner_id = $1
         ),
         sales_rows AS (
-          SELECT s.created_at AS event_at, ROUND(s.total_amount) AS amount
+          SELECT s.salon_id, s.created_at AS event_at, ROUND(s.total_amount) AS amount
           FROM sales s
           LEFT JOIN appointments a ON a.id = s.appointment_id
           WHERE s.salon_id IN (SELECT salon_id FROM my_salons)
@@ -208,7 +214,7 @@ export const branchOwnerRepository = {
             AND (a.id IS NULL OR (a.status IN ('paid', 'partial') AND a.deleted_at IS NULL))
         ),
         open_partial_rows AS (
-          SELECT p.created_at AS event_at, p.paid_amount AS amount
+          SELECT p.salon_id, p.created_at AS event_at, p.paid_amount AS amount
           FROM payments p
           JOIN appointments a ON a.id = p.appointment_id
           WHERE p.salon_id IN (SELECT salon_id FROM my_salons)
@@ -220,9 +226,9 @@ export const branchOwnerRepository = {
             )
         ),
         revenue_events AS (
-          SELECT event_at, amount FROM sales_rows
+          SELECT salon_id, event_at, amount FROM sales_rows
           UNION ALL
-          SELECT event_at, amount FROM open_partial_rows
+          SELECT salon_id, event_at, amount FROM open_partial_rows
         )
         SELECT
           COALESCE((SELECT SUM(amount) FROM revenue_events), 0)::numeric AS total_revenue,
@@ -231,7 +237,7 @@ export const branchOwnerRepository = {
           -- rolled over at UTC midnight (5:30am IST), silently zeroing this
           -- KPI for the first ~5.5 hours of every IST day.
           COALESCE((SELECT SUM(amount) FROM revenue_events
-            WHERE (event_at AT TIME ZONE 'Asia/Kolkata')::date = (NOW() AT TIME ZONE 'Asia/Kolkata')::date
+            WHERE (event_at AT TIME ZONE ${salonTz('salon_id')})::date = (NOW() AT TIME ZONE ${salonTz('salon_id')})::date
           ), 0)::numeric AS revenue_today,
           (SELECT COUNT(*) FROM appointments
             WHERE salon_id IN (SELECT salon_id FROM my_salons)
@@ -239,7 +245,7 @@ export const branchOwnerRepository = {
           (SELECT COUNT(*) FROM appointments
             WHERE salon_id IN (SELECT salon_id FROM my_salons)
               AND deleted_at IS NULL AND status NOT IN ('cancelled', 'no-show')
-              AND (scheduled_at AT TIME ZONE 'Asia/Kolkata')::date = (NOW() AT TIME ZONE 'Asia/Kolkata')::date)::int AS bookings_today
+              AND (scheduled_at AT TIME ZONE ${salonTz('salon_id')})::date = (NOW() AT TIME ZONE ${salonTz('salon_id')})::date)::int AS bookings_today
       `, [branchOwnerId]),
 
       pool.query<{ total_staff: string }>(`
@@ -270,11 +276,11 @@ export const branchOwnerRepository = {
         SELECT COUNT(*)::int AS new_clients_today
         FROM clients c
         WHERE c.is_active = true
-          AND (c.created_at AT TIME ZONE 'Asia/Kolkata')::date = (NOW() AT TIME ZONE 'Asia/Kolkata')::date
           AND EXISTS (
             SELECT 1 FROM appointments a
             WHERE a.client_id = c.id
               AND a.salon_id IN (SELECT salon_id FROM branch_owner_salons WHERE branch_owner_id = $1)
+              AND (c.created_at AT TIME ZONE ${salonTz('a.salon_id')})::date = (NOW() AT TIME ZONE ${salonTz('a.salon_id')})::date
           )
       `, [branchOwnerId]),
 
@@ -338,10 +344,14 @@ export const branchOwnerRepository = {
         WHERE branch_owner_id = $1 AND ($3::uuid IS NULL OR salon_id = $3::uuid)
       ),
       ${REVENUE_EVENTS_CTES},
+      anchor AS (
+        SELECT COALESCE(MAX((NOW() AT TIME ZONE COALESCE(NULLIF(z.timezone, ''), 'Asia/Kolkata'))::date), (NOW() AT TIME ZONE 'Asia/Kolkata')::date) AS today
+        FROM my_salons m JOIN salons z ON z.id = m.salon_id
+      ),
       buckets_series AS (
         SELECT generate_series(
-          date_trunc('${bucketUnit}', (NOW() AT TIME ZONE 'Asia/Kolkata')::date) - (($2::int - 1) || ' ${bucketUnit}')::interval,
-          date_trunc('${bucketUnit}', (NOW() AT TIME ZONE 'Asia/Kolkata')::date),
+          date_trunc('${bucketUnit}', (SELECT today FROM anchor)) - (($2::int - 1) || ' ${bucketUnit}')::interval,
+          date_trunc('${bucketUnit}', (SELECT today FROM anchor)),
           ('1 ${bucketUnit}')::interval
         )::date AS bucket
       )
@@ -349,7 +359,7 @@ export const branchOwnerRepository = {
         bs.bucket::text AS bucket,
         COALESCE(SUM(re.amount), 0)::numeric AS revenue
       FROM buckets_series bs
-      LEFT JOIN revenue_events re ON date_trunc('${bucketUnit}', (re.event_at AT TIME ZONE 'Asia/Kolkata')::date) = bs.bucket
+      LEFT JOIN revenue_events re ON date_trunc('${bucketUnit}', (re.event_at AT TIME ZONE ${salonTz('re.salon_id')})::date) = bs.bucket
       GROUP BY bs.bucket
       ORDER BY bs.bucket
     `, [branchOwnerId, bucketCount, salonId ?? null]);
@@ -364,14 +374,18 @@ export const branchOwnerRepository = {
         WHERE branch_owner_id = $1 AND ($3::uuid IS NULL OR salon_id = $3::uuid)
       ),
       ${REVENUE_EVENTS_CTES},
+      anchor AS (
+        SELECT COALESCE(MAX((NOW() AT TIME ZONE COALESCE(NULLIF(z.timezone, ''), 'Asia/Kolkata'))::date), (NOW() AT TIME ZONE 'Asia/Kolkata')::date) AS today
+        FROM my_salons m JOIN salons z ON z.id = m.salon_id
+      ),
       window_bounds AS (
         SELECT
-          date_trunc('${bucketUnit}', (NOW() AT TIME ZONE 'Asia/Kolkata')::date) - ($2::int || ' ${bucketUnit}')::interval AS prior_start,
-          date_trunc('${bucketUnit}', (NOW() AT TIME ZONE 'Asia/Kolkata')::date) - (($2::int - 1) || ' ${bucketUnit}')::interval AS prior_end
+          date_trunc('${bucketUnit}', (SELECT today FROM anchor)) - ($2::int || ' ${bucketUnit}')::interval AS prior_start,
+          date_trunc('${bucketUnit}', (SELECT today FROM anchor)) - (($2::int - 1) || ' ${bucketUnit}')::interval AS prior_end
       )
       SELECT COALESCE(SUM(re.amount), 0)::numeric AS prior_revenue
       FROM revenue_events re, window_bounds wb
-      WHERE (re.event_at AT TIME ZONE 'Asia/Kolkata') >= wb.prior_start AND (re.event_at AT TIME ZONE 'Asia/Kolkata') < wb.prior_end
+      WHERE (re.event_at AT TIME ZONE ${salonTz('re.salon_id')}) >= wb.prior_start AND (re.event_at AT TIME ZONE ${salonTz('re.salon_id')}) < wb.prior_end
     `, [branchOwnerId, bucketCount, salonId ?? null]);
 
     return { points, priorPeriodRevenue: Number(priorRows[0]?.prior_revenue ?? 0) };
@@ -537,7 +551,7 @@ export const branchOwnerRepository = {
   // sessions in the selected range still shows an all-zero row instead of
   // disappearing — filtering cm's columns in WHERE would turn this back
   // into an inner join.
-  async getCashManagementBySalon(branchOwnerId: string, from: string, to: string) {
+  async getCashManagementBySalon(branchOwnerId: string, from: string | null, to: string | null) {
     const { rows } = await pool.query(`
       SELECT
         s.id                                            AS salon_id,
@@ -554,7 +568,7 @@ export const branchOwnerRepository = {
       JOIN salons s ON s.id = bos.salon_id
       LEFT JOIN cash_management cm
         ON cm.salon_id = s.id
-        AND (cm.opened_at AT TIME ZONE 'Asia/Kolkata')::date BETWEEN $2::date AND $3::date
+        AND (cm.opened_at AT TIME ZONE COALESCE(NULLIF(s.timezone, ''), 'Asia/Kolkata'))::date BETWEEN COALESCE($2::date, (NOW() AT TIME ZONE COALESCE(NULLIF(s.timezone, ''), 'Asia/Kolkata'))::date) AND COALESCE($3::date, (NOW() AT TIME ZONE COALESCE(NULLIF(s.timezone, ''), 'Asia/Kolkata'))::date)
       WHERE bos.branch_owner_id = $1
       GROUP BY s.id, s.business_name, s.slug
       ORDER BY s.created_at DESC

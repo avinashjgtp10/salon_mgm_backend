@@ -16,11 +16,11 @@ import {
     CreateSalaryAdvanceBody, SalaryAdvanceListQuery, UpdateSalaryAdvanceBody,
 } from "./payroll.types";
 
-type SalonBranding = { business_name: string; logo_url: string | null; email: string | null; phone: string | null; address: string | null };
+type SalonBranding = { business_name: string; logo_url: string | null; email: string | null; phone: string | null; address: string | null; timezone: string | null; currency: string | null };
 
 async function getSalonBranding(salonId: string): Promise<SalonBranding> {
     const { rows } = await pool.query(
-        `SELECT business_name, logo_url, email, phone, address FROM salons WHERE id = $1`,
+        `SELECT business_name, logo_url, email, phone, address, timezone, currency FROM salons WHERE id = $1`,
         [salonId]
     );
     const salon = rows[0] ?? {};
@@ -30,6 +30,8 @@ async function getSalonBranding(salonId: string): Promise<SalonBranding> {
         email: salon.email ?? null,
         phone: salon.phone ?? null,
         address: salon.address ?? null,
+        timezone: salon.timezone ?? null,
+        currency: salon.currency ?? null,
     };
 }
 

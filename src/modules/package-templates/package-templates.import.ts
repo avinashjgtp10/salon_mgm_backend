@@ -46,6 +46,8 @@ export const packageTemplatesImport = {
 
     // Map whatever case/spacing the sheet used onto the canonical header names.
     const canonical = new Map(ALL_COLUMNS.map((c) => [norm(c), c]));
+    // A UAE salon's template calls the tax column "VAT (%)"; it is the same column.
+    canonical.set(norm("VAT (%)"), "GST (%)");
     const headers = Object.keys(params.rows[0]);
     const missing = REQUIRED_COLUMNS.filter((c) => !headers.some((h) => norm(h) === norm(c)));
     if (missing.length > 0) {

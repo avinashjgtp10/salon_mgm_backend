@@ -5,6 +5,8 @@
 import logger from '../../config/logger'
 import { whatsappAutomationRepository } from './whatsapp-automation.repository'
 import { waScheduledMessagesRepository } from './wa-scheduled-messages.repository'
+import { getSalonTimezone, DEFAULT_SALON_TIMEZONE } from '../../config/salonTimezone'
+import { zonedInstant } from '../attendance/staffAttendance.rules'
 import { whatsappAutomationService } from './whatsapp-automation.service'
 import {
   AutomationEventType,
@@ -14,23 +16,24 @@ import {
 
 // ── IST date helpers ─────────────────────────────────────────────────────────
 
-function formatDateIST(date: Date | string): string {
-  return new Date(date).toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', year: 'numeric' })
+function formatDateIST(date: Date | string, timeZone: string = DEFAULT_SALON_TIMEZONE): string {
+  return new Date(date).toLocaleDateString('en-IN', { timeZone, day: '2-digit', month: 'short', year: 'numeric' })
 }
 
-// Real UTC Date for a given IST calendar date + hour (IST = UTC+5:30).
-function buildUtcForIST(year: number, month: number, day: number, hourIST: number): Date {
-  return new Date(Date.UTC(year, month - 1, day, hourIST - 5, -30, 0))
+// Real UTC Date for a salon-local calendar date + hour.
+function buildUtcForSalon(year: number, month: number, day: number, hour: number, timeZone: string): Date {
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return zonedInstant(`${year}-${pad(month)}-${pad(day)}`, `${pad(hour)}:00`, timeZone)
 }
 
-// Next future occurrence (IST) of a "MM-DD" day/month, at hourIST:00 — used for
+// Next future occurrence (in the salon's timezone) of a "MM-DD" day/month, at hour:00 — used for
 // birthday_wishes (recurs yearly) and new_year_campaign (fixed Jan 1).
-function nextOccurrenceIST(dayMonth: string, hourIST = 9): Date {
+function nextOccurrence(dayMonth: string, timeZone: string, hour = 9): Date {
   const [mm, dd] = dayMonth.split('-').map(Number)
-  const todayIST = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }) // YYYY-MM-DD
-  const thisYear = Number(todayIST.split('-')[0])
-  let candidate = buildUtcForIST(thisYear, mm, dd, hourIST)
-  if (candidate.getTime() <= Date.now()) candidate = buildUtcForIST(thisYear + 1, mm, dd, hourIST)
+  const todayLocal = new Date().toLocaleDateString('en-CA', { timeZone }) // YYYY-MM-DD
+  const thisYear = Number(todayLocal.split('-')[0])
+  let candidate = buildUtcForSalon(thisYear, mm, dd, hour, timeZone)
+  if (candidate.getTime() <= Date.now()) candidate = buildUtcForSalon(thisYear + 1, mm, dd, hour, timeZone)
   return candidate
 }
 
@@ -66,8 +69,8 @@ export const waScheduledMessagesService = {
         // never '', or Meta rejects the send with 131008 "Required parameter
         // is missing".
         variables: p.eventType === 'package_expiring_7d'
-          ? { '1': params.clientName, '2': params.packageName, '3': formatDateIST(expiry), '4': String(params.remainingSessions ?? 0) }
-          : { '1': params.clientName, '2': params.packageName, '3': String(params.remainingSessions ?? 0), '4': formatDateIST(expiry) },
+          ? { '1': params.clientName, '2': params.packageName, '3': formatDateIST(expiry, await getSalonTimezone(params.salonId)), '4': String(params.remainingSessions ?? 0) }
+          : { '1': params.clientName, '2': params.packageName, '3': String(params.remainingSessions ?? 0), '4': formatDateIST(expiry, await getSalonTimezone(params.salonId)) },
         messagePreview: `${params.packageName} ${p.label}`,
         isPreview: false,
       })
@@ -96,8 +99,8 @@ export const waScheduledMessagesService = {
         // runMembershipExpiringReminders) — every slot must carry a real
         // value, never '', or Meta rejects the send with 131008.
         variables: p.eventType === 'membership_expiring_7d'
-          ? { '1': params.clientName, '2': params.membershipName, '3': formatDateIST(expiry), '4': String(params.remainingBalance ?? 0) }
-          : { '1': params.clientName, '2': params.membershipName, '3': String(params.remainingBalance ?? 0), '4': formatDateIST(expiry) },
+          ? { '1': params.clientName, '2': params.membershipName, '3': formatDateIST(expiry, await getSalonTimezone(params.salonId)), '4': String(params.remainingBalance ?? 0) }
+          : { '1': params.clientName, '2': params.membershipName, '3': String(params.remainingBalance ?? 0), '4': formatDateIST(expiry, await getSalonTimezone(params.salonId)) },
         messagePreview: `${params.membershipName} ${p.label}`,
         isPreview: false,
       })
@@ -118,8 +121,8 @@ export const waScheduledMessagesService = {
     if (reminderAt.getTime() <= Date.now()) return // already <24h out — the old-instant-fire path (removed) would've caught this; skip here
 
     const eventType: AutomationEventType = params.packageLinked ? 'package_appointment_reminder_24h' : 'service_reminder_24h'
-    const dateStr = formatDateIST(apptTime)
-    const timeStr = new Date(apptTime).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: true })
+    const dateStr = formatDateIST(apptTime, await getSalonTimezone(params.salonId))
+    const timeStr = new Date(apptTime).toLocaleTimeString('en-IN', { timeZone: await getSalonTimezone(params.salonId), hour: '2-digit', minute: '2-digit', hour12: true })
 
     await waScheduledMessagesRepository.upsertScheduled({
       salonId: params.salonId, clientId: params.clientId, phone: params.phone, countryCode: params.countryCode,
@@ -137,7 +140,7 @@ export const waScheduledMessagesService = {
     salonId: string; clientId: string; phone: string; countryCode?: string | null
     fullName: string; salonName: string; birthdayDayMonth: string
   }): Promise<void> {
-    const scheduledAt = nextOccurrenceIST(params.birthdayDayMonth, 9)
+    const scheduledAt = nextOccurrence(params.birthdayDayMonth, await getSalonTimezone(params.salonId), 9)
     await waScheduledMessagesRepository.upsertScheduled({
       salonId: params.salonId, clientId: params.clientId, phone: params.phone, countryCode: params.countryCode,
       eventType: 'birthday_wishes', referenceId: params.clientId, referenceType: 'client',
@@ -155,7 +158,7 @@ export const waScheduledMessagesService = {
     salonId: string; clientId: string; phone: string; countryCode?: string | null
     fullName: string; salonName: string; anniversaryDayMonth: string
   }): Promise<void> {
-    const scheduledAt = nextOccurrenceIST(params.anniversaryDayMonth, 9)
+    const scheduledAt = nextOccurrence(params.anniversaryDayMonth, await getSalonTimezone(params.salonId), 9)
     await waScheduledMessagesRepository.upsertScheduled({
       salonId: params.salonId, clientId: params.clientId, phone: params.phone, countryCode: params.countryCode,
       eventType: 'anniversary_wishes', referenceId: params.clientId, referenceType: 'client',
@@ -178,7 +181,7 @@ export const waScheduledMessagesService = {
         for (const sale of sales) {
           if (!sale.phone_number) continue
           currentRefIds.push(sale.sale_id)
-          const dueDate = sale.due_date ? formatDateIST(sale.due_date) : 'as soon as possible'
+          const dueDate = sale.due_date ? formatDateIST(sale.due_date, await getSalonTimezone(sale.salon_id)) : 'as soon as possible'
           await waScheduledMessagesRepository.upsertScheduled({
             salonId: sale.salon_id, clientId: sale.client_id, phone: sale.phone_number, countryCode: sale.phone_country_code,
             eventType, referenceId: sale.sale_id, referenceType: 'sale', scheduledAt: tomorrow,
@@ -215,14 +218,15 @@ export const waScheduledMessagesService = {
   // run-up to Jan 1 (harmless to re-run: upsertScheduled just moves the date).
   async seedNewYearRows(): Promise<void> {
     try {
-      const nowIST = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }))
+      // Platform-level guard (when to start seeding), not a per-salon send time — each row's own send time uses its salon's timezone.
+      const nowIST = new Date(new Date().toLocaleString('en-US', { timeZone: DEFAULT_SALON_TIMEZONE }))
       // Only worth seeding from Dec 1 onward — any earlier and "next Jan 1" is
       // months away and would just get re-upserted to the same date daily anyway.
       if (nowIST.getMonth() !== 11) return
       const clients = await whatsappAutomationRepository.getAllActiveSalonClients()
-      const scheduledAt = nextOccurrenceIST('01-01', 9)
       for (const client of clients) {
         if (!client.phone_number) continue
+        const scheduledAt = nextOccurrence('01-01', await getSalonTimezone(client.salon_id), 9)
         await waScheduledMessagesRepository.upsertScheduled({
           salonId: client.salon_id, clientId: client.client_id, phone: client.phone_number, countryCode: client.phone_country_code,
           eventType: 'new_year_campaign', referenceId: client.client_id, referenceType: 'client', scheduledAt,

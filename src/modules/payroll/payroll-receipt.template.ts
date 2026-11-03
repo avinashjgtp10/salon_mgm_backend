@@ -1,3 +1,5 @@
+import { DEFAULT_SALON_TIMEZONE } from "../../config/salonTimezone";
+import { formatDocumentMoney } from "../../config/documentMoney";
 import { PayrollPayment } from "./payroll.types";
 
 // Payment Receipt — confirms the salary was actually paid (payment date,
@@ -5,7 +7,7 @@ import { PayrollPayment } from "./payroll.types";
 // breakdown. Only ever generated for a period that already has a
 // payroll_payments row, so this never shows partial/unpaid state.
 export function buildPayrollReceiptHtml(params: {
-    salon: { business_name: string; logo_url: string | null; email: string | null; phone: string | null; address: string | null };
+    salon: { business_name: string; logo_url: string | null; email: string | null; phone: string | null; address: string | null; timezone?: string | null; currency?: string | null };
     staffName: string;
     staffDesignation: string | null;
     periodLabel: string;
@@ -14,10 +16,10 @@ export function buildPayrollReceiptHtml(params: {
     netSalary: number;
 }): string {
     const { salon, staffName, staffDesignation, periodLabel, documentId, payment, netSalary } = params;
-    const fmt = (n: number) => `₹${(Number(n) || 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    const fmt = (n: number) => formatDocumentMoney(n, salon.currency);
     const salonName = salon.business_name || "Salon";
-    const paymentDate = new Date(payment.paid_at).toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", year: "numeric", month: "long", day: "numeric" });
-    const generatedOn = new Date().toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", year: "numeric", month: "long", day: "numeric" });
+    const paymentDate = new Date(payment.paid_at).toLocaleDateString("en-IN", { timeZone: salon.timezone || DEFAULT_SALON_TIMEZONE, year: "numeric", month: "long", day: "numeric" });
+    const generatedOn = new Date().toLocaleDateString("en-IN", { timeZone: salon.timezone || DEFAULT_SALON_TIMEZONE, year: "numeric", month: "long", day: "numeric" });
     const paymentMethodLabel = payment.payment_method.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 
     const row = (label: string, value: string) => `

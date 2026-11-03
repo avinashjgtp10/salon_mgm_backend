@@ -1,7 +1,10 @@
 import { Sale, SaleItem, TipBreakdownEntry } from "./sales.types";
 import { formatSalonPhones } from "../salons/salon-phones";
+import { DEFAULT_SALON_TIMEZONE } from "../../config/salonTimezone";
+import { formatDocumentMoney } from "../../config/documentMoney";
 import { TaxBreakdownEntry } from "../payments/payments.types";
 import config from "../../config/env";
+import { docTaxLabels } from "../../config/taxLabels";
 
 // Ported from the dashboard's ViewBillModal.tsx `printReceipt()` — same visual
 // invoice staff see when they print/save a bill from the Calendar, adapted
@@ -21,6 +24,9 @@ export function buildReceiptHtml(params: {
         additional_phones?: string[] | null;
         website_url: string | null;
         gst_number: string | null;
+        timezone?: string | null;
+        currency?: string | null;
+        country?: string | null;
     };
     salonAddress: string | null;
     client: {
@@ -84,7 +90,8 @@ export function buildReceiptHtml(params: {
     // free from the system clock. Every date/time below pins timeZone:
     // "Asia/Kolkata" explicitly so the WhatsApp PDF always shows the same
     // wall-clock time as the Calendar one, regardless of the server's TZ.
-    const IST = "Asia/Kolkata";
+    const taxL = docTaxLabels(salon.country);
+    const IST = salon.timezone || DEFAULT_SALON_TIMEZONE;
     const now = new Date();
     const printDate = now.toLocaleDateString("en-IN", { timeZone: IST, year: "numeric", month: "long", day: "numeric" });
     const printTime = now.toLocaleTimeString("en-IN", { timeZone: IST, hour: "2-digit", minute: "2-digit" });
@@ -113,7 +120,7 @@ export function buildReceiptHtml(params: {
     // Every amount on the printed page goes through this — the previous
     // version of this file never prepended a currency symbol at all, so
     // every figure on the WhatsApp-sent PDF read as a bare number.
-    const fmt = (n: number) => `₹${n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    const fmt = (n: number) => formatDocumentMoney(n, salon.currency);
 
     // A package-covered visit collects no new money (the package's price was
     // already booked as revenue at purchase time) — same isPackagePaid
@@ -403,12 +410,12 @@ export function buildReceiptHtml(params: {
           ${salonPhone ? `<span>Ph: ${salonPhone}</span>` : ""}
           ${salonEmail ? `<span>${salonEmail}</span>` : ""}
           ${salonWebsite ? `<span>${salonWebsite}</span>` : ""}
-          ${gst ? `<span>GSTIN: ${gst}</span>` : ""}
+          ${gst ? `<span>${taxL.taxIdLabel}: ${gst}</span>` : ""}
         </div>
       </div>
     </div>
     <div class="inv-title-block">
-      <div class="inv-title-word">Invoice</div>
+      <div class="inv-title-word">${taxL.isVat && gst ? "Tax Invoice" : "Invoice"}</div>
       <table class="inv-meta-table">
         <tr><td>Invoice No</td><td><strong>${invoiceNo}</strong></td></tr>
         ${appointment ? `<tr><td>Booking #</td><td>${appointment.id.slice(0, 8).toUpperCase()}</td></tr>` : ""}
@@ -425,7 +432,7 @@ export function buildReceiptHtml(params: {
         ${infoCell("Name", client.name || "Walk-In")}
         ${infoCell("Phone", client.phone || "—")}
         ${infoCell("Email", client.email || "—")}
-        ${clientGst ? infoCell("GST No", clientGst) : ""}
+        ${clientGst ? infoCell(taxL.clientTaxIdLabel, clientGst) : ""}
         ${primaryMembershipName ? infoCell("Membership", primaryMembershipName) : ""}
         ${referralCode ? infoCell("Your Referral Code", referralCode) : ""}
         ${referralEarnings !== null ? infoCell("Referral Earnings", fmt(Number(referralEarnings))) : ""}
@@ -553,7 +560,7 @@ export function buildReceiptHtml(params: {
     if (paidAmount > 0) paidLines.push({ label: splitLegs.length > 1 ? "Total Paid" : "Paid", value: fmt(paidAmount) });
     if (dueAmount > 0) paidLines.push({ label: "Balance Due", value: fmt(dueAmount) });
 
-    const metaLines = [salonAddress, salonPhone ? `Ph: ${salonPhone}` : "", gst ? `GSTIN: ${gst}` : ""]
+    const metaLines = [salonAddress, salonPhone ? `Ph: ${salonPhone}` : "", gst ? `${taxL.taxIdLabel}: ${gst}` : ""]
         .filter(Boolean).map((l) => `<div>${esc(l)}</div>`).join("");
     const rows2 = (rows: Array<{ label: string; value: string }>) =>
         rows.map((r) => `<div class="kv"><span>${esc(r.label)}</span><span>${esc(r.value)}</span></div>`).join("");

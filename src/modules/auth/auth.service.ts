@@ -10,6 +10,7 @@ import { generateOtp, hashOtp, compareOtp, otpExpiry } from "../utils/otp.util";
 import { emailService } from "../utils/email.service";
 import { salonsRepository } from "../salons/salons.repository";
 import { canSendEmail } from "../utils/notif-prefs";
+import { getSalonTimezone } from "../../config/salonTimezone";
 import { exotelSendSmsOtp, exotelVerifySmsOtp } from "../utils/exotel.service";
 import logger from "../../config/logger";
 import crypto from "crypto";
@@ -200,7 +201,7 @@ export const authService = {
           if (!allowed) { return; }
           const salon = await salonsRepository.findById(salonId);
           const staffName = [user.first_name, user.last_name].filter(Boolean).join(" ") || email;
-          const loginTime = new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata", dateStyle: "medium", timeStyle: "short" });
+          const loginTime = new Date().toLocaleString("en-IN", { timeZone: await getSalonTimezone(salonId), dateStyle: "medium", timeStyle: "short" });
           await emailService.sendStaffLoginEmail({
             to:         ownerEmail,
             salonName:  salon?.business_name ?? "your salon",

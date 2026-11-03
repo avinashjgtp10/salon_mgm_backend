@@ -146,6 +146,9 @@ async function gatherReceiptContext(params: ReceiptContextParams) {
             additional_phones: (salonRecord as any)?.additional_phones ?? null,
             website_url: salonRecord?.website_url ?? null,
             gst_number: salonRecord?.gst_number ?? null,
+            timezone: (salonRecord as any)?.timezone ?? null,
+            currency: (salonRecord as any)?.currency ?? null,
+            country: (salonRecord as any)?.country ?? null,
         },
         salonAddress,
         client: {

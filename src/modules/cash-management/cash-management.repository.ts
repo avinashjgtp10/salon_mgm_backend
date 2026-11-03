@@ -1,4 +1,5 @@
 import pool, { safeQuery } from "../../config/database";
+import { getSalonTimezone } from "../../config/salonTimezone";
 import { AppError } from "../../middleware/error.middleware";
 import type {
   CashManagementExpenseRecord,
@@ -284,8 +285,8 @@ async function getServiceDateBoundedPaymentTotals(
      LEFT JOIN sales s ON s.appointment_id = py.appointment_id AND s.status = 'completed'
      WHERE py.salon_id = $1
        AND py.status IN ('partial', 'completed')
-       AND DATE(COALESCE(a.scheduled_at, s.created_at, py.updated_at) AT TIME ZONE 'Asia/Kolkata') = $2::date`,
-    [salonId, targetDateIso],
+       AND DATE(COALESCE(a.scheduled_at, s.created_at, py.updated_at) AT TIME ZONE $3) = $2::date`,
+    [salonId, targetDateIso, await getSalonTimezone(salonId)],
   );
 
   return {
@@ -394,10 +395,10 @@ export const cashManagementRepository = {
         `SELECT id
          FROM cash_management
          WHERE salon_id = $1
-           AND (opened_at AT TIME ZONE 'Asia/Kolkata')::date
-             = (NOW() AT TIME ZONE 'Asia/Kolkata')::date
+           AND (opened_at AT TIME ZONE $2)::date
+             = (NOW() AT TIME ZONE $2)::date
          LIMIT 1`,
-        [salonId],
+        [salonId, await getSalonTimezone(salonId)],
       );
       if (todayRows.rows[0]) {
         throw new AppError(
@@ -1022,8 +1023,8 @@ export const cashManagementRepository = {
       // under yesterday), even though the cash changed hands today. Dated to
       // the IST day the counter was OPENED on.
       const openedDate = await client.query<{ ist_date: string }>(
-        `SELECT (date_trunc('day', $1::timestamptz AT TIME ZONE 'Asia/Kolkata'))::date AS ist_date`,
-        [rows[0].opened_at],
+        `SELECT (date_trunc('day', $1::timestamptz AT TIME ZONE $2))::date AS ist_date`,
+        [rows[0].opened_at, await getSalonTimezone(params.salonId)],
       );
 
       const methodCounts = await getServiceDateBoundedPaymentTotals(
@@ -1059,10 +1060,10 @@ export const cashManagementRepository = {
       `SELECT * FROM cash_management
        WHERE salon_id = $1
          AND status = 'closed'
-         AND DATE(opened_at AT TIME ZONE 'Asia/Kolkata') = $2::date
+         AND DATE(opened_at AT TIME ZONE $3) = $2::date
        ORDER BY closed_at DESC
        LIMIT 1`,
-      [salonId, dateIso],
+      [salonId, dateIso, await getSalonTimezone(salonId)],
     );
     return rows[0] ?? null;
   },

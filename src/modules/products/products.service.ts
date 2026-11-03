@@ -22,6 +22,7 @@ const gstLabel = (p: any): string => {
         case "gst_12": return "GST 12%";
         case "gst_18": return "GST 18%";
         case "gst_28": return "GST 28%";
+        case "vat_5": return "VAT 5%";
         case "custom": return p.custom_tax_rate != null ? `Custom ${p.custom_tax_rate}%` : "Custom";
         default: return "No tax";
     }

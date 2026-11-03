@@ -2,6 +2,7 @@ import { attendanceActivity } from "./attendance.activity";
 import logger from "../../config/logger";
 import { AppError } from "../../middleware/error.middleware";
 import { attendanceRepository } from "./attendance.repository";
+import { getSalonTimezone, salonWallClockAt } from "../../config/salonTimezone";
 import { notificationsService } from "../notifications/notifications.service";
 import {
     Attendance,
@@ -28,8 +29,8 @@ export function emitAttendanceUpdated(salonId: string): void {
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
-function todayIST(): string {
-    return new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" }); // YYYY-MM-DD
+async function todayInSalon(salonId: string): Promise<string> {
+    return new Date().toLocaleDateString("en-CA", { timeZone: await getSalonTimezone(salonId) }); // YYYY-MM-DD
 }
 
 function parseTimeToMinutes(hhmm: string): number {
@@ -66,8 +67,9 @@ function calcStatus(
 
 const VALID_STATUSES: AttendanceStatus[] = ["present", "absent", "half_day", "late", "on_leave"];
 
-function istClock(timestamp: string) {
-    const ist = new Date(new Date(timestamp).getTime() + 330 * 60_000);
+function salonClock(timestamp: string, timeZone: string) {
+    const offsetMs = salonWallClockAt(new Date(timestamp), timeZone).getTime() - new Date(timestamp).getTime();
+    const ist = new Date(new Date(timestamp).getTime() + offsetMs);
     const hour = ist.getUTCHours();
     return {
         clock: `${String(hour % 12 || 12).padStart(2, "0")}:${String(ist.getUTCMinutes()).padStart(2, "0")} ${hour >= 12 ? "PM" : "AM"}`,
@@ -88,7 +90,7 @@ export async function notifyAttendancePunch(record: Attendance, action: "in" | "
         if (!timestamp) return;
         const name = await attendanceStaffName(record);
         if (!name) return;
-        const { clock, day } = istClock(timestamp);
+        const { clock, day } = salonClock(timestamp, await getSalonTimezone(record.salon_id));
         await notificationsService.create({
             salon_id: record.salon_id,
             reference_id: record.id,
@@ -118,7 +120,8 @@ export async function notifyAttendanceBreak(
         if (!timestamp) return;
         const name = await attendanceStaffName(record);
         if (!name) return;
-        const { clock, day } = istClock(timestamp);
+        const tz = await getSalonTimezone(record.salon_id);
+        const { clock, day } = salonClock(timestamp, tz);
         const note = brk.note?.trim() ? ` Note: ${brk.note.trim()}` : "";
         await notificationsService.create({
             salon_id: record.salon_id,
@@ -126,7 +129,7 @@ export async function notifyAttendanceBreak(
             type: "attendance",
             title: action === "start" ? "Staff On Break" : "Staff Back From Break",
             body: action === "start"
-                ? `${name} started a break at ${clock} on ${day} (until ${istClock(brk.planned_end).clock}).${note}`
+                ? `${name} started a break at ${clock} on ${day} (until ${salonClock(brk.planned_end, tz).clock}).${note}`
                 : `${name} returned from break at ${clock} on ${day}.`,
             event_key: "otherUpdates",
         }, { deduplicate: true, persistWhenPushDisabled: true });
@@ -222,7 +225,7 @@ export const attendanceService = {
     // attendance-rules permission just to be filtered by it. Staff with no row
     // today are simply absent from the list; callers treat that as not checked in.
     async getStaffPresence(salonId: string): Promise<StaffPresence> {
-        const date = todayIST();
+        const date = await todayInSalon(salonId);
         const [presence, breaks] = await Promise.all([
             loadStaffPresence(salonId, date),
             attendanceRepository.findActiveBreaks(salonId, date),
@@ -241,7 +244,7 @@ export const attendanceService = {
     async checkIn(salonId: string, body: CheckInBody): Promise<Attendance> {
         const { staff_id, check_in, status: clientStatus, note, location } = body;
         const checkInTs = check_in || new Date().toISOString();
-        const date = new Date(checkInTs).toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
+        const date = new Date(checkInTs).toLocaleDateString("en-CA", { timeZone: await getSalonTimezone(salonId) });
         const existing = await attendanceRepository.findByStaffAndDate(staff_id, date);
         if (existing?.check_in) throw new AppError(409, "Attendance already has a check-in. Staff on break must check in through their own app.", "ALREADY_CHECKED_IN");
 
@@ -275,7 +278,7 @@ export const attendanceService = {
     async checkOut(salonId: string, body: CheckOutBody): Promise<Attendance> {
         const { staff_id, check_out, note, location } = body;
         const checkOutTs = check_out || new Date().toISOString();
-        const date = new Date(checkOutTs).toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
+        const date = new Date(checkOutTs).toLocaleDateString("en-CA", { timeZone: await getSalonTimezone(salonId) });
 
         const existing = await attendanceRepository.findByStaffAndDate(staff_id, date);
         if (!existing) throw new AppError(400, "No check-in found for this staff today", "NOT_CHECKED_IN");
@@ -309,7 +312,7 @@ export const attendanceService = {
     async push(salonId: string, body: PushAttendanceBody): Promise<Attendance> {
         const { staff_id, check_type, timestamp, source } = body;
         const ts = timestamp || new Date().toISOString();
-        const date = new Date(ts).toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
+        const date = new Date(ts).toLocaleDateString("en-CA", { timeZone: await getSalonTimezone(salonId) });
 
         if (check_type === "in") {
             const onLeave = await attendanceRepository.hasApprovedLeave(staff_id, date);
@@ -413,7 +416,7 @@ export const attendanceService = {
         summary: DailySummary;
         staff: TodayStaffRecord[];
     }> {
-        const date = dateParam || todayIST();
+        const date = dateParam || await todayInSalon(salonId);
         const dayOfWeek = new Date(date + "T12:00:00").getDay(); // 0=Sun…6=Sat, noon avoids DST edge cases
 
         const [allStaff, records, counts, scheduledMap] = await Promise.all([
@@ -523,6 +526,7 @@ export const attendanceService = {
 
     async exportCSV(salonId: string, year: number, month: number): Promise<{ buffer: Buffer; filename: string }> {
         const records = await attendanceRepository.getMonthlyForExport(salonId, year, month);
+        const tz = await getSalonTimezone(salonId);
 
         const headers = ["Date", "Staff Name", "Role", "Status", "Check In", "Check Out", "Break Time", "Actual Working Hours", "Source", "Note"];
         const rows = records.map(r => [
@@ -530,8 +534,8 @@ export const attendanceService = {
             r.staff_name ?? "",
             r.staff_role ?? "",
             r.status,
-            r.check_in  ? new Date(r.check_in).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })  : "",
-            r.check_out ? new Date(r.check_out).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" }) : "",
+            r.check_in  ? new Date(r.check_in).toLocaleString("en-IN", { timeZone: tz })  : "",
+            r.check_out ? new Date(r.check_out).toLocaleString("en-IN", { timeZone: tz }) : "",
             fmtDuration(Number((r as any).break_seconds ?? 0) / 3600),
             r.hours_worked != null ? fmtDuration(Number(r.hours_worked)) : "",
             r.source,
