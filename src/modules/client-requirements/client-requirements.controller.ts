@@ -48,9 +48,9 @@ export const clientRequirementsController = {
 
   async createDeveloper(req: AuthedRequest, res: Response, next: NextFunction) {
     try {
-      const { name, email, phone } = req.body;
+      const { name, email, phone, password } = req.body;
       const createdBy = req.user?.userId ?? req.user?.id ?? null;
-      const developer = await clientRequirementsService.createDeveloper({ name, email, phone, createdBy });
+      const developer = await clientRequirementsService.createDeveloper({ name, email, phone, password, createdBy });
       return res.status(201).json({ success: true, data: developer });
     } catch (err) { return next(err); }
   },
