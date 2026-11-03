@@ -86,7 +86,7 @@ function suggestionFor(reason: string): string | undefined {
     if (reason.includes("Cost price cannot be negative") || reason.includes("Supply Price cannot be negative")) return "Enter a non-negative Supply Price, or leave it blank.";
     if (reason.includes("Invalid Product Type")) return "Set Product Type to one of: Retail, Consumable, Both (any case).";
     if (reason.includes("Invalid Unit")) return "Set Unit to one of: ml, L, g, kg, pcs, bottle, tube, pack, box, roll.";
-    if (reason.includes("Invalid Tax Type")) return "Set Tax Type to one of: No Tax, GST 5%, GST 12%, GST 18%, GST 28%, Custom.";
+    if (reason.includes("Invalid Tax Type")) return "Set Tax Type to one of: No Tax, GST 5%, GST 12%, GST 18%, GST 28%, VAT 5%, Custom.";
     if (reason.includes("Invalid Expiry Date")) return "Use DD-MM-YYYY or YYYY-MM-DD for Expiry Date.";
     if (reason.includes("Expiry Date cannot be in the past")) return "Use today's date or a future date, or leave Expiry Date blank.";
     if (reason.includes("Category") && reason.includes("could not be created")) return "Try the import again, or create the category manually first.";
@@ -361,6 +361,7 @@ const VALID_TAX_TYPES: Record<string, string> = {
     gst12: "gst_12", gst_12: "gst_12",
     gst18: "gst_18", gst_18: "gst_18",
     gst28: "gst_28", gst_28: "gst_28",
+    vat5: "vat_5", vat_5: "vat_5",
     custom: "custom",
 };
 
@@ -371,7 +372,7 @@ function resolveTaxType(raw?: string): { value: string } | { error: string } {
     const normalized = trimmed.toLowerCase().replace(/[%\s]/g, "");
     if (VALID_TAX_TYPES[normalized]) return { value: VALID_TAX_TYPES[normalized] };
 
-    return { error: `Invalid Tax Type "${raw}" — must be one of: No Tax, GST 5%, GST 12%, GST 18%, GST 28%, Custom` };
+    return { error: `Invalid Tax Type "${raw}" — must be one of: No Tax, GST 5%, GST 12%, GST 18%, GST 28%, VAT 5%, Custom` };
 }
 
 // Validate row — same required fields and rules as ProductFormPage's

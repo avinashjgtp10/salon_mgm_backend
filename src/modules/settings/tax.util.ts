@@ -83,3 +83,34 @@ export async function getActiveTaxes(salonId: string): Promise<ActiveTaxRow[]> {
     }));
 }
 
+// True when every tax that applies to packages is price-INCLUSIVE (e.g. UAE VAT, where the
+// listed price already contains the tax). A package record then stores its tax carved out of
+// the price instead of added on top, so it matches what the client was actually charged.
+export async function arePackageTaxesInclusive(salonId: string, includeGst: boolean = true): Promise<boolean> {
+  if (!includeGst) return false;
+  const taxes = (await getActiveTaxes(salonId).catch(() => [])).filter((t) => t.applicable_for.packages);
+  return taxes.length > 0 && taxes.every((t) => t.inclusive_taxes);
+}
+
+// What a brand-new UAE salon starts with: a ready 5% VAT mapping (price-inclusive, on every item
+// type) and the tax module switched OFF. Off, because a salon below the VAT registration threshold
+// must not charge VAT — the owner enters their TRN and turns it on when they are registered.
+// Idempotent (upsert), so re-running never duplicates rows.
+export async function seedUaeVatDefaults(salonId: string): Promise<void> {
+  await settingsRepository.upsert(salonId, {
+    key: TAX_MODULE_SETTING_KEY,
+    value: JSON.stringify({ enabled: false, invoice_prefix: "INV", show_breakup_on_invoice: true, enable_gst_reports: true }),
+    description: "VAT module configuration",
+  } as any);
+  await settingsRepository.upsert(salonId, {
+    key: "VAT",
+    value: JSON.stringify({
+      tax_type: "VAT",
+      tax_value: "5",
+      active: true,
+      inclusive_taxes: true,
+      applicable_for: { service: true, product: true, membership: true, packages: true },
+    }),
+    description: "UAE VAT 5%",
+  } as any);
+}

@@ -1,8 +1,8 @@
 import { AppError } from "../../middleware/error.middleware";
 import { enquiriesRepository } from "./enquiries.repository";
 import { CreateEnquiryBody, ENQUIRY_STATUSES, ListEnquiriesQuery, UpdateEnquiryBody } from "./enquiries.types";
-
-const PHONE_RE = /^\d{10}$/;
+import { getSalonCountry } from "../../config/salonTimezone";
+import { isValidNationalNumber, nationalNumberError, normalizeNationalNumber } from "../../config/phoneRules";
 
 function assertValidStatus(status: unknown) {
     if (status !== undefined && !ENQUIRY_STATUSES.includes(status as any)) {
@@ -25,18 +25,22 @@ export const enquiriesService = {
         const name = (body.name ?? "").trim();
         const phone = (body.phone ?? "").trim();
         if (!name) throw new AppError(400, "Name is required", "VALIDATION_ERROR");
-        if (!PHONE_RE.test(phone)) throw new AppError(400, "A valid 10-digit phone number is required", "VALIDATION_ERROR");
+        // Phone length follows the salon's country (India 10 digits, UAE 9); stored as the plain national number.
+        const country = await getSalonCountry(salonId);
+        if (!isValidNationalNumber(phone, country)) throw new AppError(400, nationalNumberError(country), "VALIDATION_ERROR");
         assertValidStatus(body.status);
 
-        return enquiriesRepository.create({ ...body, name, phone }, salonId);
+        return enquiriesRepository.create({ ...body, name, phone: normalizeNationalNumber(phone, country) }, salonId);
     },
 
     async update(id: string, patch: UpdateEnquiryBody, salonId: string) {
         if (patch.name !== undefined && !patch.name.trim()) {
             throw new AppError(400, "Name is required", "VALIDATION_ERROR");
         }
-        if (patch.phone !== undefined && !PHONE_RE.test(patch.phone.trim())) {
-            throw new AppError(400, "A valid 10-digit phone number is required", "VALIDATION_ERROR");
+        if (patch.phone !== undefined) {
+            const country = await getSalonCountry(salonId);
+            if (!isValidNationalNumber(patch.phone, country)) throw new AppError(400, nationalNumberError(country), "VALIDATION_ERROR");
+            patch = { ...patch, phone: normalizeNationalNumber(patch.phone, country) };
         }
         assertValidStatus(patch.status);
 

@@ -22,12 +22,13 @@ import { whatsappAutomationRepository } from '../whatsapp-automation/whatsapp-au
 import { salonsRepository } from '../salons/salons.repository';
 import { clientsRepository } from '../clients/clients.repository';
 import { getIO, salonRoom, salonStaffRoom } from '../../config/socket';
-import { getActiveTaxes } from '../settings/tax.util';
+import { getActiveTaxes, arePackageTaxesInclusive } from '../settings/tax.util';
 import { computeBillTotals, allocateMembershipDiscount } from '../pricing/pricing.engine';
 import pool from '../../config/database';
 import { AppError } from '../../middleware/error.middleware';
 import { assertNoBlockingPosPayment } from '../pos-payments/pos-payments.guard';
 import { posPaymentsRepository } from '../pos-payments/pos-payments.repository';
+import { getBillRoundingUnit } from '../pricing/rounding';
 
 interface DiscountEligibleItem {
   itemId?: string;
@@ -553,6 +554,7 @@ export const paymentsService = {
             tip: tipAmt,
             tipAddedToSalon,
             roundSubtotalBeforeDiscount: true,
+            roundingUnit: await getBillRoundingUnit(data.salon_id),
           });
           // Ceiling for the sequential Membership Wallet → eWallet → Reward
           // Points → Referral Credit capping below — rooted in the raw
@@ -834,6 +836,7 @@ export const paymentsService = {
               // Reproduces this call site's pre-existing rounding order — see
               // the doc comment on this flag in pricing.engine.ts.
               roundSubtotalBeforeDiscount: true,
+              roundingUnit: await getBillRoundingUnit(data.salon_id),
             });
             taxAmount = result.gstAmount;
             grandTotal = result.grandTotal;
@@ -1662,6 +1665,7 @@ export const paymentsService = {
         clientId: data.client_id,
         appointmentId: data.appointment_id,
         gstPercent: appt?.gst_percent ?? 0,
+        taxInclusive: await arePackageTaxesInclusive(data.salon_id, data.include_gst !== false),
         saleId: checkoutSaleId,
         staffId: appt?.staff_id ?? undefined,
         requesterUserId,

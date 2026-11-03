@@ -1,3 +1,4 @@
+import { roundToUnit } from "./rounding";
 // Single source of truth for appointment/quick-sale bill-total math — tax
 // bucket allocation, discount proportioning, grand total. This is a backend
 // port + superset of the frontend's src/features/bookings/utils/totalsUtils.ts
@@ -181,6 +182,9 @@ export interface ComputeBillTotalsInput {
   // deliberately deciding to unify the two roundings (a real, separate
   // behavior change, not a refactor).
   roundSubtotalBeforeDiscount?: boolean;
+  // Unit the bill total is rounded to: 1 (default) = whole currency units with a "Round Off" line, the
+  // behaviour every existing salon has; 0.01 = exact to the fil (AED). See rounding.ts.
+  roundingUnit?: number;
   // Optional: per-row breakdown of each bucket, in the SAME order the caller
   // will later map its own item list. Enables per-item tax allocation
   // (BillTotalsResult.rowTax/rowTaxableAmount) for real per-line-item GST
@@ -441,6 +445,7 @@ export function computeBillTotals(input: ComputeBillTotalsInput): BillTotalsResu
     membershipServiceDiscountUsed = 0, membershipProductDiscountUsed = 0,
     rewardPointsRedeemedValue = 0, referralCreditUsed = 0,
     roundSubtotalBeforeDiscount = false,
+    roundingUnit = 1,
     rows,
   } = input;
 
@@ -478,7 +483,7 @@ export function computeBillTotals(input: ComputeBillTotalsInput): BillTotalsResu
   // Legacy backend quirk (see roundSubtotalBeforeDiscount doc comment above) —
   // ONLY this subtraction (feeding taxable/grandTotal) is affected; the
   // discount ratio just below always uses the unrounded raw subtotal.
-  const subtotalForTaxable = roundSubtotalBeforeDiscount ? Math.round(rawSubtotal) : rawSubtotal;
+  const subtotalForTaxable = roundSubtotalBeforeDiscount ? roundToUnit(rawSubtotal, roundingUnit) : rawSubtotal;
   const taxable = Math.max(0, subtotalForTaxable - totalDisc - membershipDiscount);
 
   // Allocate the coupon discount proportionally across item types (by share of
@@ -627,7 +632,7 @@ export function computeBillTotals(input: ComputeBillTotalsInput): BillTotalsResu
   // once, at the very end, not partway through.
   const rawFinalTotal = Math.max(0, preRedemptionTotal
     - membershipWalletUsed - eWalletUsed - rewardPointsRedeemedValue - referralCreditUsed);
-  const grandTotal = Math.round(rawFinalTotal);
+  const grandTotal = roundToUnit(rawFinalTotal, roundingUnit);
   const roundOff = grandTotal - rawFinalTotal;
 
   // Display-only — see BillTotalsResult.displaySubtotal doc comment. Never

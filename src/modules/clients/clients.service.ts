@@ -25,6 +25,9 @@ import {
     ClientsMergeBody,
     MergeStrategy,
 } from "./clients.types";
+import { isValidTaxRegistrationNumber } from "../salons/tax-id";
+import { getSalonCountry } from "../../config/salonTimezone";
+import { dialCodeFor, phoneRuleFor, normalizeNationalNumber, isValidNationalNumber } from "../../config/phoneRules";
 
 const safeTrim = (v: any) => (v === null || v === undefined ? v : String(v).trim());
 
@@ -504,6 +507,9 @@ export const clientsService = {
         dry_run: boolean;
         salonId: string;
     }): Promise<ClientsImportResult> {
+        // Phone rules (length, dial code) follow the salon's country: India 10 digits +91, UAE 9 digits +971.
+        const importCountry = await getSalonCountry(params.salonId);
+        const importDial = dialCodeFor(importCountry);
         const result: ClientsImportResult = {
             total_rows: params.rows.length,
             imported: 0,
@@ -556,7 +562,6 @@ export const clientsService = {
             return { dayMonth: `${mm}-${dd}`, year: y, iso: `${y}-${mm}-${dd}` };
         };
 
-        const GSTIN_FORMAT_RE = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/;
         const EMAIL_FORMAT_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
         const today = new Date().toISOString().slice(0, 10);
 
@@ -579,10 +584,10 @@ export const clientsService = {
                 first_name: String(r.firstname ?? r.first_name ?? "").trim(),
                 last_name: (r.lastname ?? r.last_name) ? String(r.lastname ?? r.last_name).trim() : null,
                 email: r.email ? String(r.email).trim() : null,
-                phone_country_code: "+91",
+                phone_country_code: importDial,
                 phone_number: phoneVal != null && String(phoneVal).trim() ? String(phoneVal).trim() : null,
                 additional_email: null,
-                additional_phone_country_code: additionalPhoneVal ? "+91" : null,
+                additional_phone_country_code: additionalPhoneVal ? importDial : null,
                 additional_phone_number: additionalPhoneVal ? String(additionalPhoneVal).trim() : null,
                 birthday_day_month: birthday.dayMonth,
                 birthday_year: birthday.year,
@@ -645,10 +650,10 @@ export const clientsService = {
                 // Excel-style separators (spaces, dashes, parens, dots) are
                 // tolerated, but after stripping them the number must be
                 // exactly 10 digits — same /^\d{10}$/ the Add Client form applies.
-                const phoneDigits = String(body.phone_number).replace(/[\s\-().]/g, "");
-                if (!/^\d{10}$/.test(phoneDigits)) {
+                const phoneDigits = normalizeNationalNumber(body.phone_number, importCountry);
+                if (!isValidNationalNumber(phoneDigits, importCountry)) {
                     result.skipped += 1;
-                    result.errors.push({ row: rowNum, code: "VALIDATION_ERROR", message: `Invalid mobile number "${body.phone_number}". Please enter a valid 10-digit mobile number.` });
+                    result.errors.push({ row: rowNum, code: "VALIDATION_ERROR", message: `Invalid mobile number "${body.phone_number}". Please enter a valid ${phoneRuleFor(importCountry).label} mobile number.` });
                     continue;
                 }
                 body.phone_number = phoneDigits;
@@ -669,16 +674,16 @@ export const clientsService = {
                     result.errors.push({ row: rowNum, code: "VALIDATION_ERROR", message: "Birthday cannot be in the future" });
                     continue;
                 }
-                if (body.gst_number && !GSTIN_FORMAT_RE.test(body.gst_number)) {
+                if (body.gst_number && !isValidTaxRegistrationNumber(String(body.gst_number))) {
                     result.skipped += 1;
-                    result.errors.push({ row: rowNum, code: "VALIDATION_ERROR", message: `Invalid GST number "${body.gst_number}". Enter a valid 15-character GSTIN.` });
+                    result.errors.push({ row: rowNum, code: "VALIDATION_ERROR", message: `Invalid GST number "${body.gst_number}". Enter a valid 15-character GSTIN or 15-digit TRN.` });
                     continue;
                 }
                 if (body.additional_phone_number) {
-                    const additionalDigits = String(body.additional_phone_number).replace(/[\s\-().]/g, "");
-                    if (!/^\d{10}$/.test(additionalDigits)) {
+                    const additionalDigits = normalizeNationalNumber(body.additional_phone_number, importCountry);
+                    if (!isValidNationalNumber(additionalDigits, importCountry)) {
                         result.skipped += 1;
-                        result.errors.push({ row: rowNum, code: "VALIDATION_ERROR", message: `Invalid additional mobile number "${body.additional_phone_number}". Enter a valid 10-digit number.` });
+                        result.errors.push({ row: rowNum, code: "VALIDATION_ERROR", message: `Invalid additional mobile number "${body.additional_phone_number}". Enter a valid ${phoneRuleFor(importCountry).label} number.` });
                         continue;
                     }
                     body.additional_phone_number = additionalDigits;

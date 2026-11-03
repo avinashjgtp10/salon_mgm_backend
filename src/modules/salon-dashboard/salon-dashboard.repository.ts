@@ -1,4 +1,5 @@
 import pool from "../../config/database";
+import { getSalonTimezone, salonWallClockNow } from "../../config/salonTimezone";
 import logger from "../../config/logger";
 import { reportsRepository } from "../reports/reports.repository";
 import { appointmentsService } from "../appointments/appointments.service";
@@ -27,7 +28,8 @@ export const salonDashboardRepository = {
     // IST calendar-month bounds for last month, as start_date/end_date —
     // same shape the Sales Summary report's own date picker sends, so this
     // reads the identical range _buildSalesSummaryWhere applies there.
-    const istNow = new Date(Date.now() + 5.5 * 60 * 60 * 1000);
+    const tz = await getSalonTimezone(salonId);
+    const istNow = salonWallClockNow(tz);
     const lastMonthDate = new Date(Date.UTC(istNow.getUTCFullYear(), istNow.getUTCMonth() - 1, 1));
     const lastMonthYear = lastMonthDate.getUTCFullYear();
     const lastMonthMonth = lastMonthDate.getUTCMonth();
@@ -122,16 +124,16 @@ export const salonDashboardRepository = {
          -- "yesterday" and into the day before. Same fix as
          -- cash-management.repository.ts's openCounter once-per-day check.
          bounds AS (
-           SELECT (NOW() AT TIME ZONE 'Asia/Kolkata')::date AS ist_today
+           SELECT (NOW() AT TIME ZONE '${tz}')::date AS ist_today
          )
          SELECT
-           COALESCE(SUM(CASE WHEN date_trunc('month', event_at AT TIME ZONE 'Asia/Kolkata') = date_trunc('month', bounds.ist_today)
+           COALESCE(SUM(CASE WHEN date_trunc('month', event_at AT TIME ZONE '${tz}') = date_trunc('month', bounds.ist_today)
              THEN amount ELSE 0 END), 0)::numeric AS total_revenue,
-           COALESCE(SUM(CASE WHEN (event_at AT TIME ZONE 'Asia/Kolkata')::date = bounds.ist_today
+           COALESCE(SUM(CASE WHEN (event_at AT TIME ZONE '${tz}')::date = bounds.ist_today
              THEN amount ELSE 0 END), 0)::numeric AS today_revenue,
-           COALESCE(SUM(CASE WHEN (event_at AT TIME ZONE 'Asia/Kolkata')::date = (bounds.ist_today - INTERVAL '1 month')::date
+           COALESCE(SUM(CASE WHEN (event_at AT TIME ZONE '${tz}')::date = (bounds.ist_today - INTERVAL '1 month')::date
              THEN amount ELSE 0 END), 0)::numeric AS last_month_today_revenue,
-           COALESCE(SUM(CASE WHEN (event_at AT TIME ZONE 'Asia/Kolkata')::date = bounds.ist_today - INTERVAL '1 day'
+           COALESCE(SUM(CASE WHEN (event_at AT TIME ZONE '${tz}')::date = bounds.ist_today - INTERVAL '1 day'
              THEN amount ELSE 0 END), 0)::numeric AS yesterday_revenue
          FROM revenue_events, bounds`,
         [salonId]
@@ -143,9 +145,9 @@ export const salonDashboardRepository = {
         yesterday_appointments: string;
       }>(
         `SELECT
-           COUNT(CASE WHEN (scheduled_at AT TIME ZONE 'Asia/Kolkata')::date = (NOW() AT TIME ZONE 'Asia/Kolkata')::date
+           COUNT(CASE WHEN (scheduled_at AT TIME ZONE '${tz}')::date = (NOW() AT TIME ZONE '${tz}')::date
              THEN 1 END) AS today_appointments,
-           COUNT(CASE WHEN (scheduled_at AT TIME ZONE 'Asia/Kolkata')::date = (NOW() AT TIME ZONE 'Asia/Kolkata')::date - INTERVAL '1 day'
+           COUNT(CASE WHEN (scheduled_at AT TIME ZONE '${tz}')::date = (NOW() AT TIME ZONE '${tz}')::date - INTERVAL '1 day'
              THEN 1 END) AS yesterday_appointments
          FROM appointments
          WHERE salon_id = $1
@@ -155,7 +157,7 @@ export const salonDashboardRepository = {
            -- a bare UTC CURRENT_DATE bound here would exclude a row that's
            -- genuinely "yesterday IST" but still today in UTC (or vice
            -- versa) before it ever reaches the COUNT(CASE...) below.
-           AND (scheduled_at AT TIME ZONE 'Asia/Kolkata')::date >= (NOW() AT TIME ZONE 'Asia/Kolkata')::date - INTERVAL '1 day'`,
+           AND (scheduled_at AT TIME ZONE '${tz}')::date >= (NOW() AT TIME ZONE '${tz}')::date - INTERVAL '1 day'`,
         [salonId]
       ),
 
@@ -384,7 +386,8 @@ export const salonDashboardRepository = {
   // actually received, dated by the appointment's visit, falling back to the
   // sale's created_at) so this card's MTD agrees with the Total Revenue card.
   async getMonthlyProjection(salonId: string, gender?: string): Promise<MonthlyProjection> {
-    const istNow = new Date(Date.now() + 5.5 * 60 * 60 * 1000);
+    const tz = await getSalonTimezone(salonId);
+    const istNow = salonWallClockNow(tz);
     const y = istNow.getUTCFullYear();
     const m = istNow.getUTCMonth(); // 0-based
     const daysPassed = istNow.getUTCDate();
@@ -448,7 +451,7 @@ export const salonDashboardRepository = {
          SELECT event_at, amount, bills FROM open_partial_rows
        )
        SELECT d::text AS day, COALESCE(SUM(amount), 0)::numeric AS sales, COALESCE(SUM(bills), 0)::int AS bills
-       FROM (SELECT (event_at AT TIME ZONE 'Asia/Kolkata')::date AS d, amount, bills FROM events) x
+       FROM (SELECT (event_at AT TIME ZONE '${tz}')::date AS d, amount, bills FROM events) x
        WHERE d >= $2::date AND d <= $3::date
        GROUP BY d
        ORDER BY d`,
@@ -543,7 +546,7 @@ export const salonDashboardRepository = {
     // IST calendar date, computed from the UTC epoch directly (not the
     // server process's local clock) — same "today" the date range picker and
     // every report on this app means.
-    const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+    const IST_OFFSET_MS = salonWallClockNow(await getSalonTimezone(salonId)).getTime() - Date.now();
     const istDateString = (offsetDays: number) =>
       new Date(Date.now() + IST_OFFSET_MS + offsetDays * 86_400_000).toISOString().slice(0, 10);
 

@@ -1,3 +1,4 @@
+import { getSalonTimezone } from "../../config/salonTimezone";
 import pool from "../../config/database";
 import type { PoolClient } from "pg";
 import logger from "../../config/logger";
@@ -19,18 +20,18 @@ export async function runAttendanceReminderSweep() {
     locked = lock.rows[0]?.locked === true;
     if (!locked) return;
     const { rows } = await client.query<{ user_id: string; salon_id: string }>(
-      `SELECT DISTINCT s.user_id, s.salon_id FROM staff s
+      `SELECT DISTINCT s.user_id, s.salon_id FROM staff s JOIN salons sal ON sal.id = s.salon_id
        CROSS JOIN LATERAL generate_series(
-         (NOW() AT TIME ZONE 'Asia/Kolkata')::date - 1,
-         (NOW() AT TIME ZONE 'Asia/Kolkata')::date, interval '1 day') AS days(day)
+         (NOW() AT TIME ZONE COALESCE(NULLIF(sal.timezone, ''), 'Asia/Kolkata'))::date - 1,
+         (NOW() AT TIME ZONE COALESCE(NULLIF(sal.timezone, ''), 'Asia/Kolkata'))::date, interval '1 day') AS days(day)
        JOIN LATERAL (
          SELECT ss.* FROM staff_schedules ss WHERE ss.staff_id = s.id
            AND (ss.date = day::date OR (ss.date IS NULL AND ss.day_of_week = EXTRACT(DOW FROM day)))
          ORDER BY ss.date NULLS LAST LIMIT 1
        ) shift ON shift.is_available = true AND shift.start_time IS NOT NULL AND shift.end_time IS NOT NULL
        WHERE s.is_active = true AND s.user_id IS NOT NULL
-         AND NOW() >= ((day::date + shift.start_time) AT TIME ZONE 'Asia/Kolkata') + interval '15 minutes'
-         AND NOW() < ((day::date + shift.end_time + CASE WHEN shift.end_time <= shift.start_time THEN interval '1 day' ELSE interval '0 days' END) AT TIME ZONE 'Asia/Kolkata')
+         AND NOW() >= ((day::date + shift.start_time) AT TIME ZONE COALESCE(NULLIF(sal.timezone, ''), 'Asia/Kolkata')) + interval '15 minutes'
+         AND NOW() < ((day::date + shift.end_time + CASE WHEN shift.end_time <= shift.start_time THEN interval '1 day' ELSE interval '0 days' END) AT TIME ZONE COALESCE(NULLIF(sal.timezone, ''), 'Asia/Kolkata'))
          AND NOT EXISTS (SELECT 1 FROM attendance a WHERE a.staff_id = s.id AND a.salon_id = s.salon_id AND a.date = day::date AND a.check_in IS NOT NULL)
          AND NOT EXISTS (SELECT 1 FROM staff_leaves l WHERE l.staff_id = s.id AND l.status = 'approved' AND day::date BETWEEN l.start_date::date AND l.end_date::date)`);
     for (const candidate of rows) {
@@ -43,7 +44,7 @@ export async function runAttendanceReminderSweep() {
           "SELECT id, resolved_at FROM notifications WHERE salon_id = $1 AND type = 'attendance' AND reference_id::text = $2 AND title = $3 LIMIT 1",
           [candidate.salon_id, state.staff_id, title]);
         if (existing.rows[0]?.resolved_at) continue;
-        const startLabel = new Date(state.shift_start!).toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit" });
+        const startLabel = new Date(state.shift_start!).toLocaleTimeString("en-IN", { timeZone: await getSalonTimezone(candidate.salon_id), hour: "2-digit", minute: "2-digit" });
         const body = `Your shift started at ${startLabel}. Open SalonOX and check in.`;
         const notification = existing.rows[0] ?? await notificationsRepository.create({
           salon_id: candidate.salon_id, reference_id: state.staff_id, type: "attendance", title, body,

@@ -5,6 +5,8 @@ import { salonsRepository } from "./salons.repository";
 import { CreateSalonBody, UpdateSalonBody, Salon } from "./salons.types";
 import { authRepository } from "../auth/auth.repository";
 import { issueSessionTokens } from "../auth/session.util";
+import { regionalDefaultsForCountry, normalizeCountryCode } from "../../config/salonTimezone";
+import { seedUaeVatDefaults } from "../settings/tax.util";
 
 const slugify = (text: string) =>
     text
@@ -77,6 +79,22 @@ export const salonsService = {
                 address: body.address || registrant?.address || undefined,
                 country: body.country || registrant?.country || undefined,
             });
+
+            // A salon signing up from a country we support (e.g. UAE) starts with that country's
+            // timezone and currency instead of the India defaults — unless the onboarding body
+            // already chose its own. India (and any unlisted country) is left exactly as before.
+            const regional = regionalDefaultsForCountry(salon.country);
+            if (regional && !body.timezone && !body.currency) {
+                await salonsRepository.update(salon.id, regional).catch((err) =>
+                    logger.error("regional defaults failed", { salonId: salon.id, error: err?.message })
+                );
+            }
+            // UAE salons also start with a 5% VAT mapping (module off until they confirm VAT registration).
+            if (normalizeCountryCode(salon.country) === "AE") {
+                await seedUaeVatDefaults(salon.id).catch((err) =>
+                    logger.error("UAE VAT defaults failed", { salonId: salon.id, error: err?.message })
+                );
+            }
 
             // Anything the owner subscribed to on the plan page before this salon existed now belongs to it.
             await subscriptionCheckoutService.attachPendingToSalon(ownerId, salon.id).catch((err) =>

@@ -1,3 +1,4 @@
+import { getSalonTimezone } from "../../config/salonTimezone";
 import pool from "../../config/database";
 import { attendanceRepository } from "./attendance.repository";
 import { Request, Response, NextFunction } from "express";
@@ -203,7 +204,7 @@ export const attendanceController = {
         try {
             const salonId = req.user?.salonId;
             if (!salonId) throw new AppError(403, "Salon context required", "NO_SALON_CONTEXT");
-            const date = String(req.query.date || "").trim() || new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
+            const date = String(req.query.date || "").trim() || new Date().toLocaleDateString("en-CA", { timeZone: await getSalonTimezone(salonId) });
             if (isMobileStaffRequest(req)) throw new AppError(403, "Use your own attendance history", "FORBIDDEN");
             const data = await attendanceService.getDailySummary(salonId, date);
             return sendSuccess(res, 200, data, "Daily summary fetched");

@@ -4,6 +4,7 @@ import { computeAppointmentTotals } from '../appointments/appointment-totals';
 import { paymentsRepository } from '../payments/payments.repository';
 import { getActiveTaxes } from '../settings/tax.util';
 import { POS_PAYMENT_MODES, PosPaymentMode } from './pos-payments.types';
+import { getBillRoundingUnit } from "../pricing/rounding";
 
 const AMOUNT_TOLERANCE = 0.5; // rupees — same rounding allowance as finalizeSuccess
 
@@ -42,7 +43,7 @@ export async function getAppointmentOutstanding(appointmentId: string, salonId: 
       throw new AppError(503, 'Could not verify the outstanding balance — try again', 'BALANCE_UNAVAILABLE');
     }
   }
-  const billTotal = round2(computeAppointmentTotals(appt as any, taxes).grandTotal);
+  const billTotal = round2(computeAppointmentTotals(appt as any, taxes, await getBillRoundingUnit(salonId)).grandTotal);
   const alreadyPaid = round2(await paymentsRepository.getTotalPaidForAppointment(appointmentId));
   const outstanding = appt.status === 'paid' ? 0 : Math.max(0, round2(billTotal - alreadyPaid));
   return { billTotal, alreadyPaid, outstanding, appointmentStatus: appt.status };

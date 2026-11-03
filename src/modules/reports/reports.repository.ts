@@ -548,8 +548,8 @@ const SERVICE_REMINDER_BASE_CTES = `
       -- its own AT TIME ZONE — wa_automation_logs' sent_at/delivered_at/
       -- read_at/created_at are all timestamptz, formatted in the UTC session
       -- otherwise (see config/database.ts).
-      COALESCE(l.read_at, l.delivered_at, l.sent_at, l.created_at) AT TIME ZONE 'Asia/Kolkata' AS message_at,
-      DATE(COALESCE(l.sent_at, l.created_at) AT TIME ZONE 'Asia/Kolkata') AS reminder_date,
+      COALESCE(l.read_at, l.delivered_at, l.sent_at, l.created_at) AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata') AS message_at,
+      DATE(COALESCE(l.sent_at, l.created_at) AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata')) AS reminder_date,
       l.sent_at,
       l.delivered_at,
       l.read_at,
@@ -860,7 +860,7 @@ const DAY_WISE_BASE_CTES = `
       s.client_id,
       s.appointment_id,
       s.created_at,
-      DATE(s.created_at AT TIME ZONE 'Asia/Kolkata') AS sale_day,
+      DATE(s.created_at AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata')) AS sale_day,
       s.invoice_number AS invoice_no,
       COALESCE(c.full_name, 'Walk-in Client') AS customer_name,
       COALESCE(c.phone_number, '') AS mobile,
@@ -942,12 +942,12 @@ const DAY_WISE_BASE_CTES = `
       a.id,
       a.salon_id,
       a.client_id,
-      DATE(a.created_at AT TIME ZONE 'Asia/Kolkata') AS appointment_day
+      DATE(a.created_at AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata')) AS appointment_day
     FROM appointments a
     WHERE
       a.salon_id = $1
-      AND DATE(a.created_at AT TIME ZONE 'Asia/Kolkata') >= $4
-      AND DATE(a.created_at AT TIME ZONE 'Asia/Kolkata') <= $3
+      AND DATE(a.created_at AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata')) >= $4
+      AND DATE(a.created_at AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata')) <= $3
   ),
   current_appointments AS (
     SELECT *
@@ -961,7 +961,7 @@ const DAY_WISE_BASE_CTES = `
   ),
   staff_productivity_base AS (
     SELECT
-      DATE(s.created_at AT TIME ZONE 'Asia/Kolkata') AS sale_day,
+      DATE(s.created_at AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata')) AS sale_day,
       COALESCE(
         NULLIF(asr.service_staff_names, ''),
         asr.fallback_staff_name,
@@ -983,7 +983,7 @@ const DAY_WISE_BASE_CTES = `
     WHERE
       1 = 1
     GROUP BY
-      DATE(s.created_at AT TIME ZONE 'Asia/Kolkata'),
+      DATE(s.created_at AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata')),
       COALESCE(
         NULLIF(asr.service_staff_names, ''),
         asr.fallback_staff_name,
@@ -1454,11 +1454,11 @@ _buildSalesSummaryWhere(
   // what actually reinterprets the literal as IST wall-clock time and
   // converts it to the correct UTC instant.
   if (filters.start_date) {
-    where.push(`COALESCE(a.scheduled_at, s.created_at) >= ($${idx++}::date::timestamp AT TIME ZONE 'Asia/Kolkata')`);
+    where.push(`COALESCE(a.scheduled_at, s.created_at) >= ($${idx++}::date::timestamp AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata'))`);
     values.push(filters.start_date);
   }
   if (filters.end_date) {
-    where.push(`COALESCE(a.scheduled_at, s.created_at) < (($${idx++}::date + interval '1 day')::timestamp AT TIME ZONE 'Asia/Kolkata')`);
+    where.push(`COALESCE(a.scheduled_at, s.created_at) < (($${idx++}::date + interval '1 day')::timestamp AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata'))`);
     values.push(filters.end_date);
   }
   if (filters.payment_modes && filters.payment_modes.length > 0) {
@@ -1631,11 +1631,11 @@ _UNBILLED_APPOINTMENT_ROWS_CTE(
   // the literal as IST wall-clock time and converts it to the correct UTC
   // instant.
   if (filters.start_date) {
-    where.push(`a.scheduled_at >= ($${idx++}::date::timestamp AT TIME ZONE 'Asia/Kolkata')`);
+    where.push(`a.scheduled_at >= ($${idx++}::date::timestamp AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata'))`);
     values.push(filters.start_date);
   }
   if (filters.end_date) {
-    where.push(`a.scheduled_at < (($${idx++}::date + interval '1 day')::timestamp AT TIME ZONE 'Asia/Kolkata')`);
+    where.push(`a.scheduled_at < (($${idx++}::date + interval '1 day')::timestamp AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata'))`);
     values.push(filters.end_date);
   }
   if (filters.staff_ids && filters.staff_ids.length > 0) {
@@ -2127,7 +2127,7 @@ async getSalesSummaryReportChart(
   // a raw "date" result relative to the driver's own local timezone setting,
   // which has already caused a real off-by-one bug elsewhere in this
   // codebase this same session (see salon-dashboard.repository.ts).
-  const istInstant = `COALESCE(a.scheduled_at, s.created_at) AT TIME ZONE 'Asia/Kolkata'`;
+  const istInstant = `COALESCE(a.scheduled_at, s.created_at) AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata')`;
   const dayExpr = granularity === "month"
     ? `TO_CHAR(date_trunc('month', ${istInstant}), 'YYYY-MM-DD')`
     : granularity === "week"
@@ -2395,7 +2395,7 @@ async getSalesSummaryHeatmap(
   const priceExpr = filters.include_gst === false
     ? "(s.total_amount::numeric - COALESCE(s.tax_amount, 0))"
     : "s.total_amount::numeric";
-  const istInstant = `COALESCE(a.scheduled_at, s.created_at) AT TIME ZONE 'Asia/Kolkata'`;
+  const istInstant = `COALESCE(a.scheduled_at, s.created_at) AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata')`;
 
   const query = `
     SELECT
@@ -2792,7 +2792,7 @@ _buildDailySheetWhere(
   // IST would otherwise silently bucket into the previous day. Requires
   // _APPOINTMENT_STATUS_JOIN's `a` alias, already joined at every call site.
   if (filters.date) {
-    where.push(`DATE(COALESCE(a.scheduled_at, s.created_at) AT TIME ZONE 'Asia/Kolkata') = $${idx++}::date`);
+    where.push(`DATE(COALESCE(a.scheduled_at, s.created_at) AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata')) = $${idx++}::date`);
     values.push(filters.date);
   }
   if (filters.time_from) {
@@ -2908,7 +2908,7 @@ _UNBILLED_APPOINTMENT_DAILY_ROWS_CTE(
   // IST calendar date, not the DB session's UTC — see the matching comment
   // in _buildDailySheetWhere.
   if (filters.date) {
-    where.push(`DATE(a.scheduled_at AT TIME ZONE 'Asia/Kolkata') = $${idx++}::date`);
+    where.push(`DATE(a.scheduled_at AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata')) = $${idx++}::date`);
     values.push(filters.date);
   }
   if (filters.time_from) {
@@ -3001,8 +3001,8 @@ _UNBILLED_APPOINTMENT_DAILY_ROWS_CTE(
       SELECT a.id, a.id AS appointment_id, a.salon_id, a.client_id, a.staff_id, a.status,
              a.created_at, a.scheduled_at, a.deleted_at, a.services,
              a.package_items, a.product_items, a.membership_items,
-             TO_CHAR(a.scheduled_at AT TIME ZONE 'Asia/Kolkata', 'DD-MM-YYYY') AS date,
-             TO_CHAR(a.scheduled_at AT TIME ZONE 'Asia/Kolkata', 'HH12:MI AM') AS booking_time,
+             TO_CHAR(a.scheduled_at AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata'), 'DD-MM-YYYY') AS date,
+             TO_CHAR(a.scheduled_at AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata'), 'HH12:MI AM') AS booking_time,
              NULL::text AS ticket_no,
              COALESCE(a.gst_percent, 0) AS gst_percent,
              COALESCE(a.ex_charges, 0) AS ex_charges,
@@ -3133,14 +3133,14 @@ async getDailySheetReport(
       SELECT
         s.appointment_id,
         s.id AS sale_id,
-        TO_CHAR(s.created_at AT TIME ZONE 'Asia/Kolkata', 'DD-MM-YYYY') AS date,
+        TO_CHAR(s.created_at AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata'), 'DD-MM-YYYY') AS date,
         -- Booking Time: the appointment's actual scheduled slot, not when it
         -- was billed. Walk-in sales (no linked appointment) have no slot to
         -- show, so this falls back to the bill time itself.
-        TO_CHAR(COALESCE(bk.scheduled_at, s.created_at) AT TIME ZONE 'Asia/Kolkata', 'HH12:MI AM') AS booking_time,
+        TO_CHAR(COALESCE(bk.scheduled_at, s.created_at) AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata'), 'HH12:MI AM') AS booking_time,
         -- Bill Time: when the invoice was actually created — always present
         -- for this side (every sales_side row has a sale).
-        TO_CHAR(s.created_at AT TIME ZONE 'Asia/Kolkata', 'HH12:MI AM') AS bill_time,
+        TO_CHAR(s.created_at AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata'), 'HH12:MI AM') AS bill_time,
         s.invoice_number AS ticket_no,
         s.client_id,
         c.full_name AS client_name,
@@ -3511,7 +3511,7 @@ async getProductRetailReportRows(
   const query = `
     SELECT
       s.id AS sale_id,
-      TO_CHAR(s.created_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD') AS date,
+      TO_CHAR(s.created_at AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata'), 'YYYY-MM-DD') AS date,
       s.invoice_number AS invoice_no,
       s.client_id,
       c.full_name AS client_name,
@@ -3726,7 +3726,7 @@ async getProductRetailChartTrend(
   // Text-formatted (not a bare date column) — node-pg parses a raw "date"
   // result relative to the driver's own local timezone, which has already
   // caused a real off-by-one bug elsewhere in this codebase this session.
-  const istInstant = `s.created_at AT TIME ZONE 'Asia/Kolkata'`;
+  const istInstant = `s.created_at AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata')`;
   const dayExpr = granularity === "month"
     ? `TO_CHAR(date_trunc('month', ${istInstant}), 'YYYY-MM-DD')`
     : granularity === "week"
@@ -4127,7 +4127,7 @@ async getServiceSaleReportRows(
   const query = `
     SELECT
       s.id AS sale_id,
-      TO_CHAR(s.created_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD') AS date,
+      TO_CHAR(s.created_at AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata'), 'YYYY-MM-DD') AS date,
       s.invoice_number AS invoice_no,
       s.client_id,
       c.full_name AS client_name,
@@ -4249,7 +4249,7 @@ async getServiceSaleChartTrend(
 ): Promise<{ date: string; count: number; revenue: number }[]> {
   const { where, values } = this._buildServiceSaleWhere(salonId, filters);
   const revenueExpr = this._SERVICE_SALE_REVENUE_EXPR;
-  const istInstant = `s.created_at AT TIME ZONE 'Asia/Kolkata'`;
+  const istInstant = `s.created_at AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata')`;
   const dayExpr = granularity === "month"
     ? `TO_CHAR(date_trunc('month', ${istInstant}), 'YYYY-MM-DD')`
     : granularity === "week"
@@ -4531,7 +4531,7 @@ async getGstReportRows(
     SELECT
       s.id AS sale_id,
       s.appointment_id,
-      TO_CHAR(s.created_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD') AS date,
+      TO_CHAR(s.created_at AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata'), 'YYYY-MM-DD') AS date,
       s.invoice_number AS invoice_no,
       c.full_name AS client_name,
       COALESCE(items.service_amount, 0) AS service_amount,
@@ -4967,13 +4967,13 @@ _buildEwalletWhere(
   const endDate = filters.end_date || filters.as_of_date || undefined;
 
   if (endDate) {
-    where.push(`c.created_at < (($${idx++}::date + interval '1 day')::timestamp AT TIME ZONE 'Asia/Kolkata')`);
+    where.push(`c.created_at < (($${idx++}::date + interval '1 day')::timestamp AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata'))`);
     values.push(endDate);
   }
   if (startDate || endDate) {
     const conds: string[] = ["l.client_id = c.id"];
-    if (startDate) { conds.push(`l.created_at >= ($${idx++}::date::timestamp AT TIME ZONE 'Asia/Kolkata')`); values.push(startDate); }
-    if (endDate)   { conds.push(`l.created_at < (($${idx++}::date + interval '1 day')::timestamp AT TIME ZONE 'Asia/Kolkata')`); values.push(endDate); }
+    if (startDate) { conds.push(`l.created_at >= ($${idx++}::date::timestamp AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata'))`); values.push(startDate); }
+    if (endDate)   { conds.push(`l.created_at < (($${idx++}::date + interval '1 day')::timestamp AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata'))`); values.push(endDate); }
     where.push(`EXISTS (SELECT 1 FROM ewallet_ledger l WHERE ${conds.join(" AND ")})`);
   }
 
@@ -4984,7 +4984,7 @@ _buildEwalletWhere(
   if (endDate && endDate < todayIso) {
     balanceExpr = `COALESCE((
       SELECT l2.balance_after FROM ewallet_ledger l2
-      WHERE l2.client_id = c.id AND l2.created_at < (($${idx++}::date + interval '1 day')::timestamp AT TIME ZONE 'Asia/Kolkata')
+      WHERE l2.client_id = c.id AND l2.created_at < (($${idx++}::date + interval '1 day')::timestamp AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata'))
       ORDER BY l2.created_at DESC LIMIT 1
     ), 0)`;
     values.push(endDate);
@@ -6299,7 +6299,7 @@ _CLIENT_REVENUE_AGG(where: string, saleJoin: string, having: string): string {
         -- was created (checkout can happen well after the visit) — falls
         -- back to sales.created_at only for walk-in sales with no linked
         -- appointment, which have no other timestamp to use.
-        MAX(TO_CHAR(COALESCE(a.scheduled_at, s.created_at) AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD')) AS last_visit,
+        MAX(TO_CHAR(COALESCE(a.scheduled_at, s.created_at) AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata'), 'YYYY-MM-DD')) AS last_visit,
         rs.avg_rating,
         COALESCE(rs.review_count, 0) AS review_count
       FROM clients c
@@ -6399,8 +6399,8 @@ _CUSTOMER_SPEND_AGG(where: string, saleJoin: string, vipIdx: number, lowIdx: num
         COALESCE(SUM(s.total_amount::numeric), 0) AS total_spend,
         -- Appointment date/time, not sale/checkout time — see the matching
         -- comment on _CLIENT_REVENUE_AGG.
-        MIN(TO_CHAR(COALESCE(a.scheduled_at, s.created_at) AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD')) AS first_visit,
-        MAX(TO_CHAR(COALESCE(a.scheduled_at, s.created_at) AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD')) AS last_visit
+        MIN(TO_CHAR(COALESCE(a.scheduled_at, s.created_at) AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata'), 'YYYY-MM-DD')) AS first_visit,
+        MAX(TO_CHAR(COALESCE(a.scheduled_at, s.created_at) AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata'), 'YYYY-MM-DD')) AS last_visit
       FROM clients c
       -- LEFT, so a client with no completed sale still produces a row with
       -- total_spend = 0 and is classified 'low'.
@@ -7881,11 +7881,11 @@ _buildNoShowRecoveryWhere(
   let idx = 2;
 
   if (filters.start_date) {
-    where.push(`a.scheduled_at >= ($${idx++}::date::timestamp AT TIME ZONE 'Asia/Kolkata')`);
+    where.push(`a.scheduled_at >= ($${idx++}::date::timestamp AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata'))`);
     values.push(filters.start_date);
   }
   if (filters.end_date) {
-    where.push(`a.scheduled_at < (($${idx++}::date + interval '1 day')::timestamp AT TIME ZONE 'Asia/Kolkata')`);
+    where.push(`a.scheduled_at < (($${idx++}::date + interval '1 day')::timestamp AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata'))`);
     values.push(filters.end_date);
   }
   if (filters.staff_ids && filters.staff_ids.length > 0) {
@@ -8395,10 +8395,10 @@ _CUSTOMER_FREQUENCY_AGG(where: string, saleJoin: string, startDateIdx: number | 
         COALESCE(SUM(s.total_amount::numeric), 0) AS total_spend,
         -- Appointment date/time, not sale/checkout time — see the matching
         -- comment on _CLIENT_REVENUE_AGG.
-        MIN(COALESCE(a.scheduled_at, s.created_at) AT TIME ZONE 'Asia/Kolkata') AS first_visit_ts,
-        MAX(COALESCE(a.scheduled_at, s.created_at) AT TIME ZONE 'Asia/Kolkata') AS last_visit_ts,
-        MIN(TO_CHAR(COALESCE(a.scheduled_at, s.created_at) AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD'))::date AS first_visit,
-        MAX(TO_CHAR(COALESCE(a.scheduled_at, s.created_at) AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD'))::date AS last_visit
+        MIN(COALESCE(a.scheduled_at, s.created_at) AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata')) AS first_visit_ts,
+        MAX(COALESCE(a.scheduled_at, s.created_at) AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata')) AS last_visit_ts,
+        MIN(TO_CHAR(COALESCE(a.scheduled_at, s.created_at) AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata'), 'YYYY-MM-DD'))::date AS first_visit,
+        MAX(TO_CHAR(COALESCE(a.scheduled_at, s.created_at) AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata'), 'YYYY-MM-DD'))::date AS last_visit
       FROM clients c
       LEFT JOIN sales s ON ${saleJoin}
       LEFT JOIN appointments a ON a.id = s.appointment_id
@@ -8791,8 +8791,8 @@ _SERVICE_FREQUENCY_AGG(where: string): string {
         COALESCE(SUM(si.total_price::numeric), 0) AS total_spend,
         -- Appointment date/time, not sale/checkout time — see the matching
         -- comment on _CLIENT_REVENUE_AGG.
-        MIN(TO_CHAR(COALESCE(a.scheduled_at, s.created_at) AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD')) AS first_visit,
-        MAX(TO_CHAR(COALESCE(a.scheduled_at, s.created_at) AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD')) AS last_visit
+        MIN(TO_CHAR(COALESCE(a.scheduled_at, s.created_at) AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata'), 'YYYY-MM-DD')) AS first_visit,
+        MAX(TO_CHAR(COALESCE(a.scheduled_at, s.created_at) AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata'), 'YYYY-MM-DD')) AS last_visit
       FROM sale_items si
       JOIN sales s ON s.id = si.sale_id
       -- INNER on clients: a pair only exists if it belongs to someone.
@@ -9090,8 +9090,8 @@ _LOST_CUSTOMERS_AGG(where: string, saleJoin: string, lostDaysIdx: number, startD
         -- weeks ago that only gets paid/checked-out today must still count
         -- as a visit back then, not "just visited today". Falls back to
         -- sales.created_at only for walk-in sales with no linked appointment.
-        MIN(TO_CHAR(COALESCE(a.scheduled_at, s.created_at) AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD'))::date AS first_visit,
-        MAX(TO_CHAR(COALESCE(a.scheduled_at, s.created_at) AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD'))::date AS last_visit
+        MIN(TO_CHAR(COALESCE(a.scheduled_at, s.created_at) AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata'), 'YYYY-MM-DD'))::date AS first_visit,
+        MAX(TO_CHAR(COALESCE(a.scheduled_at, s.created_at) AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata'), 'YYYY-MM-DD'))::date AS last_visit
       FROM clients c
       INNER JOIN sales s ON ${saleJoin}
       LEFT JOIN appointments a ON a.id = s.appointment_id
@@ -9278,8 +9278,8 @@ _buildReferralWhere(
 // column the report is sorted and reported on.
 _REFERRAL_AGG(where: string, startDateIdx: number | null, endDateIdx: number | null, staffIdsIdx: number | null = null): string {
   const rangeClause = startDateIdx
-    ? `AND ((c.created_at AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Kolkata')::date >= $${startDateIdx}::date${
-        endDateIdx ? ` AND ((c.created_at AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Kolkata')::date <= $${endDateIdx}::date` : ""
+    ? `AND ((c.created_at AT TIME ZONE 'UTC') AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata'))::date >= $${startDateIdx}::date${
+        endDateIdx ? ` AND ((c.created_at AT TIME ZONE 'UTC') AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata'))::date <= $${endDateIdx}::date` : ""
       }`
     : "";
 
@@ -9301,7 +9301,7 @@ _REFERRAL_AGG(where: string, startDateIdx: number | null, endDateIdx: number | n
         -- parser registered for OID 1082, so a bare date value comes back as a JS
         -- Date at IST-shifted UTC ("...T18:30:00Z") and the frontend's
         -- new Date() would render it as the FOLLOWING day.
-        TO_CHAR((c.created_at AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD') AS referral_date,
+        TO_CHAR((c.created_at AT TIME ZONE 'UTC') AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata'), 'YYYY-MM-DD') AS referral_date,
         CASE WHEN c.referral_reward_status = 'completed' THEN 'rewarded' ELSE 'pending' END AS reward_status
       FROM clients c
       INNER JOIN clients r ON r.id = c.referred_by_client_id
@@ -9314,7 +9314,7 @@ _REFERRAL_AGG(where: string, startDateIdx: number | null, endDateIdx: number | n
         COUNT(*)::int AS total_visits,
         COALESCE(SUM(s.total_amount::numeric), 0) AS revenue_generated,
         -- Kept as TEXT for the same reason as referral_date above.
-        MIN(TO_CHAR(s.created_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD')) AS first_visit
+        MIN(TO_CHAR(s.created_at AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata'), 'YYYY-MM-DD')) AS first_visit
       FROM sales s
       WHERE s.status = 'completed'
         AND s.client_id IN (SELECT referred_client_id FROM referral_base)
@@ -9497,7 +9497,7 @@ async getClientSourceReportRows(
 
   // clients.created_at is a naive UTC timestamp — stamp it UTC, then convert to
   // IST, or the date shifts back 5.5 hours (see _REFERRAL_AGG).
-  const istDate = `((c.created_at AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Kolkata')::date`;
+  const istDate = `((c.created_at AT TIME ZONE 'UTC') AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata'))::date`;
   if (filters.start_date) { where.push(`${istDate} >= $${idx++}::date`); values.push(filters.start_date); }
   if (filters.end_date)   { where.push(`${istDate} <= $${idx++}::date`); values.push(filters.end_date); }
 
@@ -9630,7 +9630,7 @@ _PAYMENT_COLLECTION_AGG(
       SELECT
         a.id AS appointment_id,
         a.client_id,
-        TO_CHAR((latest.created_at AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD') AS payment_date,
+        TO_CHAR((latest.created_at AT TIME ZONE 'UTC') AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata'), 'YYYY-MM-DD') AS payment_date,
         COALESCE(NULLIF(TRIM(c.full_name), ''), 'Walk-in') AS customer_name,
         COALESCE(NULLIF(TRIM(CONCAT(COALESCE(c.phone_country_code, ''), ' ', COALESCE(c.phone_number, ''))), ''), '—') AS contact,
         COALESCE(NULLIF(TRIM(sl.invoice_number), ''), '—') AS invoice_number,
@@ -9824,8 +9824,8 @@ async getPaymentCollectionReportStats(
   // leaving the "Total Paid" card unchanged by the filter.
   const methodExtra: string[] = [];
   if (startDateIdx) {
-    methodExtra.push(`TO_CHAR((p.created_at AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD')::date >= $${startDateIdx}::date`);
-    if (endDateIdx) methodExtra.push(`TO_CHAR((p.created_at AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD')::date <= $${endDateIdx}::date`);
+    methodExtra.push(`TO_CHAR((p.created_at AT TIME ZONE 'UTC') AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata'), 'YYYY-MM-DD')::date >= $${startDateIdx}::date`);
+    if (endDateIdx) methodExtra.push(`TO_CHAR((p.created_at AT TIME ZONE 'UTC') AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata'), 'YYYY-MM-DD')::date <= $${endDateIdx}::date`);
   }
   if (methodIdx) methodExtra.push(`LOWER(TRIM(p.payment_method)) = ANY($${methodIdx}::text[])`);
   const methodExtraWhere = methodExtra.length ? `AND ${methodExtra.join(" AND ")}` : "";
@@ -10991,7 +10991,7 @@ async getStaffSalesChartTrend(
   // end_date filter (COALESCE(a.scheduled_at, s.created_at) AT TIME ZONE
   // 'Asia/Kolkata') — must match exactly or the chart's buckets could
   // disagree with which day a sale falls under vs. the table/filter.
-  const istInstant = `COALESCE(a.scheduled_at, s.created_at) AT TIME ZONE 'Asia/Kolkata'`;
+  const istInstant = `COALESCE(a.scheduled_at, s.created_at) AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata')`;
   const dayExpr = granularity === "month"
     ? `TO_CHAR(date_trunc('month', ${istInstant}), 'YYYY-MM-DD')`
     : granularity === "week"
@@ -11776,7 +11776,7 @@ async getStaffItemSalesReportRows(
           END
         )
       END AS revenue,
-      TO_CHAR(s.created_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD') AS date,
+      TO_CHAR(s.created_at AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata'), 'YYYY-MM-DD') AS date,
       COUNT(*) OVER() AS total_count
     FROM sale_items si
     JOIN sales s ON s.id = si.sale_id
@@ -11845,7 +11845,7 @@ async getStaffItemSalesChartTrend(
   granularity: "day" | "week" | "month" = "day"
 ): Promise<{ date: string; quantity: number; revenue: number }[]> {
   const { where, values } = this._buildStaffItemSalesWhere(salonId, filters);
-  const istInstant = `s.created_at AT TIME ZONE 'Asia/Kolkata'`;
+  const istInstant = `s.created_at AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata')`;
   const dayExpr = granularity === "month"
     ? `TO_CHAR(date_trunc('month', ${istInstant}), 'YYYY-MM-DD')`
     : granularity === "week"
@@ -12078,7 +12078,7 @@ async getPackageSaleReportRows(
   const query = `
     SELECT
       cp.id,
-      TO_CHAR(cp.created_date AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD') AS date,
+      TO_CHAR(cp.created_date AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata'), 'YYYY-MM-DD') AS date,
       cp.client_id,
       cp.client_name,
       cp.mobile AS client_phone,
@@ -12143,7 +12143,7 @@ async getPackageSaleChartTrend(
   granularity: "day" | "week" | "month" = "day"
 ): Promise<{ date: string; count: number; revenue: number }[]> {
   const { where, values } = this._buildPackageSaleWhere(salonId, filters);
-  const istInstant = `cp.created_date AT TIME ZONE 'Asia/Kolkata'`;
+  const istInstant = `cp.created_date AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata')`;
   const dayExpr = granularity === "month"
     ? `TO_CHAR(date_trunc('month', ${istInstant}), 'YYYY-MM-DD')`
     : granularity === "week"
@@ -12488,7 +12488,7 @@ async getPackageHistoryReportRows(
 
   const query = `
     SELECT
-      TO_CHAR(h.session_date AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD') AS date,
+      TO_CHAR(h.session_date AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata'), 'YYYY-MM-DD') AS date,
       cp.client_id,
       cp.client_name,
       cp.mobile AS client_phone,
@@ -12908,8 +12908,8 @@ async getMembershipHistoryReportRows(
   // IST-shifted UTC and renders as the FOLLOWING day in the browser.
   const query = `
     SELECT
-      TO_CHAR(ul.used_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD') AS date,
-      TO_CHAR(ul.purchased_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD') AS start_date,
+      TO_CHAR(ul.used_at AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata'), 'YYYY-MM-DD') AS date,
+      TO_CHAR(ul.purchased_at AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata'), 'YYYY-MM-DD') AS start_date,
       ul.client_id,
       COALESCE(NULLIF(TRIM(ul.client_name), ''), 'Walk-in') AS client_name,
       ul.client_phone,
@@ -12924,7 +12924,7 @@ async getMembershipHistoryReportRows(
         NULLIF(TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))), ''),
         '—'
       ) AS staff,
-      TO_CHAR(ul.expires_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD') AS expiry_date,
+      TO_CHAR(ul.expires_at AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata'), 'YYYY-MM-DD') AS expiry_date,
       (${this._MEMBERSHIP_HISTORY_STATUS_EXPR}) AS status,
       COUNT(*) OVER() AS total_count
     FROM ${this._MEMBERSHIP_HISTORY_SOURCE}
@@ -13146,8 +13146,8 @@ async getMemberSaleReportRows(
     SELECT
       cm.id,
       cm.client_id,
-      TO_CHAR(cm.purchased_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD') AS purchased_at,
-      TO_CHAR(cm.expires_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD') AS expiry_date,
+      TO_CHAR(cm.purchased_at AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata'), 'YYYY-MM-DD') AS purchased_at,
+      TO_CHAR(cm.expires_at AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata'), 'YYYY-MM-DD') AS expiry_date,
       s.invoice_number,
       cm.client_name,
       cm.mobile AS client_phone,
@@ -13213,7 +13213,7 @@ async getMemberSaleChartTrend(
   granularity: "day" | "week" | "month" = "day"
 ): Promise<{ date: string; count: number; revenue: number }[]> {
   const { where, values } = this._buildMemberSaleWhere(salonId, filters);
-  const istInstant = `cm.purchased_at AT TIME ZONE 'Asia/Kolkata'`;
+  const istInstant = `cm.purchased_at AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata')`;
   const dayExpr = granularity === "month"
     ? `TO_CHAR(date_trunc('month', ${istInstant}), 'YYYY-MM-DD')`
     : granularity === "week"
@@ -13323,12 +13323,12 @@ async getAppointmentDetailReport(
   // (05:30 IST), silently dropping/shifting appointments booked in the
   // IST 00:00–05:30 window across the date boundary.
   if (filters.from) {
-    where.push(`a.scheduled_at >= $${idx++}::timestamptz`);
-    values.push(`${filters.from}T00:00:00+05:30`);
+    where.push(`a.scheduled_at >= ($${idx++}::date::timestamp AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata'))`);
+    values.push(filters.from);
   }
   if (filters.to) {
-    where.push(`a.scheduled_at < ($${idx++}::timestamptz + interval '1 day')`);
-    values.push(`${filters.to}T00:00:00+05:30`);
+    where.push(`a.scheduled_at < (($${idx++}::date + interval '1 day')::timestamp AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata'))`);
+    values.push(filters.to);
   }
   if (filters.statuses && filters.statuses.length > 0) {
     // appointments.status is a native Postgres ENUM (appointment_status),
@@ -13462,9 +13462,9 @@ async getAppointmentDetailReport(
         -- renders from the raw scheduled_at, converted to IST in the
         -- browser). Converting explicitly to IST here keeps this report's
         -- formatted strings consistent with every other screen.
-        TO_CHAR(e.scheduled_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD') AS appointment_date,
-        TO_CHAR(e.scheduled_at AT TIME ZONE 'Asia/Kolkata', 'HH12:MI AM') AS time,
-        TO_CHAR(e.created_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD') AS booked_date,
+        TO_CHAR(e.scheduled_at AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata'), 'YYYY-MM-DD') AS appointment_date,
+        TO_CHAR(e.scheduled_at AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata'), 'HH12:MI AM') AS time,
+        TO_CHAR(e.created_at AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata'), 'YYYY-MM-DD') AS booked_date,
         c.full_name AS client_name,
         c.phone_number,
         COALESCE(
@@ -13597,12 +13597,12 @@ async getOnlineAppointmentReport(
   let idx = 2;
 
   if (filters.from) {
-    where.push(`a.scheduled_at >= $${idx++}::timestamptz`);
-    values.push(`${filters.from}T00:00:00+05:30`);
+    where.push(`a.scheduled_at >= ($${idx++}::date::timestamp AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata'))`);
+    values.push(filters.from);
   }
   if (filters.to) {
-    where.push(`a.scheduled_at < ($${idx++}::timestamptz + interval '1 day')`);
-    values.push(`${filters.to}T00:00:00+05:30`);
+    where.push(`a.scheduled_at < (($${idx++}::date + interval '1 day')::timestamp AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata'))`);
+    values.push(filters.to);
   }
   if (filters.statuses && filters.statuses.length > 0) {
     where.push(`${EFFECTIVE_APPT_STATUS_SQL} = ANY($${idx++}::text[])`);
@@ -13703,9 +13703,9 @@ async getOnlineAppointmentReport(
     base AS (
       SELECT
         e.*,
-        TO_CHAR(e.scheduled_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD') AS appointment_date,
-        TO_CHAR(e.scheduled_at AT TIME ZONE 'Asia/Kolkata', 'HH12:MI AM') AS time,
-        TO_CHAR(e.created_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD') AS booked_date,
+        TO_CHAR(e.scheduled_at AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata'), 'YYYY-MM-DD') AS appointment_date,
+        TO_CHAR(e.scheduled_at AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata'), 'HH12:MI AM') AS time,
+        TO_CHAR(e.created_at AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata'), 'YYYY-MM-DD') AS booked_date,
         c.full_name AS client_name,
         c.phone_number,
         COALESCE(
@@ -13852,12 +13852,12 @@ async getUpcomingAppointmentsReport(
   // Same IST day-boundary anchoring as Appointment Detail — see the identical
   // fix/comment in appointments.repository.ts::listBySalonId.
   if (filters.from) {
-    where.push(`a.scheduled_at >= $${idx++}::timestamptz`);
-    values.push(`${filters.from}T00:00:00+05:30`);
+    where.push(`a.scheduled_at >= ($${idx++}::date::timestamp AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata'))`);
+    values.push(filters.from);
   }
   if (filters.to) {
-    where.push(`a.scheduled_at < ($${idx++}::timestamptz + interval '1 day')`);
-    values.push(`${filters.to}T00:00:00+05:30`);
+    where.push(`a.scheduled_at < (($${idx++}::date + interval '1 day')::timestamp AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata'))`);
+    values.push(filters.to);
   }
   if (filters.client_ids && filters.client_ids.length > 0) {
     where.push(`a.client_id = ANY($${idx++}::uuid[])`);
@@ -13919,8 +13919,8 @@ async getUpcomingAppointmentsReport(
         m.scheduled_at,
         -- DB session runs in UTC — convert explicitly to IST so this
         -- report's Time/Date columns agree with the Booking Details page.
-        TO_CHAR(m.scheduled_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD') AS appointment_date,
-        TO_CHAR(m.scheduled_at AT TIME ZONE 'Asia/Kolkata', 'HH12:MI AM') AS time,
+        TO_CHAR(m.scheduled_at AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata'), 'YYYY-MM-DD') AS appointment_date,
+        TO_CHAR(m.scheduled_at AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata'), 'HH12:MI AM') AS time,
         c.full_name AS client_name,
         c.phone_number AS mobile_number,
         COALESCE(
@@ -15115,7 +15115,7 @@ async getServiceRevenueTrend(
     index++;
   }
 
-  let groupExpr = `TO_CHAR(s.created_at AT TIME ZONE 'Asia/Kolkata', 'Mon YYYY')`;
+  let groupExpr = `TO_CHAR(s.created_at AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata'), 'Mon YYYY')`;
 
   if (filters.from && filters.to) {
     const from = new Date(filters.from);
@@ -15127,13 +15127,13 @@ async getServiceRevenueTrend(
       ) + 1;
 
     if (diffDays === 1) {
-      groupExpr = `TO_CHAR(s.created_at AT TIME ZONE 'Asia/Kolkata', 'HH24:00')`;
+      groupExpr = `TO_CHAR(s.created_at AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata'), 'HH24:00')`;
     } else if (diffDays <= 7) {
-      groupExpr = `TO_CHAR(s.created_at AT TIME ZONE 'Asia/Kolkata', 'Dy')`;
+      groupExpr = `TO_CHAR(s.created_at AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata'), 'Dy')`;
     } else if (diffDays <= 31) {
-      groupExpr = `TO_CHAR(s.created_at AT TIME ZONE 'Asia/Kolkata', 'DD Mon')`;
+      groupExpr = `TO_CHAR(s.created_at AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata'), 'DD Mon')`;
     } else {
-      groupExpr = `TO_CHAR(s.created_at AT TIME ZONE 'Asia/Kolkata', 'Mon')`;
+      groupExpr = `TO_CHAR(s.created_at AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata'), 'Mon')`;
     }
   }
 
@@ -15387,7 +15387,7 @@ async getServiceRevenueAnalytics(
     pool.query(
       `
       SELECT
-        TO_CHAR(s.created_at AT TIME ZONE 'Asia/Kolkata', 'FMDay') AS day_name,
+        TO_CHAR(s.created_at AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata'), 'FMDay') AS day_name,
         SUM(si.total_price) AS revenue
       FROM sales s
       JOIN sale_items si
@@ -17303,8 +17303,8 @@ async getRevenueTrend(
   // textually identical in the AT TIME ZONE expression they wrap — Postgres
   // only allows the SELECT-list TO_CHAR(...) here because it's a function of
   // the exact GROUP BY expression.
-  let groupFormat = `TO_CHAR(DATE_TRUNC('month', pr.sale_date AT TIME ZONE 'Asia/Kolkata'), 'Mon YYYY')`;
-  let groupBy = `DATE_TRUNC('month', pr.sale_date AT TIME ZONE 'Asia/Kolkata')`;
+  let groupFormat = `TO_CHAR(DATE_TRUNC('month', pr.sale_date AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata')), 'Mon YYYY')`;
+  let groupBy = `DATE_TRUNC('month', pr.sale_date AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata'))`;
 
   if (filters.from && filters.to) {
     const from = new Date(filters.from);
@@ -17317,17 +17317,17 @@ async getRevenueTrend(
       ) + 1;
 
     if (diffDays === 1) {
-      groupFormat = `TO_CHAR(DATE_TRUNC('hour', pr.sale_date AT TIME ZONE 'Asia/Kolkata'), 'HH24:00')`;
-      groupBy = `DATE_TRUNC('hour', pr.sale_date AT TIME ZONE 'Asia/Kolkata')`;
+      groupFormat = `TO_CHAR(DATE_TRUNC('hour', pr.sale_date AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata')), 'HH24:00')`;
+      groupBy = `DATE_TRUNC('hour', pr.sale_date AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata'))`;
     } else if (diffDays <= 7) {
-      groupFormat = `TO_CHAR(DATE_TRUNC('day', pr.sale_date AT TIME ZONE 'Asia/Kolkata'), 'Dy')`;
-      groupBy = `DATE_TRUNC('day', pr.sale_date AT TIME ZONE 'Asia/Kolkata')`;
+      groupFormat = `TO_CHAR(DATE_TRUNC('day', pr.sale_date AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata')), 'Dy')`;
+      groupBy = `DATE_TRUNC('day', pr.sale_date AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata'))`;
     } else if (diffDays <= 31) {
-      groupFormat = `TO_CHAR(DATE_TRUNC('day', pr.sale_date AT TIME ZONE 'Asia/Kolkata'), 'DD Mon')`;
-      groupBy = `DATE_TRUNC('day', pr.sale_date AT TIME ZONE 'Asia/Kolkata')`;
+      groupFormat = `TO_CHAR(DATE_TRUNC('day', pr.sale_date AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata')), 'DD Mon')`;
+      groupBy = `DATE_TRUNC('day', pr.sale_date AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata'))`;
     } else {
-      groupFormat = `TO_CHAR(DATE_TRUNC('month', pr.sale_date AT TIME ZONE 'Asia/Kolkata'), 'Mon')`;
-      groupBy = `DATE_TRUNC('month', pr.sale_date AT TIME ZONE 'Asia/Kolkata')`;
+      groupFormat = `TO_CHAR(DATE_TRUNC('month', pr.sale_date AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata')), 'Mon')`;
+      groupBy = `DATE_TRUNC('month', pr.sale_date AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata'))`;
     }
   }
 
@@ -17929,8 +17929,8 @@ async getStylistRevenueTrend(
     index++;
   }
 
-  let groupExpr = `TO_CHAR(s.created_at AT TIME ZONE 'Asia/Kolkata', 'Mon YYYY')`;
-  let groupByExpr = `DATE_TRUNC('month', s.created_at AT TIME ZONE 'Asia/Kolkata')`;
+  let groupExpr = `TO_CHAR(s.created_at AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata'), 'Mon YYYY')`;
+  let groupByExpr = `DATE_TRUNC('month', s.created_at AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata'))`;
 
   if (filters.from && filters.to) {
     const from = new Date(filters.from);
@@ -17940,17 +17940,17 @@ async getStylistRevenueTrend(
       Math.floor((to.getTime() - from.getTime()) / (1000 * 60 * 60 * 24)) + 1;
 
     if (diffDays === 1) {
-      groupExpr = `TO_CHAR(DATE_TRUNC('hour', s.created_at AT TIME ZONE 'Asia/Kolkata'), 'HH24:00')`;
-      groupByExpr = `DATE_TRUNC('hour', s.created_at AT TIME ZONE 'Asia/Kolkata')`;
+      groupExpr = `TO_CHAR(DATE_TRUNC('hour', s.created_at AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata')), 'HH24:00')`;
+      groupByExpr = `DATE_TRUNC('hour', s.created_at AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata'))`;
     } else if (diffDays <= 7) {
-      groupExpr = `TO_CHAR(DATE_TRUNC('day', s.created_at AT TIME ZONE 'Asia/Kolkata'), 'Dy')`;
-      groupByExpr = `DATE_TRUNC('day', s.created_at AT TIME ZONE 'Asia/Kolkata')`;
+      groupExpr = `TO_CHAR(DATE_TRUNC('day', s.created_at AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata')), 'Dy')`;
+      groupByExpr = `DATE_TRUNC('day', s.created_at AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata'))`;
     } else if (diffDays <= 31) {
-      groupExpr = `TO_CHAR(DATE_TRUNC('day', s.created_at AT TIME ZONE 'Asia/Kolkata'), 'DD Mon')`;
-      groupByExpr = `DATE_TRUNC('day', s.created_at AT TIME ZONE 'Asia/Kolkata')`;
+      groupExpr = `TO_CHAR(DATE_TRUNC('day', s.created_at AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata')), 'DD Mon')`;
+      groupByExpr = `DATE_TRUNC('day', s.created_at AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata'))`;
     } else {
-      groupExpr = `TO_CHAR(DATE_TRUNC('month', s.created_at AT TIME ZONE 'Asia/Kolkata'), 'Mon')`;
-      groupByExpr = `DATE_TRUNC('month', s.created_at AT TIME ZONE 'Asia/Kolkata')`;
+      groupExpr = `TO_CHAR(DATE_TRUNC('month', s.created_at AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata')), 'Mon')`;
+      groupByExpr = `DATE_TRUNC('month', s.created_at AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata'))`;
     }
   }
 
@@ -18948,12 +18948,12 @@ async getAppointmentCharts(
       `
       ${APPOINTMENT_BASE_CTES}
       SELECT
-        TO_CHAR(DATE_TRUNC('day', m.scheduled_at AT TIME ZONE 'Asia/Kolkata'), 'Dy') AS date,
+        TO_CHAR(DATE_TRUNC('day', m.scheduled_at AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata')), 'Dy') AS date,
         COUNT(*) AS appointments
       FROM metrics m
       WHERE ${where.join(" AND ")}
-      GROUP BY DATE_TRUNC('day', m.scheduled_at AT TIME ZONE 'Asia/Kolkata')
-      ORDER BY DATE_TRUNC('day', m.scheduled_at AT TIME ZONE 'Asia/Kolkata')
+      GROUP BY DATE_TRUNC('day', m.scheduled_at AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata'))
+      ORDER BY DATE_TRUNC('day', m.scheduled_at AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata'))
       `,
       values
     )
@@ -19096,22 +19096,22 @@ async getAppointmentAnalytics(
         SELECT * FROM metrics m WHERE ${where.join(" AND ")}
       ),
       peak_day AS (
-        SELECT TO_CHAR(DATE_TRUNC('day', scheduled_at AT TIME ZONE 'Asia/Kolkata'), 'FMDay') AS value
+        SELECT TO_CHAR(DATE_TRUNC('day', scheduled_at AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata')), 'FMDay') AS value
         FROM filtered
-        GROUP BY DATE_TRUNC('day', scheduled_at AT TIME ZONE 'Asia/Kolkata')
-        ORDER BY COUNT(*) DESC, DATE_TRUNC('day', scheduled_at AT TIME ZONE 'Asia/Kolkata') ASC
+        GROUP BY DATE_TRUNC('day', scheduled_at AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata'))
+        ORDER BY COUNT(*) DESC, DATE_TRUNC('day', scheduled_at AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata')) ASC
         LIMIT 1
       ),
       peak_hour AS (
         SELECT
           CONCAT(
-            TO_CHAR(DATE_TRUNC('hour', scheduled_at AT TIME ZONE 'Asia/Kolkata'), 'FMHH12 AM'),
+            TO_CHAR(DATE_TRUNC('hour', scheduled_at AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata')), 'FMHH12 AM'),
             ' - ',
-            TO_CHAR(DATE_TRUNC('hour', scheduled_at AT TIME ZONE 'Asia/Kolkata') + INTERVAL '2 hour', 'FMHH12 AM')
+            TO_CHAR(DATE_TRUNC('hour', scheduled_at AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata')) + INTERVAL '2 hour', 'FMHH12 AM')
           ) AS value
         FROM filtered
-        GROUP BY DATE_TRUNC('hour', scheduled_at AT TIME ZONE 'Asia/Kolkata')
-        ORDER BY COUNT(*) DESC, DATE_TRUNC('hour', scheduled_at AT TIME ZONE 'Asia/Kolkata') ASC
+        GROUP BY DATE_TRUNC('hour', scheduled_at AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata'))
+        ORDER BY COUNT(*) DESC, DATE_TRUNC('hour', scheduled_at AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata')) ASC
         LIMIT 1
       ),
       best_stylist AS (
@@ -19338,9 +19338,9 @@ async getAppointmentDetailTable(
       )
       SELECT
         m.id,
-        TO_CHAR(m.scheduled_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD') AS appointment_date,
-        TO_CHAR(m.scheduled_at AT TIME ZONE 'Asia/Kolkata', 'HH12:MI AM') AS appointment_time,
-        TO_CHAR(m.created_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD') AS booked_date,
+        TO_CHAR(m.scheduled_at AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata'), 'YYYY-MM-DD') AS appointment_date,
+        TO_CHAR(m.scheduled_at AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata'), 'HH12:MI AM') AS appointment_time,
+        TO_CHAR(m.created_at AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata'), 'YYYY-MM-DD') AS booked_date,
         COALESCE(c.full_name, 'Walk-in Client') AS client_name,
         COALESCE(sr.service_name, sv.name, 'Service') AS service_name,
         COALESCE(sr.staff_name, CONCAT(st.first_name, ' ', st.last_name), 'Unknown') AS staff_name,
@@ -19478,7 +19478,7 @@ async getDailySheetTable(
           s.id,
           s.appointment_id,
           s.created_at AS sort_ts,
-          TO_CHAR(s.created_at AT TIME ZONE 'Asia/Kolkata', 'HH12:MI AM') AS time,
+          TO_CHAR(s.created_at AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata'), 'HH12:MI AM') AS time,
           s.invoice_number AS ticket_no,
           COALESCE(c.full_name, 'Walk-in Client') AS client_name,
           COALESCE(NULLIF(sir.items, ''), NULLIF(air.services, ''), 'Service') AS service,
@@ -20051,7 +20051,7 @@ async getGuestCollectionReport(
         s.invoice_number AS invoice_number,
         m.client_id,
         COALESCE(s.created_at, m.created_at, m.scheduled_at) AS created_at,
-        DATE(COALESCE(s.created_at, m.scheduled_at, m.created_at) AT TIME ZONE 'Asia/Kolkata') AS bill_date,
+        DATE(COALESCE(s.created_at, m.scheduled_at, m.created_at) AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata')) AS bill_date,
         COALESCE(c.full_name, 'Walk-in Client') AS guest_name,
         COALESCE(c.phone_number, '') AS phone,
         COALESCE(m.appointment_amount, 0)::numeric AS bill_amount,
@@ -20103,7 +20103,7 @@ async getGuestCollectionReport(
         s.invoice_number AS invoice_number,
         s.client_id,
         s.created_at,
-        DATE(s.created_at AT TIME ZONE 'Asia/Kolkata') AS bill_date,
+        DATE(s.created_at AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata')) AS bill_date,
         COALESCE(c.full_name, 'Walk-in Client') AS guest_name,
         COALESCE(c.phone_number, '') AS phone,
         COALESCE(s.total_amount::numeric, 0) AS bill_amount,
@@ -20599,7 +20599,7 @@ async getStaffAttendanceReport(
         -- above), not the UTC session's — otherwise a late-evening IST
         -- appointment near the UTC day rollover joins to the wrong
         -- attendance_date below and silently drops out of that staff's count.
-        DATE(a.scheduled_at AT TIME ZONE 'Asia/Kolkata') AS appointment_date,
+        DATE(a.scheduled_at AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata')) AS appointment_date,
         COUNT(*) FILTER (WHERE a.status = 'paid') AS completed_appointments
       FROM appointments a
       JOIN active_staff s
@@ -20608,7 +20608,7 @@ async getStaffAttendanceReport(
         a.salon_id = $1
         AND DATE(a.scheduled_at) >= $2::date
         AND DATE(a.scheduled_at) <= $3::date
-      GROUP BY a.staff_id, DATE(a.scheduled_at AT TIME ZONE 'Asia/Kolkata')
+      GROUP BY a.staff_id, DATE(a.scheduled_at AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata'))
     ),
     merged AS (
       SELECT
@@ -21633,12 +21633,12 @@ async getCouponRedemptionCharts(
         `
         ${ctes}
         SELECT
-          TO_CHAR(DATE_TRUNC('day', used_at AT TIME ZONE 'Asia/Kolkata'), 'Dy') AS day,
+          TO_CHAR(DATE_TRUNC('day', used_at AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata')), 'Dy') AS day,
           COUNT(*) AS redemptions,
           COALESCE(SUM(discount_amount), 0) AS discount
         FROM coupon_sales
-        GROUP BY DATE_TRUNC('day', used_at AT TIME ZONE 'Asia/Kolkata')
-        ORDER BY DATE_TRUNC('day', used_at AT TIME ZONE 'Asia/Kolkata')
+        GROUP BY DATE_TRUNC('day', used_at AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata'))
+        ORDER BY DATE_TRUNC('day', used_at AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata'))
         `,
         values
       )
@@ -21722,9 +21722,9 @@ async getCouponRedemptionAnalytics(
       LIMIT 1
     ),
     best_day AS (
-      SELECT TO_CHAR(DATE_TRUNC('day', used_at AT TIME ZONE 'Asia/Kolkata'), 'DD Mon YYYY') AS label, COUNT(*) AS redemptions
+      SELECT TO_CHAR(DATE_TRUNC('day', used_at AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata')), 'DD Mon YYYY') AS label, COUNT(*) AS redemptions
       FROM coupon_sales
-      GROUP BY DATE_TRUNC('day', used_at AT TIME ZONE 'Asia/Kolkata')
+      GROUP BY DATE_TRUNC('day', used_at AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata'))
       ORDER BY redemptions DESC
       LIMIT 1
     )
@@ -21914,18 +21914,18 @@ async getBalanceReceivedReport(
     ? "ASC"
     : "DESC";
 
-  let trendLabelExpr = `TO_CHAR(DATE_TRUNC('day', payment_date AT TIME ZONE 'Asia/Kolkata'), 'Dy')`;
-  let trendDateExpr = `TO_CHAR(DATE_TRUNC('day', payment_date AT TIME ZONE 'Asia/Kolkata'), 'YYYY-MM-DD')`;
-  let trendGroupExpr = `DATE_TRUNC('day', payment_date AT TIME ZONE 'Asia/Kolkata')`;
+  let trendLabelExpr = `TO_CHAR(DATE_TRUNC('day', payment_date AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata')), 'Dy')`;
+  let trendDateExpr = `TO_CHAR(DATE_TRUNC('day', payment_date AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata')), 'YYYY-MM-DD')`;
+  let trendGroupExpr = `DATE_TRUNC('day', payment_date AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata'))`;
 
   if (diffDays > 31 && diffDays <= 120) {
-    trendLabelExpr = `CONCAT('Week ', TO_CHAR(DATE_TRUNC('week', payment_date AT TIME ZONE 'Asia/Kolkata'), 'DD Mon'))`;
-    trendDateExpr = `TO_CHAR(DATE_TRUNC('week', payment_date AT TIME ZONE 'Asia/Kolkata'), 'YYYY-MM-DD')`;
-    trendGroupExpr = `DATE_TRUNC('week', payment_date AT TIME ZONE 'Asia/Kolkata')`;
+    trendLabelExpr = `CONCAT('Week ', TO_CHAR(DATE_TRUNC('week', payment_date AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata')), 'DD Mon'))`;
+    trendDateExpr = `TO_CHAR(DATE_TRUNC('week', payment_date AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata')), 'YYYY-MM-DD')`;
+    trendGroupExpr = `DATE_TRUNC('week', payment_date AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata'))`;
   } else if (diffDays > 120) {
-    trendLabelExpr = `TO_CHAR(DATE_TRUNC('month', payment_date AT TIME ZONE 'Asia/Kolkata'), 'Mon YYYY')`;
-    trendDateExpr = `TO_CHAR(DATE_TRUNC('month', payment_date AT TIME ZONE 'Asia/Kolkata'), 'YYYY-MM-DD')`;
-    trendGroupExpr = `DATE_TRUNC('month', payment_date AT TIME ZONE 'Asia/Kolkata')`;
+    trendLabelExpr = `TO_CHAR(DATE_TRUNC('month', payment_date AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata')), 'Mon YYYY')`;
+    trendDateExpr = `TO_CHAR(DATE_TRUNC('month', payment_date AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata')), 'YYYY-MM-DD')`;
+    trendGroupExpr = `DATE_TRUNC('month', payment_date AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata'))`;
   }
 
   const BALANCE_RECEIVED_BASE_CTES = `
@@ -21982,7 +21982,7 @@ async getBalanceReceivedReport(
         -- feeds date-bucketing/filtering (never returned raw), so it's safe
         -- to bucket by the IST calendar day directly.
         COALESCE(p.paid_at, p.created_at) AS payment_date,
-        DATE(COALESCE(p.paid_at, p.created_at) AT TIME ZONE 'Asia/Kolkata') AS payment_day,
+        DATE(COALESCE(p.paid_at, p.created_at) AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata')) AS payment_day,
         COALESCE(p.paid_amount, p.net_amount, 0)::numeric AS amount_received,
         COALESCE(p.due_amount, 0)::numeric AS remaining_balance,
         (
@@ -23118,12 +23118,12 @@ async getConsumableAnalyticsReport(
   let idx = 2;
 
   if (filters.from) {
-    where.push(`cu.created_at >= $${idx++}::timestamptz`);
-    values.push(`${filters.from}T00:00:00+05:30`);
+    where.push(`cu.created_at >= ($${idx++}::date::timestamp AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata'))`);
+    values.push(filters.from);
   }
   if (filters.to) {
-    where.push(`cu.created_at < ($${idx++}::timestamptz + interval '1 day')`);
-    values.push(`${filters.to}T00:00:00+05:30`);
+    where.push(`cu.created_at < (($${idx++}::date + interval '1 day')::timestamp AT TIME ZONE COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata'))`);
+    values.push(filters.to);
   }
   if (filters.client_ids && filters.client_ids.length > 0) {
     where.push(`a.client_id = ANY($${idx++}::uuid[])`);

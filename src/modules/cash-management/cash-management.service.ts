@@ -8,6 +8,7 @@ import { whatsappAutomationService } from "../whatsapp-automation/whatsapp-autom
 import { whatsappAutomationRepository } from "../whatsapp-automation/whatsapp-automation.repository";
 import { configRepository } from "../marketing/whatsapp/config/config.repository";
 import logger from "../../config/logger";
+import { getSalonTimezone } from "../../config/salonTimezone";
 import type {
   CloseCounterBody,
   CounterListFilters,
@@ -26,11 +27,11 @@ const SUMMARY_BUNDLE_SECTIONS: SummaryBundleSection[] = [
   "dashboard_summary",
 ];
 
-const formatDateIST = (d: Date | string) =>
-  new Date(d).toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", day: "2-digit", month: "short", year: "numeric" });
+const formatDateIST = (d: Date | string, timeZone: string) =>
+  new Date(d).toLocaleDateString("en-IN", { timeZone, day: "2-digit", month: "short", year: "numeric" });
 
-const formatTimeIST = (d: Date | string) =>
-  new Date(d).toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit", hour12: true });
+const formatTimeIST = (d: Date | string, timeZone: string) =>
+  new Date(d).toLocaleTimeString("en-IN", { timeZone, hour: "2-digit", minute: "2-digit", hour12: true });
 
 const formatMoney = (n: number) => `₹${(Number.isFinite(n) ? n : 0).toFixed(2)}`;
 
@@ -91,8 +92,8 @@ async function notifyOwnerCashCounterOpened(salonId: string, counter: any): Prom
     }
     const variables = {
       "1": salon?.business_name ?? "your salon",
-      "2": formatDateIST(counter.opened_at),
-      "3": formatTimeIST(counter.opened_at),
+      "2": formatDateIST(counter.opened_at, await getSalonTimezone(salonId)),
+      "3": formatTimeIST(counter.opened_at, await getSalonTimezone(salonId)),
       "4": formatMoney(parseFloat(counter.opening_balance ?? "0")),
     };
     await triggerForOwnerPhones(ownerPhones, {
@@ -152,8 +153,8 @@ async function notifyOwnerCashCounterClosed(
 
     const variables = {
       "1": salon?.business_name ?? "your salon",
-      "2": formatDateIST(counter.closed_at ?? new Date()),
-      "3": formatTimeIST(counter.closed_at ?? new Date()),
+      "2": formatDateIST(counter.closed_at ?? new Date(), await getSalonTimezone(salonId)),
+      "3": formatTimeIST(counter.closed_at ?? new Date(), await getSalonTimezone(salonId)),
       "4": collectionBreakdown,
       "5": formatMoney(cashAmt + cardAmt + upiAmt),
       "6": formatMoney(expenses),

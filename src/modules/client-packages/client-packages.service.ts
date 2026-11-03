@@ -513,6 +513,9 @@ export const clientPackagesService = {
     // this same function runs again when the balance is later settled.
     paidFraction: number = 1,
     isFullyPaid:  boolean = true,
+    // The bill taxed this package with price-INCLUSIVE tax (UAE VAT): the record's tax is then
+    // carved out of the price rather than added on top.
+    taxInclusive: boolean = false,
   ): Promise<void> {
     logger.info(`[client-packages/auto-create] salon=${salonId} client=${clientId} name="${packageName}" services=${services.length} price=${basePrice}`);
     try {
@@ -552,6 +555,7 @@ export const clientPackagesService = {
         description: description ?? null,
         basePrice,
         gstPercentage,
+        taxInclusive,
         discount,
         paymentMethod,
         services,

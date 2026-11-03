@@ -1,3 +1,4 @@
+import { getSalonTimezone } from "../../config/salonTimezone";
 import pool from "../../config/database";
 import type { PoolClient } from "pg";
 import { getIO, salonRoom, salonStaffRoom } from "../../config/socket";
@@ -7,13 +8,14 @@ import { AppError } from "../../middleware/error.middleware";
 import { ownStaffId } from "../notifications/staffNotificationScope";
 import { attendanceRepository } from "./attendance.repository";
 import { notifyAttendanceBreak, notifyAttendancePunch } from "./attendance.service";
-import { istDate, shiftWindow, type Shift } from "./staffAttendance.rules";
+import { salonDate, shiftWindow, type Shift } from "./staffAttendance.rules";
 
 export async function staffAttendanceState(userId: string, salonId: string, now = new Date()) {
   const staffId = await ownStaffId(userId, salonId);
   if (!staffId) throw new AppError(403, "Your account is not linked to an active staff member.", "STAFF_NOT_LINKED");
-  let date = istDate(now);
-  const yesterday = istDate(new Date(now.getTime() - 86400000));
+  const tz = await getSalonTimezone(salonId);
+  let date = salonDate(now, tz);
+  const yesterday = salonDate(new Date(now.getTime() - 86400000), tz);
   async function schedule(day: string): Promise<Shift | null> {
     const { rows } = await pool.query<Shift>(
       `SELECT start_time::text, end_time::text, is_available FROM staff_schedules
@@ -23,13 +25,13 @@ export async function staffAttendanceState(userId: string, salonId: string, now 
   }
   const [todayShift, priorShift] = await Promise.all([schedule(date), schedule(yesterday)]);
   let shift = todayShift;
-  let window = shiftWindow(date, shift);
-  const priorWindow = shiftWindow(yesterday, priorShift);
+  let window = shiftWindow(date, shift, tz);
+  const priorWindow = shiftWindow(yesterday, priorShift, tz);
   if (priorWindow && now >= priorWindow.start && now < priorWindow.end) {
     date = yesterday; shift = priorShift; window = priorWindow;
   }
   const { rows: open } = await pool.query(`SELECT date::text FROM attendance a WHERE salon_id = $1 AND staff_id = $2 AND check_in IS NOT NULL AND check_out IS NULL AND (date >= $3::date OR EXISTS (SELECT 1 FROM attendance_breaks b WHERE b.attendance_id = a.id AND b.actual_end IS NULL)) ORDER BY date LIMIT 1`, [salonId, staffId, yesterday]);
-  if (open[0]) { date = open[0].date; window = shiftWindow(date, await schedule(date)); }
+  if (open[0]) { date = open[0].date; window = shiftWindow(date, await schedule(date), tz); }
   const record = await attendanceRepository.findByStaffAndDate(staffId, date);
   const activity = attendanceActivity(record, record?.breaks ?? [], now);
   return {

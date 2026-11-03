@@ -26,6 +26,8 @@ export interface PackageAutoCreateBillContext {
   clientId?: string | null;
   appointmentId?: string;
   gstPercent?: number | null;
+  /** The bill taxes packages with price-INCLUSIVE tax — see arePackageTaxesInclusive(). */
+  taxInclusive?: boolean;
   saleId?: string;
   staffId?: string;
   requesterUserId?: string;
@@ -165,6 +167,7 @@ export async function autoCreatePackagesForBill(
           ctx.requesterUserId,
           ctx.paidFraction,
           ctx.isFullyPaid,
+          ctx.taxInclusive ?? false,
         );
       } catch (err: any) {
         logger.warn('[package-autocreate] package auto-create failed:', err?.message ?? err);

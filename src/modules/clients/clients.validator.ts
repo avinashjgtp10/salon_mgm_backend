@@ -1,6 +1,7 @@
 // src/modules/clients/clients.validator.ts
 import { NextFunction, Request, Response } from "express";
 import { AppError } from "../../middleware/error.middleware";
+import { isValidTaxRegistrationNumber, TAX_ID_ERROR } from "../salons/tax-id";
 
 const isUUID = (v: unknown) =>
     typeof v === "string" &&
@@ -45,16 +46,14 @@ const validateAddressesArray = (arr: any, allowId: boolean) => {
     }
 };
 
-const GSTIN_FORMAT_RE = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/;
-
 // Shared by create/update — GST is optional but must be a valid GSTIN when
 // present (mirrors salons.validator.ts's own GST check, which validates the
 // salon's OWN business GST — this is the same format, unrelated table).
 // Credit fields are optional but can't be negative when present.
 const validateGstAndCredit = (b: any) => {
     if (b.gst_number !== undefined && b.gst_number !== null && b.gst_number !== "") {
-        if (typeof b.gst_number !== "string" || !GSTIN_FORMAT_RE.test(b.gst_number.toUpperCase())) {
-            throw new AppError(400, "gst_number must be a valid 15-character GSTIN (e.g. 22AAAAA0000A1Z5)", "VALIDATION_ERROR");
+        if (typeof b.gst_number !== "string" || !isValidTaxRegistrationNumber(b.gst_number)) {
+            throw new AppError(400, `gst_number ${TAX_ID_ERROR}`, "VALIDATION_ERROR");
         }
     }
     if (b.credit_limit !== undefined && b.credit_limit !== null) {

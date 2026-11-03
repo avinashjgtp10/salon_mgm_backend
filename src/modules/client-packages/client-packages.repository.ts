@@ -248,13 +248,17 @@ export const clientPackagesRepository = {
 
       const c           = clientRes.rows[0];
       const clientName  = `${c.first_name} ${c.last_name ?? ""}`.trim();
-      const gstAmount   = parseFloat(((dto.basePrice - dto.discount) * dto.gstPercentage / 100).toFixed(2));
+      // Exclusive tax is added on top of (base - discount); inclusive tax (UAE VAT) is already inside it.
+      const netPrice    = dto.basePrice - dto.discount;
+      const gstAmount   = parseFloat((dto.taxInclusive
+        ? netPrice * dto.gstPercentage / (100 + dto.gstPercentage)
+        : netPrice * dto.gstPercentage / 100).toFixed(2));
       // Trust an explicitly-passed total (the exact figure the caller showed
       // the user) over re-deriving it — the formula below is only a fallback
       // for callers that don't send one.
       const totalAmount = dto.totalAmount !== undefined
         ? parseFloat(dto.totalAmount.toFixed(2))
-        : parseFloat((dto.basePrice - dto.discount + gstAmount).toFixed(2));
+        : parseFloat((dto.taxInclusive ? netPrice : netPrice + gstAmount).toFixed(2));
       const pkgId       = uuidv4();
       const paidSoFar   = parseFloat(
         (totalAmount * Math.min(1, Math.max(0, dto.paidFraction ?? 1))).toFixed(2),

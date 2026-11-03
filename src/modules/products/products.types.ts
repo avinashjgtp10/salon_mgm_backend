@@ -1,5 +1,5 @@
 export type MeasureUnit = "ml" | "l" | "g" | "kg" | "pcs" | "oz" | "lb" | "bottle" | "tube" | "pack" | "box" | "roll";
-export type TaxType = "no_tax" | "gst_5" | "gst_12" | "gst_18" | "gst_28" | "custom";
+export type TaxType = "no_tax" | "gst_5" | "gst_12" | "gst_18" | "gst_28" | "vat_5" | "custom";
 export type ProductType = "retail" | "consumable" | "both";
 
 export type Product = {

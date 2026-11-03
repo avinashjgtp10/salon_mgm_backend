@@ -1,4 +1,5 @@
 import pool from "../../config/database";
+import { getSalonTimezone } from "../../config/salonTimezone";
 import { reverseBillLoyalty } from "../payments/bill-loyalty-reversal";
 import {
     Appointment,
@@ -109,6 +110,7 @@ export const appointmentsRepository = {
                 s.business_name                          AS salon_name,
                 COALESCE(s.email, u.email)               AS salon_email,
                 s.currency                                AS salon_currency,
+                s.timezone                                AS salon_timezone,
                 COALESCE((SELECT SUM(paid_amount) FROM payments p WHERE p.appointment_id = a.id AND p.status IN ('completed', 'partial')), 0) AS paid_amount,
                 (SELECT payment_method FROM payments p WHERE p.appointment_id = a.id ORDER BY p.created_at DESC LIMIT 1) AS payment_method,
                 -- appointments.due_amount is never updated after a payment, so a.* returned
@@ -184,24 +186,26 @@ export const appointmentsRepository = {
         const values: any[] = [salonId];
         let idx = 2;
 
-        // Salon calendar days are Asia/Kolkata days, but the DB session runs in
+        const salonTz = await getSalonTimezone(salonId);
+
+        // Salon calendar days are the salon's local days (Asia/Kolkata by default), but the DB session runs in
         // UTC — comparing scheduled_at (timestamptz) against a bare "YYYY-MM-DD"
         // implicitly anchors the day boundary to UTC midnight (05:30 IST), not
         // local midnight. That silently dropped any appointment booked between
         // IST 00:00–05:30 from "today"'s list — it fell into the *previous*
-        // UTC day and never matched. Anchoring explicitly to +05:30 fixes both
+        // UTC day and never matched. Anchoring explicitly to the salon's zone fixes both
         // the single-date and start/end range filters the same way.
         if (filters.date) {
-            conditions.push(`a.scheduled_at >= $${idx}::timestamptz AND a.scheduled_at < ($${idx}::timestamptz + INTERVAL '1 day')`);
-            values.push(filters.date + "T00:00:00+05:30"); idx++;
+            conditions.push(`a.scheduled_at >= ($${idx}::date::timestamp AT TIME ZONE $${idx + 1}) AND a.scheduled_at < (($${idx}::date + 1)::timestamp AT TIME ZONE $${idx + 1})`);
+            values.push(filters.date, salonTz); idx += 2;
         }
         if (filters.start_date) {
-            conditions.push(`a.scheduled_at >= $${idx}::timestamptz`);
-            values.push(filters.start_date + "T00:00:00+05:30"); idx++;
+            conditions.push(`a.scheduled_at >= ($${idx}::date::timestamp AT TIME ZONE $${idx + 1})`);
+            values.push(filters.start_date, salonTz); idx += 2;
         }
         if (filters.end_date) {
-            conditions.push(`a.scheduled_at < ($${idx}::timestamptz + INTERVAL '1 day')`);
-            values.push(filters.end_date + "T00:00:00+05:30"); idx++;
+            conditions.push(`a.scheduled_at < (($${idx}::date + 1)::timestamp AT TIME ZONE $${idx + 1})`);
+            values.push(filters.end_date, salonTz); idx += 2;
         }
         if (filters.staff_id) {
             conditions.push(`a.staff_id = $${idx}`);

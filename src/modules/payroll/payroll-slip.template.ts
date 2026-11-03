@@ -1,3 +1,5 @@
+import { DEFAULT_SALON_TIMEZONE } from "../../config/salonTimezone";
+import { formatDocumentMoney } from "../../config/documentMoney";
 import { StaffPayrollSummary } from "./payroll.types";
 
 // Salary Slip — the calculation breakdown only (Basic/Commission/Tips/Bonus/
@@ -7,7 +9,7 @@ import { StaffPayrollSummary } from "./payroll.types";
 // header shape (logo-or-initial, business name, address line) rather than
 // the plainer text-only header the old combined template used.
 export function buildPayrollSlipHtml(params: {
-    salon: { business_name: string; logo_url: string | null; email: string | null; phone: string | null; address: string | null };
+    salon: { business_name: string; logo_url: string | null; email: string | null; phone: string | null; address: string | null; timezone?: string | null; currency?: string | null };
     staffName: string;
     staffDesignation: string | null;
     periodLabel: string;
@@ -15,9 +17,9 @@ export function buildPayrollSlipHtml(params: {
     summary: StaffPayrollSummary;
 }): string {
     const { salon, staffName, staffDesignation, periodLabel, documentId, summary } = params;
-    const fmt = (n: number) => `₹${(Number(n) || 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    const fmt = (n: number) => formatDocumentMoney(n, salon.currency);
     const salonName = salon.business_name || "Salon";
-    const generatedOn = new Date().toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", year: "numeric", month: "long", day: "numeric" });
+    const generatedOn = new Date().toLocaleDateString("en-IN", { timeZone: salon.timezone || DEFAULT_SALON_TIMEZONE, year: "numeric", month: "long", day: "numeric" });
 
     const row = (label: string, value: string, bold = false, color = "#111827") => `
       <tr>
