@@ -324,6 +324,8 @@ export const emailService = {
     salonName: string;
   }) {
     const { to, fullName, salonName } = params;
+    const frontendUrl = config.frontend.url;
+    const loginUrl = `${frontendUrl}/login`;
 
     await transporter.sendMail({
       from: config.smtp.from,
@@ -391,6 +393,36 @@ export const emailService = {
                         grow your salon business — all from one place.
                       </p>
 
+                      <!-- Login Details -->
+                      <div style="background:#f9fafb;border-radius:10px;padding:20px 28px;margin-bottom:24px;">
+                        <p style="margin:0 0 10px;color:#374151;font-size:15px;font-weight:700;">
+                          Your Login Details
+                        </p>
+                        <p style="margin:0 0 6px;color:#374151;font-size:14px;line-height:1.6;">
+                          <span style="color:#6b7280;">Registered Email:</span>
+                          <strong>${to}</strong>
+                        </p>
+                        <p style="margin:0;color:#374151;font-size:14px;line-height:1.6;">
+                          <span style="color:#6b7280;">Password:</span>
+                          Use the password you set during sign-up. For your security, we never send passwords by email.
+                          Forgot it? <a href="${frontendUrl}/forgot-password" style="color:#6366f1;text-decoration:underline;">Reset your password</a>.
+                        </p>
+                      </div>
+
+                      <!-- Login Button -->
+                      <table cellpadding="0" cellspacing="0" width="100%" style="margin-bottom:28px;">
+                        <tr>
+                          <td align="center">
+                            <a href="${loginUrl}"
+                               style="display:inline-block;background:#6366f1;background-image:linear-gradient(135deg,#6366f1 0%,#8b5cf6 100%);
+                                      color:#ffffff;font-size:15px;font-weight:700;text-decoration:none;
+                                      padding:14px 36px;border-radius:8px;">
+                              Login to SalonOx
+                            </a>
+                          </td>
+                        </tr>
+                      </table>
+
                       <!-- Getting Started Steps -->
                       <div style="background:#f9fafb;border-radius:10px;padding:24px 28px;margin-bottom:28px;">
                         <p style="margin:0 0 16px;color:#374151;font-size:15px;font-weight:700;">
@@ -444,6 +476,18 @@ export const emailService = {
                           </tr>
                         </table>
                       </div>
+
+                      <!-- Support -->
+                      <p style="margin:0 0 4px;color:#374151;font-size:15px;font-weight:700;">
+                        Need help getting started?
+                      </p>
+                      <p style="margin:0 0 4px;color:#6b7280;font-size:14px;line-height:1.6;">
+                        Our support team is here to help you.
+                      </p>
+                      <p style="margin:0;color:#374151;font-size:14px;">
+                        Email:
+                        <a href="mailto:support@salonox.com" style="color:#6366f1;text-decoration:underline;">support@salonox.com</a>
+                      </p>
 
                     </td>
                   </tr>
@@ -1552,10 +1596,18 @@ export const emailService = {
     invoiceNo: string;
     planLabel: string;
     amount: number;
+    currency?: string;
     pdfBuffer: Buffer;
     pdfFilename: string;
   }) {
-    const { to, salonName, invoiceNo, planLabel, pdfBuffer, pdfFilename } = params;
+    const { to, salonName, invoiceNo, planLabel, amount, currency, pdfBuffer, pdfFilename } = params;
+    const loginUrl = `${config.frontend.url}/login`;
+    const amountLabel = `${currency ?? "INR"} ${Number(amount).toFixed(2)}`;
+    const summaryRow = (label: string, value: string, last = false) => `
+      <tr>
+        <td style="padding:8px 0;${last ? "" : "border-bottom:1px solid #e5e7eb;"}color:#6b7280;font-size:13px;">${label}</td>
+        <td style="padding:8px 0;${last ? "" : "border-bottom:1px solid #e5e7eb;"}color:#111827;font-size:13px;font-weight:600;text-align:right;">${value}</td>
+      </tr>`;
 
     await transporter.sendMail({
       from: config.smtp.from,
@@ -1569,15 +1621,45 @@ export const emailService = {
               <table width="560" cellpadding="0" cellspacing="0"
                 style="background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 4px 20px rgba(0,0,0,0.07);max-width:560px;width:100%;">
                 <tr>
-                  <td style="background:#0f172a;padding:28px 36px;">
+                  <td style="background:#6366f1;background-image:linear-gradient(135deg,#6366f1 0%,#8b5cf6 100%);padding:28px 36px;">
                     <p style="margin:0;color:#fff;font-size:12px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;opacity:0.8;">SalonoX Billing</p>
-                    <h1 style="margin:6px 0 0;color:#fff;font-size:22px;font-weight:800;">Subscription Invoice</h1>
+                    <h1 style="margin:6px 0 0;color:#fff;font-size:22px;font-weight:800;">Your subscription is active ✓</h1>
                   </td>
                 </tr>
                 <tr>
                   <td style="padding:32px 36px;">
+                    <p style="margin:0 0 16px;color:#374151;font-size:15px;line-height:1.6;">
+                      Hi <strong>${escapeHtml(salonName)}</strong> team, thank you for your payment. Your SalonoX ${escapeHtml(planLabel)} subscription is now active, and you can continue managing your salon.
+                    </p>
                     <p style="margin:0 0 20px;color:#374151;font-size:15px;line-height:1.6;">
-                      Hi <strong>${escapeHtml(salonName)}</strong> team, thank you for your payment. Your invoice for the SalonoX ${escapeHtml(planLabel)} subscription is attached as a PDF.
+                      Your payment invoice is attached to this email as a PDF (<strong>${escapeHtml(pdfFilename)}</strong>) for your records.
+                    </p>
+
+                    <div style="background:#f9fafb;border-radius:10px;padding:12px 22px;margin-bottom:24px;">
+                      <table cellpadding="0" cellspacing="0" width="100%">
+                        ${summaryRow("Invoice No.", escapeHtml(invoiceNo))}
+                        ${summaryRow("Plan", escapeHtml(planLabel))}
+                        ${summaryRow("Amount Paid", escapeHtml(amountLabel))}
+                        ${summaryRow("Payment Status", `<span style="color:#16a34a;">Successful</span>`, true)}
+                      </table>
+                    </div>
+
+                    <table cellpadding="0" cellspacing="0" width="100%" style="margin-bottom:24px;">
+                      <tr>
+                        <td align="center">
+                          <a href="${loginUrl}"
+                             style="display:inline-block;background:#6366f1;background-image:linear-gradient(135deg,#6366f1 0%,#8b5cf6 100%);
+                                    color:#ffffff;font-size:15px;font-weight:700;text-decoration:none;
+                                    padding:14px 36px;border-radius:8px;">
+                            Login to SalonOx
+                          </a>
+                        </td>
+                      </tr>
+                    </table>
+
+                    <p style="margin:0;color:#6b7280;font-size:13px;line-height:1.6;">
+                      Need help? Email us at
+                      <a href="mailto:support@salonox.com" style="color:#6366f1;text-decoration:underline;">support@salonox.com</a>.
                     </p>
                   </td>
                 </tr>
@@ -1591,6 +1673,164 @@ export const emailService = {
           </table>
         </body></html>`,
       attachments: [{ filename: pdfFilename, content: pdfBuffer }],
+    });
+  },
+
+  // Sent the moment a Razorpay payment lands for an account whose salon isn't set up yet, so there is no invoice PDF to attach
+  // (it is emailed separately once the salon exists). Best-effort: callers never await it.
+  async sendSubscriptionPaymentReceivedEmail(params: {
+    to: string;
+    name: string;
+    planLabel: string;
+    amount: number;
+    currency?: string;
+    transactionId: string;
+  }) {
+    const { to, name, planLabel, amount, currency, transactionId } = params;
+    const loginUrl = `${config.frontend.url}/login`;
+    const amountLabel = `${currency ?? "INR"} ${Number(amount).toFixed(2)}`;
+    const row = (label: string, value: string, last = false) => `
+      <tr>
+        <td style="padding:8px 0;${last ? "" : "border-bottom:1px solid #e5e7eb;"}color:#6b7280;font-size:13px;">${label}</td>
+        <td style="padding:8px 0;${last ? "" : "border-bottom:1px solid #e5e7eb;"}color:#111827;font-size:13px;font-weight:600;text-align:right;">${value}</td>
+      </tr>`;
+
+    await transporter.sendMail({
+      from: config.smtp.from,
+      to,
+      subject: "Payment received - your SalonoX subscription is active",
+      html: `
+        <!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"/></head>
+        <body style="margin:0;padding:0;background:#f4f4f7;font-family:'Segoe UI',Arial,sans-serif;">
+          <table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f7;padding:36px 0;">
+            <tr><td align="center">
+              <table width="560" cellpadding="0" cellspacing="0"
+                style="background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 4px 20px rgba(0,0,0,0.07);max-width:560px;width:100%;">
+                <tr>
+                  <td style="background:#6366f1;background-image:linear-gradient(135deg,#6366f1 0%,#8b5cf6 100%);padding:28px 36px;">
+                    <p style="margin:0;color:#fff;font-size:12px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;opacity:0.8;">SalonoX Billing</p>
+                    <h1 style="margin:6px 0 0;color:#fff;font-size:22px;font-weight:800;">Payment received ✓</h1>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="padding:32px 36px;">
+                    <p style="margin:0 0 16px;color:#374151;font-size:15px;line-height:1.6;">
+                      Hi <strong>${escapeHtml(name)}</strong>, thank you for your payment. Your SalonoX ${escapeHtml(planLabel)} subscription is now active.
+                    </p>
+                    <p style="margin:0 0 20px;color:#374151;font-size:15px;line-height:1.6;">
+                      Your invoice PDF will be emailed to you as soon as your salon setup is complete.
+                    </p>
+                    <div style="background:#f9fafb;border-radius:10px;padding:12px 22px;margin-bottom:24px;">
+                      <table cellpadding="0" cellspacing="0" width="100%">
+                        ${row("Plan", escapeHtml(planLabel))}
+                        ${row("Amount Paid", escapeHtml(amountLabel))}
+                        ${row("Transaction ID", escapeHtml(transactionId))}
+                        ${row("Payment Status", `<span style="color:#16a34a;">Successful</span>`, true)}
+                      </table>
+                    </div>
+                    <table cellpadding="0" cellspacing="0" width="100%" style="margin-bottom:24px;">
+                      <tr>
+                        <td align="center">
+                          <a href="${loginUrl}"
+                             style="display:inline-block;background:#6366f1;background-image:linear-gradient(135deg,#6366f1 0%,#8b5cf6 100%);
+                                    color:#ffffff;font-size:15px;font-weight:700;text-decoration:none;
+                                    padding:14px 36px;border-radius:8px;">
+                            Login to SalonOx
+                          </a>
+                        </td>
+                      </tr>
+                    </table>
+                    <p style="margin:0;color:#6b7280;font-size:13px;line-height:1.6;">
+                      Need help? Email us at
+                      <a href="mailto:support@salonox.com" style="color:#6366f1;text-decoration:underline;">support@salonox.com</a>.
+                    </p>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="background:#f9fafb;padding:16px 36px;border-top:1px solid #e5e7eb;">
+                    <p style="margin:0;color:#9ca3af;font-size:12px;text-align:center;">© ${new Date().getFullYear()} SalonOx. Automated notification.</p>
+                  </td>
+                </tr>
+              </table>
+            </td></tr>
+          </table>
+        </body></html>`,
+    });
+  },
+
+  // Sent when a Super Admin gives a salon a plan ("Give plan"). No payment is involved, so nothing is attached.
+  async sendPlanGrantedEmail(params: {
+    to: string;
+    salonName: string;
+    planLabel: string;
+    start: Date;
+    end: Date;
+  }) {
+    const { to, salonName, planLabel, start, end } = params;
+    const loginUrl = `${config.frontend.url}/login`;
+    const fmt = (d: Date) => d.toLocaleDateString(dateLocale(), { day: "2-digit", month: "short", year: "numeric" });
+    const row = (label: string, value: string, last = false) => `
+      <tr>
+        <td style="padding:8px 0;${last ? "" : "border-bottom:1px solid #e5e7eb;"}color:#6b7280;font-size:13px;">${label}</td>
+        <td style="padding:8px 0;${last ? "" : "border-bottom:1px solid #e5e7eb;"}color:#111827;font-size:13px;font-weight:600;text-align:right;">${value}</td>
+      </tr>`;
+
+    await transporter.sendMail({
+      from: config.smtp.from,
+      to,
+      subject: "Your SalonoX subscription is active",
+      html: `
+        <!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"/></head>
+        <body style="margin:0;padding:0;background:#f4f4f7;font-family:'Segoe UI',Arial,sans-serif;">
+          <table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f7;padding:36px 0;">
+            <tr><td align="center">
+              <table width="560" cellpadding="0" cellspacing="0"
+                style="background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 4px 20px rgba(0,0,0,0.07);max-width:560px;width:100%;">
+                <tr>
+                  <td style="background:#6366f1;background-image:linear-gradient(135deg,#6366f1 0%,#8b5cf6 100%);padding:28px 36px;">
+                    <p style="margin:0;color:#fff;font-size:12px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;opacity:0.8;">SalonoX Billing</p>
+                    <h1 style="margin:6px 0 0;color:#fff;font-size:22px;font-weight:800;">Your subscription is active ✓</h1>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="padding:32px 36px;">
+                    <p style="margin:0 0 20px;color:#374151;font-size:15px;line-height:1.6;">
+                      Hi <strong>${escapeHtml(salonName)}</strong> team, the SalonoX ${escapeHtml(planLabel)} plan has been activated for your salon. You can continue managing your salon as usual.
+                    </p>
+                    <div style="background:#f9fafb;border-radius:10px;padding:12px 22px;margin-bottom:24px;">
+                      <table cellpadding="0" cellspacing="0" width="100%">
+                        ${row("Plan", escapeHtml(planLabel))}
+                        ${row("Starts", escapeHtml(fmt(start)))}
+                        ${row("Valid Until", escapeHtml(fmt(end)), true)}
+                      </table>
+                    </div>
+                    <table cellpadding="0" cellspacing="0" width="100%" style="margin-bottom:24px;">
+                      <tr>
+                        <td align="center">
+                          <a href="${loginUrl}"
+                             style="display:inline-block;background:#6366f1;background-image:linear-gradient(135deg,#6366f1 0%,#8b5cf6 100%);
+                                    color:#ffffff;font-size:15px;font-weight:700;text-decoration:none;
+                                    padding:14px 36px;border-radius:8px;">
+                            Login to SalonOx
+                          </a>
+                        </td>
+                      </tr>
+                    </table>
+                    <p style="margin:0;color:#6b7280;font-size:13px;line-height:1.6;">
+                      Need help? Email us at
+                      <a href="mailto:support@salonox.com" style="color:#6366f1;text-decoration:underline;">support@salonox.com</a>.
+                    </p>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="background:#f9fafb;padding:16px 36px;border-top:1px solid #e5e7eb;">
+                    <p style="margin:0;color:#9ca3af;font-size:12px;text-align:center;">© ${new Date().getFullYear()} SalonOx. Automated notification.</p>
+                  </td>
+                </tr>
+              </table>
+            </td></tr>
+          </table>
+        </body></html>`,
     });
   },
 
