@@ -1,6 +1,7 @@
 import type { PoolClient } from "pg";
 import pool from "../../config/database";
 import { CreateSalonBody, UpdateSalonBody, Salon } from "./salons.types";
+import { invalidateSalonCurrency } from "../../config/currency";
 
 // The batched delete scripts below inline the salon id (a multi-statement
 // query can't take bind parameters), so it must be a real UUID first.
@@ -495,6 +496,10 @@ export const salonsRepository = {
        RETURNING *`,
             values
         );
+
+        // Messages, documents and bill rounding read the salon's currency through a short-lived cache — drop it so a
+        // change takes effect immediately.
+        if (patch.currency !== undefined) invalidateSalonCurrency(id);
 
         return rows[0];
     },

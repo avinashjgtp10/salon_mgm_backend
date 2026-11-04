@@ -8,6 +8,7 @@ import type {
   CompleteSessionDTO,
   ClientPackagesListQuery,
 } from "./client-packages.types";
+import { getSalonDateLocale } from "../../config/currency";
 
 // ── Row → Domain mapper ───────────────────────────────────────────────────────
 
@@ -29,7 +30,12 @@ function effectiveStatus(status: string, expiryDate: string | null): string {
   return status;
 }
 
-function toClientPackage(row: ClientPackageRow): ClientPackage {
+// toClientPackage plus the salon date locale (session dates are formatted here, server-side).
+async function toClientPackageForSalon(row: ClientPackageRow): Promise<ClientPackage> {
+  return toClientPackage(row, await getSalonDateLocale(row.salon_id));
+}
+
+function toClientPackage(row: ClientPackageRow, locale: string): ClientPackage {
   const base     = parseFloat(row.base_price);
   const gstPct   = parseFloat(row.gst_percentage);
   const gstAmt   = parseFloat(row.gst_amount);
@@ -77,7 +83,7 @@ function toClientPackage(row: ClientPackageRow): ClientPackage {
       // session history is keyed by service id in row.session_history_map
       sessionHistory: ((row as any).session_history_map?.[s.service_id] ?? []).map((h: any) => ({
         sessionNo: h.session_no,
-        date:      new Date(h.session_date).toLocaleDateString("en-IN", {
+        date:      new Date(h.session_date).toLocaleDateString(locale, {
           day: "2-digit", month: "short", year: "numeric",
         }),
         staff:  h.staff_name,
@@ -222,7 +228,7 @@ export const clientPackagesRepository = {
     );
 
     return {
-      items: rows.map(toClientPackage),
+      items: await Promise.all(rows.map(toClientPackageForSalon)),
       total: parseInt(countRes.rows[0].count, 10),
     };
   },
@@ -232,7 +238,7 @@ export const clientPackagesRepository = {
       `${SELECT_FULL} WHERE cp.id = $1 AND cp.salon_id = $2 GROUP BY cp.id`,
       [id, salonId],
     );
-    return rows.length ? toClientPackage(rows[0]) : null;
+    return rows.length ? await toClientPackageForSalon(rows[0]) : null;
   },
 
   async create(salonId: string, dto: CreateClientPackageDTO): Promise<ClientPackage> {
@@ -318,7 +324,7 @@ export const clientPackagesRepository = {
 
       await client.query("COMMIT");
 
-      const pkg = toClientPackage(rows[0]);
+      const pkg = await toClientPackageForSalon(rows[0]);
       const byId = new Map(pkg.services.map(s => [s.serviceId, s]));
       pkg.services = serviceIds.map(id => byId.get(id)).filter((s): s is typeof pkg.services[number] => !!s);
       return pkg;
@@ -436,7 +442,7 @@ export const clientPackagesRepository = {
       );
 
       await client.query("COMMIT");
-      return rows.length ? toClientPackage(rows[0]) : null;
+      return rows.length ? await toClientPackageForSalon(rows[0]) : null;
     } catch (err) {
       await client.query("ROLLBACK");
       throw err;
@@ -656,7 +662,7 @@ export const clientPackagesRepository = {
       );
 
       await client.query("COMMIT");
-      return rows.length ? toClientPackage(rows[0]) : null;
+      return rows.length ? await toClientPackageForSalon(rows[0]) : null;
     } catch (err) {
       await client.query("ROLLBACK");
       throw err;

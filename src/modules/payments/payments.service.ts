@@ -28,7 +28,7 @@ import pool from '../../config/database';
 import { AppError } from '../../middleware/error.middleware';
 import { assertNoBlockingPosPayment } from '../pos-payments/pos-payments.guard';
 import { posPaymentsRepository } from '../pos-payments/pos-payments.repository';
-import { getBillRoundingUnit } from '../pricing/rounding';
+import { getBillRoundingUnit, formatSalonMoney } from "../../config/currency";
 
 interface DiscountEligibleItem {
   itemId?: string;
@@ -410,7 +410,7 @@ export const paymentsService = {
                       delta: refereeWalletCredit,
                       sourceType: 'referral_welcome',
                       sourceId: data.client_id,
-                      note: `Referral welcome reward — bill below ₹${refConfig.min_bill_amount} minimum for an instant discount, credited to referral balance instead`,
+                      note: `Referral welcome reward — bill below ${await formatSalonMoney(data.salon_id, refConfig.min_bill_amount)} minimum for an instant discount, credited to referral balance instead`,
                     });
                   }
                   await clientsRepository.markRefereeRewarded(data.client_id);
@@ -1017,7 +1017,7 @@ export const paymentsService = {
           delta: -ewalletUsedActual,
           sourceType: 'payment',
           sourceId: payment.id,
-          note: `Used for ₹${ewalletUsedActual.toFixed(2)} payment`,
+          note: `Used for ${await formatSalonMoney(data.salon_id, ewalletUsedActual)} payment`,
         });
 
         // ── WhatsApp Automation: eWallet Used ──────────────────────────────
@@ -1060,7 +1060,7 @@ export const paymentsService = {
           delta: -referralCreditUsedActual,
           sourceType: 'payment',
           sourceId: payment.id,
-          note: `Used ₹${referralCreditUsedActual.toFixed(2)} referral credit for payment`,
+          note: `Used ${await formatSalonMoney(data.salon_id, referralCreditUsedActual)} referral credit for payment`,
         });
 
         // ── WhatsApp Automation: Referral Credit Used ──────────────────────
@@ -1123,7 +1123,7 @@ export const paymentsService = {
               delta: pointsEarned,
               sourceType: 'payment',
               sourceId: payment.id,
-              note: `Earned on ₹${Number(data.net_amount).toFixed(2)} payment`,
+              note: `Earned on ${await formatSalonMoney(data.salon_id, data.net_amount)} payment`,
             });
 
             // ── WhatsApp Automation: Reward Points Earned ────────────────────

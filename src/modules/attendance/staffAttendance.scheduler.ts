@@ -6,6 +6,7 @@ import { notificationsRepository } from "../notifications/notifications.reposito
 import { deviceTokensRepository } from "../notifications/deviceTokens.repository";
 import { pushNotificationService } from "../notifications/pushNotification.service";
 import { staffAttendanceState } from "./staffAttendance.service";
+import { getSalonDateLocale } from "../../config/currency";
 
 let timer: NodeJS.Timeout | null = null;
 let running = false;
@@ -44,7 +45,7 @@ export async function runAttendanceReminderSweep() {
           "SELECT id, resolved_at FROM notifications WHERE salon_id = $1 AND type = 'attendance' AND reference_id::text = $2 AND title = $3 LIMIT 1",
           [candidate.salon_id, state.staff_id, title]);
         if (existing.rows[0]?.resolved_at) continue;
-        const startLabel = new Date(state.shift_start!).toLocaleTimeString("en-IN", { timeZone: await getSalonTimezone(candidate.salon_id), hour: "2-digit", minute: "2-digit" });
+        const startLabel = new Date(state.shift_start!).toLocaleTimeString(await getSalonDateLocale(candidate.salon_id), { timeZone: await getSalonTimezone(candidate.salon_id), hour: "2-digit", minute: "2-digit" });
         const body = `Your shift started at ${startLabel}. Open SalonOX and check in.`;
         const notification = existing.rows[0] ?? await notificationsRepository.create({
           salon_id: candidate.salon_id, reference_id: state.staff_id, type: "attendance", title, body,

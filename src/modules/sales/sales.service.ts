@@ -16,6 +16,7 @@ import { clientMembershipsService } from "../client-memberships/client-membershi
 import { sendPurchaseReceipt } from "./receipt-send.helper";
 import { clientPackagesService } from "../client-packages/client-packages.service";
 import { stockLedgerService } from "../inventory/stock-ledger.service";
+import { formatSalonMoney } from "../../config/currency";
 
 export const salesService = {
 
@@ -41,7 +42,7 @@ export const salesService = {
             type:     "payment",
             appointment_id: sale.appointment_id ?? undefined,
             title:    "New Sale Created",
-            body:     `${(sale as any).client_name ?? "Walk-in"} — ₹${sale.total_amount ?? 0}`,
+            body:     `${(sale as any).client_name ?? "Walk-in"} — ${await formatSalonMoney(sale.salon_id, sale.total_amount ?? 0)}`,
             event_key: "newPayment",
         }).catch((err: any) => {
             logger.error("New sale notification failed", {

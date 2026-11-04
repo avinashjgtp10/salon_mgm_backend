@@ -1,6 +1,7 @@
 import { DEFAULT_SALON_TIMEZONE } from "../../config/salonTimezone";
-import { formatDocumentMoney } from "../../config/documentMoney";
+import { formatMoney } from "../../config/currency";
 import { PayrollPayment } from "./payroll.types";
+import { dateLocale } from "../../config/currency";
 
 // Payment Receipt — confirms the salary was actually paid (payment date,
 // method, amount, reference), distinct from the Salary Slip's calculation
@@ -16,10 +17,10 @@ export function buildPayrollReceiptHtml(params: {
     netSalary: number;
 }): string {
     const { salon, staffName, staffDesignation, periodLabel, documentId, payment, netSalary } = params;
-    const fmt = (n: number) => formatDocumentMoney(n, salon.currency);
+    const fmt = (n: number) => formatMoney(n, salon.currency);
     const salonName = salon.business_name || "Salon";
-    const paymentDate = new Date(payment.paid_at).toLocaleDateString("en-IN", { timeZone: salon.timezone || DEFAULT_SALON_TIMEZONE, year: "numeric", month: "long", day: "numeric" });
-    const generatedOn = new Date().toLocaleDateString("en-IN", { timeZone: salon.timezone || DEFAULT_SALON_TIMEZONE, year: "numeric", month: "long", day: "numeric" });
+    const paymentDate = new Date(payment.paid_at).toLocaleDateString(dateLocale(salon.currency), { timeZone: salon.timezone || DEFAULT_SALON_TIMEZONE, year: "numeric", month: "long", day: "numeric" });
+    const generatedOn = new Date().toLocaleDateString(dateLocale(salon.currency), { timeZone: salon.timezone || DEFAULT_SALON_TIMEZONE, year: "numeric", month: "long", day: "numeric" });
     const paymentMethodLabel = payment.payment_method.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 
     const row = (label: string, value: string) => `

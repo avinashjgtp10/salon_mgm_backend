@@ -1,6 +1,7 @@
 import { DEFAULT_SALON_TIMEZONE } from "../../config/salonTimezone";
-import { formatDocumentMoney } from "../../config/documentMoney";
+import { formatMoney } from "../../config/currency";
 import { StaffPayrollSummary } from "./payroll.types";
+import { dateLocale } from "../../config/currency";
 
 // Salary Slip — the calculation breakdown only (Basic/Commission/Tips/Bonus/
 // Deductions -> Net Salary). Available for a period whether or not it has
@@ -17,9 +18,9 @@ export function buildPayrollSlipHtml(params: {
     summary: StaffPayrollSummary;
 }): string {
     const { salon, staffName, staffDesignation, periodLabel, documentId, summary } = params;
-    const fmt = (n: number) => formatDocumentMoney(n, salon.currency);
+    const fmt = (n: number) => formatMoney(n, salon.currency);
     const salonName = salon.business_name || "Salon";
-    const generatedOn = new Date().toLocaleDateString("en-IN", { timeZone: salon.timezone || DEFAULT_SALON_TIMEZONE, year: "numeric", month: "long", day: "numeric" });
+    const generatedOn = new Date().toLocaleDateString(dateLocale(salon.currency), { timeZone: salon.timezone || DEFAULT_SALON_TIMEZONE, year: "numeric", month: "long", day: "numeric" });
 
     const row = (label: string, value: string, bold = false, color = "#111827") => `
       <tr>

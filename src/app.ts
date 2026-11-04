@@ -99,6 +99,7 @@ import mediaRoutes from "./modules/media/media.routes";
 import { emailService } from "./modules/utils/email.service";
 import swaggerUi from "swagger-ui-express";
 import path from "path";
+import { dateLocale } from "./config/currency";
 
 // ── Subscription gate ──────────────────────────────────────────────────────────
 //import { subscriptionMiddleware } from "./middleware/subscription.middleware";
@@ -240,8 +241,8 @@ app.get("/api/v1/test-email", async (_req, res) => {
       salonName:     "Test Salon",
       clientName:    "Test Client",
       services:      "Haircut, Styling",
-      date:          new Date().toLocaleDateString("en-IN"),
-      time:          new Date().toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" }),
+      date:          new Date().toLocaleDateString(dateLocale()),
+      time:          new Date().toLocaleTimeString(dateLocale(), { hour: "2-digit", minute: "2-digit" }),
       appointmentId: "TEST-001",
     });
     logger.info("[test-email] Test email sent successfully to", testTo);

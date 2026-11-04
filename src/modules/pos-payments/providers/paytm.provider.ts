@@ -14,7 +14,7 @@ import {
   NormalizedWebhookEvent,
 } from './provider.types';
 import { ProviderCredentials } from './provider.types';
-import { formatPaytmDateTime, fromPaise, toPaise, toPaytmMerchantTxnId } from './paytm.helpers';
+import { formatPaytmDateTime, fromPaise, toPaise, toPaytmMerchantTxnId, PAYTM_CURRENCY } from './paytm.helpers';
 import { PosPaymentMode } from '../pos-payments.types';
 
 export type PaytmCredentials = {
@@ -346,8 +346,8 @@ export class PaytmProvider implements PaymentProvider {
     // which device picks it up. It's the TID printed on the machine's own
     // info screen (Settings → POS / Payment Machine → terminal's TID).
     const paytmTid = this.requireTid(params.terminalProviderId, 'payment request');
-    if (params.currency && params.currency.toUpperCase() !== 'INR') {
-      throw new Error(`Paytm EDC only supports INR (got ${params.currency})`);
+    if (params.currency && params.currency.toUpperCase() !== PAYTM_CURRENCY) {
+      throw new Error(`Paytm EDC only supports ${PAYTM_CURRENCY} (got ${params.currency})`);
     }
     const merchantTransactionId = toPaytmMerchantTxnId(params.reference);
     const { signed, body } = buildSaleParams({
@@ -538,7 +538,7 @@ export class PaytmProvider implements PaymentProvider {
     return {
       ok,
       message: ok
-        ? `${mode}: ${summary} This doesn't check that the machine is switched on — do a ₹1 test payment to confirm.`
+        ? `${mode}: ${summary} This doesn't check that the machine is switched on — do a minimal test payment to confirm.`
         : `${mode}: ${summary}`,
     };
   }

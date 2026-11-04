@@ -1,5 +1,6 @@
 import nodemailer from "nodemailer";
 import config from "../../config/env";
+import { formatMoney, dateLocale } from "../../config/currency";
 
 export const transporter = nodemailer.createTransport({
   host: config.smtp.host,
@@ -23,7 +24,7 @@ const escapeHtml = (value: string | null | undefined) =>
 const formatDateTime = (value: string | undefined) => {
   const date = value ? new Date(value) : new Date();
   if (Number.isNaN(date.getTime())) return escapeHtml(value);
-  return date.toLocaleString("en-IN", {
+  return date.toLocaleString(dateLocale(), {
     dateStyle: "medium",
     timeStyle: "short",
     timeZone: "Asia/Kolkata",
@@ -892,8 +893,10 @@ export const emailService = {
     salonName: string;
     services: string;
     amount: string;
+    /** The salon's currency (salons.currency) — the amount is printed in it. */
+    currency?: string | null;
   }) {
-    const { to, clientName, salonName, services, amount } = params;
+    const { to, clientName, salonName, services, amount, currency } = params;
     await transporter.sendMail({
       from: config.smtp.from,
       to,
@@ -921,7 +924,7 @@ export const emailService = {
                       <tr>
                         <td style="padding:20px 24px;">
                           <p style="margin:0 0 8px;color:#15803d;font-size:14px;"><strong>Services:</strong> ${escapeHtml(services)}</p>
-                          <p style="margin:0;color:#15803d;font-size:16px;font-weight:700;"><strong>Total:</strong> ₹${escapeHtml(amount)}</p>
+                          <p style="margin:0;color:#15803d;font-size:16px;font-weight:700;"><strong>Total:</strong> ${escapeHtml(formatMoney(amount, currency))}</p>
                         </td>
                       </tr>
                     </table>
@@ -947,14 +950,16 @@ export const emailService = {
     salonName: string;
     clientName: string;
     amount: string;
+    /** The salon's currency (salons.currency) — the amount is printed in it. */
+    currency?: string | null;
     paymentMethod: string;
     invoiceId: string;
   }) {
-    const { to, salonName, clientName, amount, paymentMethod, invoiceId } = params;
+    const { to, salonName, clientName, amount, currency, paymentMethod, invoiceId } = params;
     await transporter.sendMail({
       from: config.smtp.from,
       to,
-      subject: `Payment Received — ₹${amount}`,
+      subject: `Payment Received — ${formatMoney(amount, currency)}`,
       html: `
         <!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"/></head>
         <body style="margin:0;padding:0;background:#f4f4f7;font-family:'Segoe UI',Arial,sans-serif;">
@@ -978,7 +983,7 @@ export const emailService = {
                       <tr>
                         <td style="padding:20px 24px;">
                           <p style="margin:0 0 8px;color:#111827;font-size:14px;"><strong>Client:</strong> ${escapeHtml(clientName)}</p>
-                          <p style="margin:0 0 8px;color:#111827;font-size:20px;font-weight:800;color:#16a34a;">₹${escapeHtml(amount)}</p>
+                          <p style="margin:0 0 8px;color:#111827;font-size:20px;font-weight:800;color:#16a34a;">${escapeHtml(formatMoney(amount, currency))}</p>
                           <p style="margin:0 0 8px;color:#111827;font-size:14px;"><strong>Method:</strong> ${escapeHtml(paymentMethod)}</p>
                           <p style="margin:0;color:#6b7280;font-size:12px;">Invoice: ${escapeHtml(invoiceId)}</p>
                         </td>
@@ -1268,6 +1273,8 @@ export const emailService = {
 
   async sendDailySummaryEmail(params: {
     to: string;
+    /** The salon's currency (salons.currency) — every amount is printed in it. */
+    currency?: string | null;
     summary?: {
       openingBalance?: number;
       cashRevenue?: number;
@@ -1281,7 +1288,7 @@ export const emailService = {
     };
   }) {
     const { to, summary = {} } = params;
-    const formatINR = (val: number = 0) => `₹${Number(val || 0).toLocaleString("en-IN", { minimumFractionDigits: 2 })}`;
+    const formatAmount = (val: number = 0) => formatMoney(val, params.currency);
 
     const recAmt = summary.reconciliationAmount ?? 0;
     const reconciliationBg = recAmt === 0 ? "#f0fdf4" : recAmt > 0 ? "#f0f9ff" : "#fef2f2";
@@ -1293,7 +1300,7 @@ export const emailService = {
     await transporter.sendMail({
       from: config.smtp.from,
       to,
-      subject: `Daily Salon Cash Summary - ${new Date().toLocaleDateString("en-IN")}`,
+      subject: `Daily Salon Cash Summary - ${new Date().toLocaleDateString(dateLocale(params.currency))}`,
       html: `
         <!DOCTYPE html>
         <html lang="en">
@@ -1315,7 +1322,7 @@ export const emailService = {
                       Daily Counter Summary Report
                     </h1>
                     <p style="margin:6px 0 0;color:rgba(255,255,255,0.85);font-size:14px;">
-                      ${new Date().toLocaleDateString("en-IN", { weekday: "long", year: "numeric", month: "long", day: "numeric" })}
+                      ${new Date().toLocaleDateString(dateLocale(params.currency), { weekday: "long", year: "numeric", month: "long", day: "numeric" })}
                     </p>
                   </td>
                 </tr>
@@ -1337,7 +1344,7 @@ export const emailService = {
                             <tr>
                               <td>
                                 <span style="font-size:11px;text-transform:uppercase;font-weight:700;color:#64748b;letter-spacing:0.5px;display:block;margin-bottom:6px;">Opening Balance</span>
-                                <div style="font-size:20px;font-weight:800;color:#1e293b;">${formatINR(summary.openingBalance)}</div>
+                                <div style="font-size:20px;font-weight:800;color:#1e293b;">${formatAmount(summary.openingBalance)}</div>
                               </td>
                             </tr>
                           </table>
@@ -1349,7 +1356,7 @@ export const emailService = {
                             <tr>
                               <td>
                                 <span style="font-size:11px;text-transform:uppercase;font-weight:700;color:#15803d;letter-spacing:0.5px;display:block;margin-bottom:6px;">Cash Revenue</span>
-                                <div style="font-size:20px;font-weight:800;color:#16a34a;">${formatINR(summary.cashRevenue)}</div>
+                                <div style="font-size:20px;font-weight:800;color:#16a34a;">${formatAmount(summary.cashRevenue)}</div>
                               </td>
                             </tr>
                           </table>
@@ -1364,7 +1371,7 @@ export const emailService = {
                             <tr>
                               <td>
                                 <span style="font-size:11px;text-transform:uppercase;font-weight:700;color:#b45309;letter-spacing:0.5px;display:block;margin-bottom:6px;">Cash Expense</span>
-                                <div style="font-size:20px;font-weight:800;color:#d97706;">${formatINR(summary.cashExpense)}</div>
+                                <div style="font-size:20px;font-weight:800;color:#d97706;">${formatAmount(summary.cashExpense)}</div>
                               </td>
                             </tr>
                           </table>
@@ -1376,7 +1383,7 @@ export const emailService = {
                             <tr>
                               <td>
                                 <span style="font-size:11px;text-transform:uppercase;font-weight:700;color:#4338ca;letter-spacing:0.5px;display:block;margin-bottom:6px;">Closing Balance</span>
-                                <div style="font-size:20px;font-weight:800;color:#4f46e5;">${formatINR(summary.closingBalance)}</div>
+                                <div style="font-size:20px;font-weight:800;color:#4f46e5;">${formatAmount(summary.closingBalance)}</div>
                               </td>
                             </tr>
                           </table>
@@ -1391,7 +1398,7 @@ export const emailService = {
                             <tr>
                               <td>
                                 <span style="font-size:11px;text-transform:uppercase;font-weight:700;color:#0369a1;letter-spacing:0.5px;display:block;margin-bottom:6px;">In Store Cash</span>
-                                <div style="font-size:20px;font-weight:800;color:#0284c7;">${formatINR(summary.inStoreCash)}</div>
+                                <div style="font-size:20px;font-weight:800;color:#0284c7;">${formatAmount(summary.inStoreCash)}</div>
                               </td>
                             </tr>
                           </table>
@@ -1403,7 +1410,7 @@ export const emailService = {
                             <tr>
                               <td>
                                 <span style="font-size:11px;text-transform:uppercase;font-weight:700;color:${reconciliationLabelColor};letter-spacing:0.5px;display:block;margin-bottom:6px;">Reconciliation Amount</span>
-                                <div style="font-size:20px;font-weight:800;color:${reconciliationColor};">${reconciliationPrefix}${formatINR(summary.reconciliationAmount)}</div>
+                                <div style="font-size:20px;font-weight:800;color:${reconciliationColor};">${reconciliationPrefix}${formatAmount(summary.reconciliationAmount)}</div>
                               </td>
                             </tr>
                           </table>
@@ -1420,7 +1427,7 @@ export const emailService = {
                             <tr>
                               <td>
                                 <span style="font-size:11px;text-transform:uppercase;font-weight:700;color:#5b21b6;letter-spacing:0.5px;display:block;margin-bottom:6px;">UPI Payments</span>
-                                <div style="font-size:20px;font-weight:800;color:#7c3aed;">${formatINR(summary.upiPaymentAmount)}</div>
+                                <div style="font-size:20px;font-weight:800;color:#7c3aed;">${formatAmount(summary.upiPaymentAmount)}</div>
                               </td>
                             </tr>
                           </table>
@@ -1432,7 +1439,7 @@ export const emailService = {
                             <tr>
                               <td>
                                 <span style="font-size:11px;text-transform:uppercase;font-weight:700;color:#1d4ed8;letter-spacing:0.5px;display:block;margin-bottom:6px;">Card Payments</span>
-                                <div style="font-size:20px;font-weight:800;color:#2563eb;">${formatINR(summary.cardPaymentAmount)}</div>
+                                <div style="font-size:20px;font-weight:800;color:#2563eb;">${formatAmount(summary.cardPaymentAmount)}</div>
                               </td>
                             </tr>
                           </table>
@@ -1478,11 +1485,13 @@ export const emailService = {
     salonName: string;
     periodLabel: string;
     netPay: number;
+    /** The salon's currency (salons.currency) — the net pay is printed in it. */
+    currency?: string | null;
     pdfBuffer: Buffer;
     pdfFilename: string;
   }) {
-    const { to, staffFirstName, salonName, periodLabel, netPay, pdfBuffer, pdfFilename } = params;
-    const formattedNetPay = `₹${(Number(netPay) || 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    const { to, staffFirstName, salonName, periodLabel, netPay, currency, pdfBuffer, pdfFilename } = params;
+    const formattedNetPay = formatMoney(netPay, currency);
 
     await transporter.sendMail({
       from: config.smtp.from,
@@ -1596,7 +1605,7 @@ export const emailService = {
   }) {
     const { to, developerName, reqNumber, title, salonName, priority, targetDate } = params;
     const targetDateLabel = targetDate
-      ? new Date(targetDate).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })
+      ? new Date(targetDate).toLocaleDateString(dateLocale(), { day: "2-digit", month: "short", year: "numeric" })
       : null;
 
     const infoRows: [string, string][] = [

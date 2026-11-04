@@ -23,7 +23,7 @@ export const validateCampaign = (req: Request, _res: Response, next: NextFunctio
     try {
         const b = req.body ?? {};
         if (typeof b.brief !== "string" || b.brief.trim().length < 8) {
-            throw new AppError(400, "Describe the campaign in a few words, e.g. 'Diwali offer for Hair Spa at ₹999'.", "VALIDATION_ERROR");
+            throw new AppError(400, "Describe the campaign in a few words, e.g. 'Festive offer for Hair Spa this week'.", "VALIDATION_ERROR");
         }
         if (b.brief.length > 500) {
             throw new AppError(400, "brief is too long (max 500 characters)", "VALIDATION_ERROR");

@@ -146,6 +146,7 @@ import {
     CashManagementChartFilters,
     CashManagementFiltersAvailable,
 } from "./reports.types";
+import { formatSalonMoney, getSalonMoneyFormatter, getSalonDateLocale } from "../../config/currency";
 
 // ─── WhatsApp message delivery states ────────────────────────────────────────
 // Single source of truth for what each state MEANS, shared by the WA Marketing
@@ -18915,7 +18916,7 @@ async getAppointmentCards(
     { title: "Online Bookings", value: String(row.online_bookings ?? 0), trend: "", color: "teal", icon: "globe" },
     {
       title: "Average Booking Value",
-      value: `₹ ${Number(row.average_booking_value ?? 0).toLocaleString("en-IN", { maximumFractionDigits: 0 })}`,
+      value: await formatSalonMoney(salonId, row.average_booking_value ?? 0, { decimals: 0 }),
       trend: "",
       color: "secondary",
       icon: "rupee-sign",
@@ -20403,9 +20404,9 @@ async getGuestCollectionReport(
     ? ((currentCollection - previousCollection) / previousCollection) * 100
     : 0;
 
-  const formatCurrency = (value: number) => `₹ ${Math.round(value).toLocaleString("en-IN")}`;
+  const formatCurrency = await getSalonMoneyFormatter(salonId, { decimals: 0 });
   const formatTrend = (value: number) => `${value >= 0 ? "+" : ""}${value.toFixed(1)}%`;
-  const formatDisplayCurrency = (value: number) => `₹ ${Math.round(value).toLocaleString("en-IN")}`;
+  const formatDisplayCurrency = formatCurrency;
 
   return {
     cards: [
@@ -20873,9 +20874,10 @@ async getStaffAttendanceReport(
     if (m > 0 || h === 0) parts.push(`${m} min`);
     return parts.join(" ");
   };
+  const attendanceLocale = await getSalonDateLocale(salonId);
   const formatTime = (value: string | null) => {
     if (!value) return "-";
-    return new Date(value).toLocaleTimeString("en-IN", {
+    return new Date(value).toLocaleTimeString(attendanceLocale, {
       hour: "2-digit",
       minute: "2-digit",
       hour12: true,
@@ -21066,8 +21068,7 @@ async getDayWiseCards(
       ? Number(row.previous_revenue ?? 0) / Number(row.previous_invoice_count ?? 1)
       : 0;
 
-  const formatCurrency = (value: number) =>
-    `₹ ${Math.round(value).toLocaleString("en-IN")}`;
+  const formatCurrency = await getSalonMoneyFormatter(salonId, { decimals: 0 });
 
   return [
     {
@@ -21327,8 +21328,7 @@ async getDayWiseAnalytics(
   );
 
   const row = rows[0] ?? {};
-  const formatCurrency = (value: number) =>
-    `₹ ${Math.round(value).toLocaleString("en-IN")}`;
+  const formatCurrency = await getSalonMoneyFormatter(salonId, { decimals: 0 });
 
   return [
     {
@@ -21574,8 +21574,7 @@ async getCouponRedemptionCards(
 
   const row = rows[0] ?? {};
 
-  const formatCurrency = (value: number) =>
-    `₹ ${Math.round(value).toLocaleString("en-IN")}`;
+  const formatCurrency = await getSalonMoneyFormatter(salonId, { decimals: 0 });
 
   return [
     {
@@ -21745,8 +21744,7 @@ async getCouponRedemptionAnalytics(
   );
 
   const row = rows[0] ?? {};
-  const formatCurrency = (value: number) =>
-    `₹ ${Math.round(value).toLocaleString("en-IN")}`;
+  const formatCurrency = await getSalonMoneyFormatter(salonId, { decimals: 0 });
 
   return [
     {
@@ -22363,8 +22361,7 @@ async getBalanceReceivedReport(
   const limit = tableRowsResult.rows.length;
   const totalPages = totalTableRows > 0 ? 1 : 0;
 
-  const formatCurrency = (value: number) =>
-    `₹ ${Math.round(value).toLocaleString("en-IN")}`;
+  const formatCurrency = await getSalonMoneyFormatter(salonId, { decimals: 0 });
 
   const formatPercent = (value: number) =>
     `${value >= 0 ? "+" : ""}${value.toFixed(1)}%`;

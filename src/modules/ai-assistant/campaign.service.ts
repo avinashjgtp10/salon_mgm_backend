@@ -11,6 +11,7 @@ import { loadLogo } from "./poster.assets";
 import { llmClient } from "./llm.client";
 import { requireSalonAiCredentials } from "../ai-credentials/ai-credentials.service";
 import { AssistantUser } from "./ai-assistant.types";
+import { formatMoney } from "../../config/currency";
 
 export type CampaignCopy = {
     headline: string;
@@ -97,7 +98,7 @@ Use ONLY facts stated in the manager's brief (service, price, discount, dates, o
 Return JSON only:
 {"headline": "max 5 words, shown on the poster",
  "offer_pre": "optional tiny word above the offer, max 2 words, e.g. FLAT or ONLY (empty string if not natural)",
- "offer_main": "the big offer, max 3 words, exactly as the brief states it, e.g. 20% OFF or ₹999. If the brief states NO price or discount, use a short generic phrase such as SPECIAL OFFER or FESTIVE OFFERS — never invent a number",
+ "offer_main": "the big offer, max 3 words, exactly as the brief states it, e.g. 20% OFF or ${formatMoney(999, salon.currency, { decimals: 0 })}. If the brief states NO price or discount, use a short generic phrase such as SPECIAL OFFER or FESTIVE OFFERS — never invent a number",
  "offer_post": "optional line under the offer, max 6 words, e.g. ON ALL HAIR SERVICES (empty string if not needed)",
  "validity": "dates or validity period ONLY if the brief states them, e.g. Valid 1 Oct – 31 Oct, otherwise null",
  "cta": "max 4 words, e.g. Book Now",

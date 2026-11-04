@@ -329,6 +329,7 @@ export const payrollService = {
                 salonName: salon.business_name,
                 periodLabel,
                 netPay: summary.net_salary,
+                currency: salon.currency,
                 pdfBuffer,
                 pdfFilename,
             });

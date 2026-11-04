@@ -17,6 +17,7 @@ import crypto from "crypto";
 import axios from "axios";
 import redis from "../../config/redis";
 import type { GoogleOAuthProfile, GoogleStatePayload } from "./auth.types";
+import { getSalonDateLocale } from "../../config/currency";
 
 
 const ACCESS_SECRET: Secret = process.env.JWT_ACCESS_SECRET || "";
@@ -201,7 +202,7 @@ export const authService = {
           if (!allowed) { return; }
           const salon = await salonsRepository.findById(salonId);
           const staffName = [user.first_name, user.last_name].filter(Boolean).join(" ") || email;
-          const loginTime = new Date().toLocaleString("en-IN", { timeZone: await getSalonTimezone(salonId), dateStyle: "medium", timeStyle: "short" });
+          const loginTime = new Date().toLocaleString(await getSalonDateLocale(salonId), { timeZone: await getSalonTimezone(salonId), dateStyle: "medium", timeStyle: "short" });
           await emailService.sendStaffLoginEmail({
             to:         ownerEmail,
             salonName:  salon?.business_name ?? "your salon",
