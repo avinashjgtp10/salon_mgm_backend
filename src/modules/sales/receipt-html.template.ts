@@ -1,11 +1,12 @@
 import { Sale, SaleItem, TipBreakdownEntry } from "./sales.types";
 import { formatSalonPhones } from "../salons/salon-phones";
 import { DEFAULT_SALON_TIMEZONE } from "../../config/salonTimezone";
-import { formatMoney } from "../../config/currency";
+import { formatMoney, dateLocale } from "../../config/currency";
+import { languageDateLocale, languageDir, normalizeLanguage } from "../../config/language";
+import { translator } from "../../config/i18n";
 import { TaxBreakdownEntry } from "../payments/payments.types";
 import config from "../../config/env";
 import { docTaxLabels } from "../../config/taxLabels";
-import { dateLocale } from "../../config/currency";
 
 // Ported from the dashboard's ViewBillModal.tsx `printReceipt()` — same visual
 // invoice staff see when they print/save a bill from the Calendar, adapted
@@ -28,6 +29,8 @@ export function buildReceiptHtml(params: {
         timezone?: string | null;
         currency?: string | null;
         country?: string | null;
+        /** salons.language — the language the receipt is written in. */
+        language?: string | null;
     };
     salonAddress: string | null;
     client: {
@@ -70,7 +73,13 @@ export function buildReceiptHtml(params: {
 
     const findStaffName = (id: string | null) => (id && staffNames[id]) || "";
 
-    const salonName = salon.business_name || "Salon";
+    const lang = normalizeLanguage(salon.language);
+    const tr = translator(lang);
+    const dir = languageDir(lang);
+    // A language other than English writes dates in that language; English keeps the currency's format.
+    const dLoc = languageDateLocale(lang) ?? dateLocale(salon.currency);
+
+    const salonName = salon.business_name || tr("receipt.salonFallback");
     const salonPhone = formatSalonPhones(salon);   // main number + additional business numbers
     const salonEmail = salon.email || "";
     const salonWebsite = salon.website_url || "";
@@ -94,15 +103,15 @@ export function buildReceiptHtml(params: {
     const taxL = docTaxLabels(salon.country);
     const IST = salon.timezone || DEFAULT_SALON_TIMEZONE;
     const now = new Date();
-    const printDate = now.toLocaleDateString(dateLocale(salon.currency), { timeZone: IST, year: "numeric", month: "long", day: "numeric" });
-    const printTime = now.toLocaleTimeString(dateLocale(salon.currency), { timeZone: IST, hour: "2-digit", minute: "2-digit" });
-    const invoiceNo = sale.invoice_number ?? "Not billed yet";
+    const printDate = now.toLocaleDateString(dLoc, { timeZone: IST, year: "numeric", month: "long", day: "numeric" });
+    const printTime = now.toLocaleTimeString(dLoc, { timeZone: IST, hour: "2-digit", minute: "2-digit" });
+    const invoiceNo = sale.invoice_number ?? tr("receipt.notBilled");
 
     const formatTime12 = (iso: string) =>
-        new Date(iso).toLocaleTimeString(dateLocale(salon.currency), { timeZone: IST, hour: "2-digit", minute: "2-digit", hour12: true });
+        new Date(iso).toLocaleTimeString(dLoc, { timeZone: IST, hour: "2-digit", minute: "2-digit", hour12: true });
 
     const apptDate = appointment
-        ? new Date(appointment.scheduledAt).toLocaleDateString(dateLocale(salon.currency), { timeZone: IST, year: "numeric", month: "long", day: "numeric" })
+        ? new Date(appointment.scheduledAt).toLocaleDateString(dLoc, { timeZone: IST, year: "numeric", month: "long", day: "numeric" })
         : "—";
     const apptStartTime = appointment ? formatTime12(appointment.scheduledAt) : null;
     const apptTime = appointment
@@ -114,6 +123,7 @@ export function buildReceiptHtml(params: {
     const PAY_BG: Record<string, string> = { Paid: "#dcfce7", Partial: "#ede9fe", Unpaid: "#fef3c7" };
     const payColor = PAY_COLOR[rawPs] ?? "#b45309";
     const payBg = PAY_BG[rawPs] ?? "#fef3c7";
+    const payStatusText = tr(`receipt.status.${rawPs.toLowerCase()}`);
 
     const allStaffIds = Array.from(new Set(items.map((i) => i.staff_id).filter(Boolean))) as string[];
     const allStaffDisplay = allStaffIds.map((id) => findStaffName(id)).filter(Boolean).join(", ") || "—";
@@ -139,6 +149,9 @@ export function buildReceiptHtml(params: {
         gift_card: "Gift Card",
         quick: "Quick Sale",
     };
+    // TYPE_LABEL stays English (it keys BADGE below); what is printed goes through typeText.
+    const TYPE_KEY: Record<string, string> = { service: "service", product: "product", membership: "membership", package: "package", gift_card: "giftCard", quick: "quick" };
+    const typeText = (rawType: string, fallback: string) => (TYPE_KEY[rawType] ? tr(`receipt.type.${TYPE_KEY[rawType]}`) : fallback);
     const BADGE: Record<string, [string, string]> = {
         Service: ["#ede9fe", "#5b21b6"],
         Product: ["#dbeafe", "#1d4ed8"],
@@ -150,7 +163,7 @@ export function buildReceiptHtml(params: {
     const taxBreakdown = params.taxBreakdown ?? [];
     const taxLabel = taxBreakdown.length > 0
         ? taxBreakdown.map((t) => `${t.name} ${t.rate}%`).join(" + ")
-        : "Tax";
+        : tr("receipt.tax");
 
     // Running sum of every row's gross (tax-inclusive) amount, read back by
     // the "Items Total" footer — same reconciliation the calendar print does,
@@ -173,7 +186,7 @@ export function buildReceiptHtml(params: {
       <td style="padding:8px 8px;border:1px solid #e5e7eb;text-align:center;color:#6b7280;font-size:11px">${idx + 1}</td>
       <td style="padding:8px 10px;border:1px solid #e5e7eb;font-weight:600;color:#111827;font-size:12px">${item.name}</td>
       <td style="padding:8px 8px;border:1px solid #e5e7eb;text-align:center">
-        <span style="display:inline-block;font-size:9px;font-weight:700;padding:2px 6px;border-radius:3px;background:${badgeBg};color:${badgeColor};letter-spacing:0.3px;text-transform:uppercase;-webkit-print-color-adjust:exact;print-color-adjust:exact">${type}</span>
+        <span style="display:inline-block;font-size:9px;font-weight:700;padding:2px 6px;border-radius:3px;background:${badgeBg};color:${badgeColor};letter-spacing:0.3px;text-transform:uppercase;-webkit-print-color-adjust:exact;print-color-adjust:exact">${typeText(item.item_type, type)}</span>
       </td>
       <td style="padding:8px 8px;border:1px solid #e5e7eb;text-align:center;font-size:11px;color:#374151">${findStaffName(item.staff_id) || "—"}</td>
       <td style="padding:8px 8px;border:1px solid #e5e7eb;text-align:center;font-size:11px;color:#374151">${apptStartTime || "—"}</td>
@@ -242,6 +255,9 @@ export function buildReceiptHtml(params: {
         gift_card: "Gift Card", package: "Package", membership: "Membership",
         pos_machine: "Payment Machine",
     };
+    // prettyMethod keeps English labels (split legs are told apart by them); methodText is what is printed.
+    const METHOD_KEY: Record<string, string> = { Cash: "cash", Card: "card", UPI: "upi", "E-Wallet": "ewallet", "Gift Card": "giftCard", Package: "package", Membership: "membership", "Payment Machine": "posMachine" };
+    const methodText = (label: string) => (METHOD_KEY[label] ? tr(`receipt.method.${METHOD_KEY[label]}`) : label);
     const prettyMethod = (raw: string) =>
         METHOD_LABELS[raw.trim().toLowerCase()]
         ?? raw.trim().replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
@@ -278,12 +294,12 @@ export function buildReceiptHtml(params: {
     })();
 
     const summaryRows = [
-        itemDiscountAmt > 0 ? sumRow("Items Total", fmt(itemsCatalogTotal)) : "",
-        itemDiscountAmt > 0 ? sumRow("Item Discount", `−${fmt(itemDiscountAmt)}`, false, "#dc2626") : "",
-        subtotalAmt > 0 ? sumRow("Subtotal", fmt(subtotalAmt)) : "",
-        couponDisc > 0 ? sumRow(resolvedCouponCode ? `Coupon (${resolvedCouponCode})` : "Coupon", `−${fmt(couponDisc)}`, false, "#dc2626") : "",
-        packageCoveredAmt > 0 ? sumRow("Package Covered", `−${fmt(packageCoveredAmt)}`, false, "#7c3aed") : "",
-        membershipDiscountAmt > 0 ? sumRow("Membership Discount", `−${fmt(membershipDiscountAmt)}`, false, "#dc2626") : "",
+        itemDiscountAmt > 0 ? sumRow(tr("receipt.itemsTotal"), fmt(itemsCatalogTotal)) : "",
+        itemDiscountAmt > 0 ? sumRow(tr("receipt.itemDiscount"), `−${fmt(itemDiscountAmt)}`, false, "#dc2626") : "",
+        subtotalAmt > 0 ? sumRow(tr("receipt.subtotal"), fmt(subtotalAmt)) : "",
+        couponDisc > 0 ? sumRow(resolvedCouponCode ? tr("receipt.couponWith", { code: resolvedCouponCode }) : tr("receipt.coupon"), `−${fmt(couponDisc)}`, false, "#dc2626") : "",
+        packageCoveredAmt > 0 ? sumRow(tr("receipt.packageCovered"), `−${fmt(packageCoveredAmt)}`, false, "#7c3aed") : "",
+        membershipDiscountAmt > 0 ? sumRow(tr("receipt.membershipDiscount"), `−${fmt(membershipDiscountAmt)}`, false, "#dc2626") : "",
         // Itemized per-tax lines (CGST/SGST/etc.) + a "Total Tax" subtotal when
         // the caller provided a real breakdown; falls back to the single
         // blended "Tax" line (sale.tax_amount) when it didn't — same fallback
@@ -293,31 +309,31 @@ export function buildReceiptHtml(params: {
             ? [
                 ...taxBreakdown
                     .filter((t) => t.amount > 0)
-                    .map((t) => sumRow(`${t.name} ${t.rate}%${t.inclusive ? " (incl.)" : ""}`, `${t.inclusive ? "" : "+"}${fmt(t.amount)}`)),
-                sumRow("Total Tax", fmt(taxBreakdown.reduce((s, t) => s + (t.amount > 0 ? t.amount : 0), 0))),
+                    .map((t) => sumRow(`${t.name} ${t.rate}%${t.inclusive ? ` ${tr("receipt.incl")}` : ""}`, `${t.inclusive ? "" : "+"}${fmt(t.amount)}`)),
+                sumRow(tr("receipt.totalTax"), fmt(taxBreakdown.reduce((s, t) => s + (t.amount > 0 ? t.amount : 0), 0))),
             ]
-            : [exclusiveTaxTotal > 0 ? sumRow("Tax", `+${fmt(exclusiveTaxTotal)}`) : ""]),
-        exCharges > 0 ? sumRow("Extra Charges", `+${fmt(exCharges)}`) : "",
-        manualDisc > 0 ? sumRow("Bill Discount", `−${fmt(manualDisc)}`, false, "#dc2626") : "",
-        referralDisc > 0 ? sumRow("Referral Discount", `−${fmt(referralDisc)}`, false, "#dc2626") : "",
-        rewardPointsValuePaid > 0 ? sumRow("Reward Points Used", `−${fmt(rewardPointsValuePaid)}`, false, "#7c3aed") : "",
-        membershipWalletUsedAmt > 0 ? sumRow("Membership Wallet Used", `−${fmt(membershipWalletUsedAmt)}`, false, "#15803d") : "",
-        ewalletUsedAmt > 0 ? sumRow("eWallet Used", `−${fmt(ewalletUsedAmt)}`, false, "#2563eb") : "",
-        referralCreditUsedAmt > 0 ? sumRow("Referral Credit Used", `−${fmt(referralCreditUsedAmt)}`, false, "#0891b2") : "",
+            : [exclusiveTaxTotal > 0 ? sumRow(tr("receipt.tax"), `+${fmt(exclusiveTaxTotal)}`) : ""]),
+        exCharges > 0 ? sumRow(tr("receipt.extraCharges"), `+${fmt(exCharges)}`) : "",
+        manualDisc > 0 ? sumRow(tr("receipt.billDiscount"), `−${fmt(manualDisc)}`, false, "#dc2626") : "",
+        referralDisc > 0 ? sumRow(tr("receipt.referralDiscount"), `−${fmt(referralDisc)}`, false, "#dc2626") : "",
+        rewardPointsValuePaid > 0 ? sumRow(tr("receipt.rewardPointsUsed"), `−${fmt(rewardPointsValuePaid)}`, false, "#7c3aed") : "",
+        membershipWalletUsedAmt > 0 ? sumRow(tr("receipt.membershipWalletUsed"), `−${fmt(membershipWalletUsedAmt)}`, false, "#15803d") : "",
+        ewalletUsedAmt > 0 ? sumRow(tr("receipt.ewalletUsed"), `−${fmt(ewalletUsedAmt)}`, false, "#2563eb") : "",
+        referralCreditUsedAmt > 0 ? sumRow(tr("receipt.referralCreditUsed"), `−${fmt(referralCreditUsedAmt)}`, false, "#0891b2") : "",
         !isPackagePaid && Math.abs(roundOff) >= 0.005
-            ? sumRow("Round Off", `${roundOff >= 0 ? "+" : "−"}${fmt(Math.abs(roundOff))}`)
+            ? sumRow(tr("receipt.roundOff"), `${roundOff >= 0 ? "+" : "−"}${fmt(Math.abs(roundOff))}`)
             : "",
-        sumRow("Grand Total", fmt(grandTotal), true, "#111827", true),
-        sumRow("Amount to Pay", fmt(grandTotal), true, "#111827"),
-        tipAmt > 0 ? sumRow("Staff Tip (included above)", fmt(tipAmt), false, "#6b7280") : "",
+        sumRow(tr("receipt.grandTotal"), fmt(grandTotal), true, "#111827", true),
+        sumRow(tr("receipt.amountToPay"), fmt(grandTotal), true, "#111827"),
+        tipAmt > 0 ? sumRow(tr("receipt.staffTipIncluded"), fmt(tipAmt), false, "#6b7280") : "",
         tipAmt > 0 ? tipBreakdown.map((t) => sumRow(`&nbsp;&nbsp;&nbsp;${t.staff_name}`, fmt(Number(t.amount) || 0), false, "#9ca3af")).join("") : "",
         splitLegs.length > 0
-            ? splitLegs.map((leg) => sumRow(`Paid via ${leg.label}`, fmt(leg.amount), false, "#111827")).join("")
+            ? splitLegs.map((leg) => sumRow(tr("receipt.paidVia", { method: methodText(leg.label) }), fmt(leg.amount), false, "#111827")).join("")
             : "",
         paidAmount > 0
-            ? sumRow(splitLegs.length > 1 ? "Total Amount Paid" : "Amount Paid", fmt(paidAmount), false, "#15803d")
+            ? sumRow(splitLegs.length > 1 ? tr("receipt.totalAmountPaid") : tr("receipt.amountPaid"), fmt(paidAmount), false, "#15803d")
             : "",
-        dueAmount > 0 ? sumRow("Balance Due", fmt(dueAmount), true, "#dc2626") : "",
+        dueAmount > 0 ? sumRow(tr("receipt.balanceDue"), fmt(dueAmount), true, "#dc2626") : "",
     ]
         .filter(Boolean)
         .join("");
@@ -331,18 +347,27 @@ export function buildReceiptHtml(params: {
     const fmtDate = (raw: string | null) => {
         if (!raw) return "";
         const d = new Date(raw);
-        return isNaN(d.getTime()) ? "" : d.toLocaleDateString(dateLocale(salon.currency), { timeZone: IST, year: "numeric", month: "short", day: "2-digit" });
+        return isNaN(d.getTime()) ? "" : d.toLocaleDateString(dLoc, { timeZone: IST, year: "numeric", month: "short", day: "2-digit" });
     };
     const primaryMembershipName = activeMemberships[0]?.membershipName || "";
     const clientGst = client.gst_number || "";
     const referralCode = client.referral_code || null;
     const referralEarnings = client.referral_earnings ?? null;
 
+    // Mirrors the few rules that name a side; rows built with flex/grid/table follow dir="rtl" by themselves.
+    const RTL_A4_CSS = [
+        "html[dir=rtl] .inv-title-block,html[dir=rtl] .inv-footer-right{text-align:left}",
+        "html[dir=rtl] .inv-meta-table td{text-align:left;padding:2px 16px 2px 0}",
+        "html[dir=rtl] .inv-meta-table td:first-child{text-align:right;padding-right:0}",
+        "html[dir=rtl] .inv-info-col+.inv-info-col{border-left:0;border-right:1px solid #e5e7eb}",
+        "html[dir=rtl] table.inv-table thead th:nth-child(2){text-align:right}",
+    ].join("\n");
+
     const a4Html = `<!DOCTYPE html>
-<html lang="en">
+<html lang="${lang}" dir="${dir}">
 <head>
 <meta charset="UTF-8">
-<title>Invoice ${invoiceNo} — ${salonName}</title>
+<title>${tr("receipt.titleInvoice", { no: String(invoiceNo), name: salonName })}</title>
 <style>
   *{box-sizing:border-box;margin:0;padding:0}
   body{font-family:'Segoe UI',Helvetica,Arial,sans-serif;font-size:12px;color:#111827;background:#fff}
@@ -395,6 +420,7 @@ export function buildReceiptHtml(params: {
   .inv-footer-left{font-size:12px;color:#111827}
   .inv-footer-left strong{font-size:13px;font-weight:800}
   .inv-footer-right{font-size:10px;color:#6b7280;text-align:right;line-height:1.8}
+${dir === "rtl" ? RTL_A4_CSS : ""}
 </style>
 </head>
 <body>
@@ -408,7 +434,7 @@ export function buildReceiptHtml(params: {
         <div class="inv-salon-name">${salonName}</div>
         <div class="inv-salon-meta">
           ${salonAddress ? `<span>${salonAddress}</span>` : ""}
-          ${salonPhone ? `<span>Ph: ${salonPhone}</span>` : ""}
+          ${salonPhone ? `<span>${tr("receipt.phoneAbbr", { phone: salonPhone })}</span>` : ""}
           ${salonEmail ? `<span>${salonEmail}</span>` : ""}
           ${salonWebsite ? `<span>${salonWebsite}</span>` : ""}
           ${gst ? `<span>${taxL.taxIdLabel}: ${gst}</span>` : ""}
@@ -416,58 +442,60 @@ export function buildReceiptHtml(params: {
       </div>
     </div>
     <div class="inv-title-block">
-      <div class="inv-title-word">${taxL.isVat && gst ? "Tax Invoice" : "Invoice"}</div>
+      <div class="inv-title-word">${taxL.isVat && gst ? tr("receipt.taxInvoice") : tr("receipt.invoice")}</div>
       <table class="inv-meta-table">
-        <tr><td>Invoice No</td><td><strong>${invoiceNo}</strong></td></tr>
-        ${appointment ? `<tr><td>Booking #</td><td>${appointment.id.slice(0, 8).toUpperCase()}</td></tr>` : ""}
-        <tr><td>Date</td><td>${printDate}</td></tr>
-        <tr><td>Time</td><td>${printTime}</td></tr>
+        <tr><td>${tr("receipt.invoiceNo")}</td><td><strong>${invoiceNo}</strong></td></tr>
+        ${appointment ? `<tr><td>${tr("receipt.bookingNo")}</td><td>${appointment.id.slice(0, 8).toUpperCase()}</td></tr>` : ""}
+        <tr><td>${tr("receipt.date")}</td><td>${printDate}</td></tr>
+        <tr><td>${tr("receipt.time")}</td><td>${printTime}</td></tr>
       </table>
     </div>
   </div>
 
   <div class="inv-info">
     <div class="inv-info-col">
-      <div class="inv-section-label">Bill To</div>
+      <div class="inv-section-label">${tr("receipt.billTo")}</div>
       <div class="inv-info-grid">
-        ${infoCell("Name", client.name || "Walk-In")}
-        ${infoCell("Phone", client.phone || "—")}
-        ${infoCell("Email", client.email || "—")}
+        ${infoCell(tr("receipt.name"), client.name || tr("receipt.walkIn"))}
+        ${infoCell(tr("receipt.phone"), client.phone || "—")}
+        ${infoCell(tr("receipt.email"), client.email || "—")}
         ${clientGst ? infoCell(taxL.clientTaxIdLabel, clientGst) : ""}
-        ${primaryMembershipName ? infoCell("Membership", primaryMembershipName) : ""}
-        ${referralCode ? infoCell("Your Referral Code", referralCode) : ""}
-        ${referralEarnings !== null ? infoCell("Referral Earnings", fmt(Number(referralEarnings))) : ""}
+        ${primaryMembershipName ? infoCell(tr("receipt.membership"), primaryMembershipName) : ""}
+        ${referralCode ? infoCell(tr("receipt.yourReferralCode"), referralCode) : ""}
+        ${referralEarnings !== null ? infoCell(tr("receipt.referralEarnings"), fmt(Number(referralEarnings))) : ""}
       </div>
     </div>
     <div class="inv-info-col">
-      <div class="inv-section-label">Appointment Details</div>
+      <div class="inv-section-label">${tr("receipt.apptDetails")}</div>
       <div class="inv-info-grid">
-        ${infoCell("Date", apptDate)}
-        ${infoCell("Time", apptTime)}
-        ${infoCell("Staff", allStaffDisplay)}
-        ${infoCell("Payment Method", splitLegs.length > 0
-            ? splitLegs.map((leg) => leg.label).join(" + ").toUpperCase()
-            : (sale.payment_method ?? "—").toUpperCase())}
-        ${infoCell("Booking Status", appointment?.status ?? "Completed")}
-        ${infoCell("Payment Status", `<span class="pay-badge" style="background:${payBg};color:${payColor}">${rawPs}</span>`)}
+        ${infoCell(tr("receipt.date"), apptDate)}
+        ${infoCell(tr("receipt.time"), apptTime)}
+        ${infoCell(tr("receipt.staff"), allStaffDisplay)}
+        ${infoCell(tr("receipt.paymentMethod"), splitLegs.length > 0
+            ? splitLegs.map((leg) => methodText(leg.label)).join(" + ").toUpperCase()
+            : lang === "en"
+                ? (sale.payment_method ?? "—").toUpperCase()
+                : (sale.payment_method ? methodText(prettyMethod(String(sale.payment_method))) : "—"))}
+        ${infoCell(tr("receipt.bookingStatus"), appointment?.status ?? "Completed")}
+        ${infoCell(tr("receipt.paymentStatus"), `<span class="pay-badge" style="background:${payBg};color:${payColor}">${payStatusText}</span>`)}
       </div>
     </div>
   </div>
 
   <div class="inv-table-section">
-    <div class="inv-section-header">Services &amp; Items</div>
+    <div class="inv-section-header">${tr("receipt.servicesItems")}</div>
     <table class="inv-table">
       <thead>
         <tr>
-          <th>#</th><th>Item Name</th><th>Type</th><th>Staff</th><th>Time</th><th>Qty</th><th>Rate</th><th>Disc.</th><th>Tax</th><th>Amount</th>
+          <th>#</th><th>${tr("receipt.col.itemName")}</th><th>${tr("receipt.col.type")}</th><th>${tr("receipt.col.staff")}</th><th>${tr("receipt.col.time")}</th><th>${tr("receipt.col.qty")}</th><th>${tr("receipt.col.rate")}</th><th>${tr("receipt.col.disc")}</th><th>${tr("receipt.col.tax")}</th><th>${tr("receipt.col.amount")}</th>
         </tr>
       </thead>
       <tbody>
-        ${allItemRows || `<tr><td colspan="10" style="text-align:center;padding:20px;color:#9ca3af;border:1px solid #e5e7eb">No items</td></tr>`}
+        ${allItemRows || `<tr><td colspan="10" style="text-align:center;padding:20px;color:#9ca3af;border:1px solid #e5e7eb">${tr("receipt.noItems")}</td></tr>`}
       </tbody>
       <tfoot>
         <tr>
-          <td colspan="9" style="text-align:right;padding:8px 12px;font-size:11px;color:#374151">Items Total</td>
+          <td colspan="9" style="text-align:right;padding:8px 12px;font-size:11px;color:#374151">${tr("receipt.itemsTotal")}</td>
           <td style="text-align:right;padding:8px 12px;font-weight:700;color:#111827">${fmt(grossItemsTotal)}</td>
         </tr>
       </tfoot>
@@ -476,12 +504,12 @@ export function buildReceiptHtml(params: {
 
   <div class="inv-bottom">
     <div>
-      ${appointment?.notes ? `<div class="inv-notes"><div class="inv-notes-title">Notes</div>${appointment.notes}</div>` : ""}
-      ${activePackages.length > 0 ? `<div class="inv-notes" style="margin-top:8px"><div class="inv-notes-title">Active Packages</div>${activePackages.map((p) => `${p.packageName} — ${p.remaining}/${p.total} sessions left`).join("<br>")}</div>` : ""}
-      ${activeMemberships.length > 0 ? `<div class="inv-notes" style="margin-top:8px"><div class="inv-notes-title">Active Memberships</div>${activeMemberships.map((m) => `${m.membershipName}${m.expiresAt ? ` — Expires: ${fmtDate(m.expiresAt)}` : ""}`).join("<br>")}</div>` : ""}
+      ${appointment?.notes ? `<div class="inv-notes"><div class="inv-notes-title">${tr("receipt.notes")}</div>${appointment.notes}</div>` : ""}
+      ${activePackages.length > 0 ? `<div class="inv-notes" style="margin-top:8px"><div class="inv-notes-title">${tr("receipt.activePackages")}</div>${activePackages.map((p) => tr("receipt.sessionsLeft", { name: p.packageName, remaining: p.remaining, total: p.total })).join("<br>")}</div>` : ""}
+      ${activeMemberships.length > 0 ? `<div class="inv-notes" style="margin-top:8px"><div class="inv-notes-title">${tr("receipt.activeMemberships")}</div>${activeMemberships.map((m) => `${m.membershipName}${m.expiresAt ? ` — ${tr("receipt.expires", { date: fmtDate(m.expiresAt) })}` : ""}`).join("<br>")}</div>` : ""}
     </div>
     <div>
-      <div style="font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:0.8px;color:#111827;margin-bottom:8px;padding-bottom:5px;border-bottom:2px solid #111827">Payment Summary</div>
+      <div style="font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:0.8px;color:#111827;margin-bottom:8px;padding-bottom:5px;border-bottom:2px solid #111827">${tr("receipt.paymentSummary")}</div>
       <table class="inv-summary-table">
         <tbody>${summaryRows}</tbody>
       </table>
@@ -490,13 +518,13 @@ export function buildReceiptHtml(params: {
 
   <div class="inv-footer">
     <div class="inv-footer-left">
-      <strong>Thank you for choosing ${salonName}!</strong><br>
-      <span style="font-size:11px;color:#6b7280">We look forward to seeing you again.</span>
+      <strong>${tr("receipt.thankYouFor", { name: salonName })}</strong><br>
+      <span style="font-size:11px;color:#6b7280">${tr("receipt.lookForward")}</span>
     </div>
     <div class="inv-footer-right">
-      This is a computer-generated receipt.<br>
-      No signature required.<br>
-      <strong style="color:#374151;font-size:11px">Powered by Salonox</strong>
+      ${tr("receipt.computerGenerated")}<br>
+      ${tr("receipt.noSignature")}<br>
+      <strong style="color:#374151;font-size:11px">${tr("receipt.poweredBy")}</strong>
     </div>
   </div>
 </div>
@@ -516,8 +544,8 @@ export function buildReceiptHtml(params: {
         .toLocaleDateString("en-GB", { timeZone: IST, day: "2-digit", month: "2-digit", year: "numeric" })
         .replace(/\//g, "-");
     const methodLabel = splitLegs.length > 0
-        ? splitLegs.map((leg) => leg.label).join(" + ")
-        : (sale.payment_method ? prettyMethod(String(sale.payment_method)) : "");
+        ? splitLegs.map((leg) => methodText(leg.label)).join(" + ")
+        : (sale.payment_method ? methodText(prettyMethod(String(sale.payment_method))) : "");
     const kvRow = (label: string, value: string) =>
         value ? `<div class="kv"><span>${esc(label)}</span><span>${esc(value)}</span></div>` : "";
 
@@ -527,7 +555,7 @@ export function buildReceiptHtml(params: {
         const staff = findStaffName(item.staff_id);
         const lineAmount = isPackagePaid ? 0 : Number(item.total_price) || 0;
         return `<tr>
-      <td class="nm">${esc(item.name)}<div class="mt"><span class="ty">${esc(typeLabel)}</span>${staff ? ` · <b>Staff: ${esc(staff)}</b>` : ""}</div></td>
+      <td class="nm">${esc(item.name)}<div class="mt"><span class="ty">${esc(typeText(rawType, typeLabel))}</span>${staff ? ` · <b>${esc(tr("receipt.staffName", { name: staff }))}</b>` : ""}</div></td>
       <td class="qt">${esc(item.quantity)}</td>
       <td class="am">${fmt(lineAmount)}</td>
     </tr>`;
@@ -535,42 +563,48 @@ export function buildReceiptHtml(params: {
 
     const lines: Array<{ label: string; value: string }> = [];
     const addLine = (label: string, value: string) => lines.push({ label, value });
-    if (itemDiscountAmt > 0) addLine("Item Discount", `−${fmt(itemDiscountAmt)}`);
-    if (subtotalAmt > 0) addLine("Subtotal", fmt(subtotalAmt));
-    if (couponDisc > 0) addLine(resolvedCouponCode ? `Coupon (${resolvedCouponCode})` : "Coupon", `−${fmt(couponDisc)}`);
-    if (packageCoveredAmt > 0) addLine("Package Covered", `−${fmt(packageCoveredAmt)}`);
-    if (membershipDiscountAmt > 0) addLine("Membership Discount", `−${fmt(membershipDiscountAmt)}`);
+    if (itemDiscountAmt > 0) addLine(tr("receipt.itemDiscount"), `−${fmt(itemDiscountAmt)}`);
+    if (subtotalAmt > 0) addLine(tr("receipt.subtotal"), fmt(subtotalAmt));
+    if (couponDisc > 0) addLine(resolvedCouponCode ? tr("receipt.couponWith", { code: resolvedCouponCode }) : tr("receipt.coupon"), `−${fmt(couponDisc)}`);
+    if (packageCoveredAmt > 0) addLine(tr("receipt.packageCovered"), `−${fmt(packageCoveredAmt)}`);
+    if (membershipDiscountAmt > 0) addLine(tr("receipt.membershipDiscount"), `−${fmt(membershipDiscountAmt)}`);
     if (taxBreakdown.length > 0) {
         taxBreakdown.filter((t) => t.amount > 0).forEach((t) =>
-            addLine(`${t.name} ${t.rate}%${t.inclusive ? " (incl.)" : ""}`, `${t.inclusive ? "" : "+"}${fmt(t.amount)}`));
+            addLine(`${t.name} ${t.rate}%${t.inclusive ? ` ${tr("receipt.incl")}` : ""}`, `${t.inclusive ? "" : "+"}${fmt(t.amount)}`));
     } else if (exclusiveTaxTotal > 0) {
-        addLine("Tax", `+${fmt(exclusiveTaxTotal)}`);
+        addLine(tr("receipt.tax"), `+${fmt(exclusiveTaxTotal)}`);
     }
-    if (exCharges > 0) addLine("Extra Charges", `+${fmt(exCharges)}`);
-    if (manualDisc > 0) addLine("Bill Discount", `−${fmt(manualDisc)}`);
-    if (referralDisc > 0) addLine("Referral Discount", `−${fmt(referralDisc)}`);
-    if (rewardPointsValuePaid > 0) addLine("Reward Points Used", `−${fmt(rewardPointsValuePaid)}`);
-    if (membershipWalletUsedAmt > 0) addLine("Membership Wallet Used", `−${fmt(membershipWalletUsedAmt)}`);
-    if (ewalletUsedAmt > 0) addLine("eWallet Used", `−${fmt(ewalletUsedAmt)}`);
-    if (referralCreditUsedAmt > 0) addLine("Referral Credit Used", `−${fmt(referralCreditUsedAmt)}`);
-    if (!isPackagePaid && Math.abs(roundOff) >= 0.005) addLine("Round Off", `${roundOff >= 0 ? "+" : "−"}${fmt(Math.abs(roundOff))}`);
-    if (tipAmt > 0) addLine("Staff Tip (incl.)", fmt(tipAmt));
+    if (exCharges > 0) addLine(tr("receipt.extraCharges"), `+${fmt(exCharges)}`);
+    if (manualDisc > 0) addLine(tr("receipt.billDiscount"), `−${fmt(manualDisc)}`);
+    if (referralDisc > 0) addLine(tr("receipt.referralDiscount"), `−${fmt(referralDisc)}`);
+    if (rewardPointsValuePaid > 0) addLine(tr("receipt.rewardPointsUsed"), `−${fmt(rewardPointsValuePaid)}`);
+    if (membershipWalletUsedAmt > 0) addLine(tr("receipt.membershipWalletUsed"), `−${fmt(membershipWalletUsedAmt)}`);
+    if (ewalletUsedAmt > 0) addLine(tr("receipt.ewalletUsed"), `−${fmt(ewalletUsedAmt)}`);
+    if (referralCreditUsedAmt > 0) addLine(tr("receipt.referralCreditUsed"), `−${fmt(referralCreditUsedAmt)}`);
+    if (!isPackagePaid && Math.abs(roundOff) >= 0.005) addLine(tr("receipt.roundOff"), `${roundOff >= 0 ? "+" : "−"}${fmt(Math.abs(roundOff))}`);
+    if (tipAmt > 0) addLine(tr("receipt.staffTipIncl"), fmt(tipAmt));
 
     const paidLines: Array<{ label: string; value: string }> = [];
-    if (splitLegs.length > 1) splitLegs.forEach((leg) => paidLines.push({ label: `Paid via ${leg.label}`, value: fmt(leg.amount) }));
-    if (paidAmount > 0) paidLines.push({ label: splitLegs.length > 1 ? "Total Paid" : "Paid", value: fmt(paidAmount) });
-    if (dueAmount > 0) paidLines.push({ label: "Balance Due", value: fmt(dueAmount) });
+    if (splitLegs.length > 1) splitLegs.forEach((leg) => paidLines.push({ label: tr("receipt.paidVia", { method: methodText(leg.label) }), value: fmt(leg.amount) }));
+    if (paidAmount > 0) paidLines.push({ label: splitLegs.length > 1 ? tr("receipt.totalPaid") : tr("receipt.paid"), value: fmt(paidAmount) });
+    if (dueAmount > 0) paidLines.push({ label: tr("receipt.balanceDue"), value: fmt(dueAmount) });
 
-    const metaLines = [salonAddress, salonPhone ? `Ph: ${salonPhone}` : "", gst ? `${taxL.taxIdLabel}: ${gst}` : ""]
+    const metaLines = [salonAddress, salonPhone ? tr("receipt.phoneAbbr", { phone: salonPhone }) : "", gst ? `${taxL.taxIdLabel}: ${gst}` : ""]
         .filter(Boolean).map((l) => `<div>${esc(l)}</div>`).join("");
     const rows2 = (rows: Array<{ label: string; value: string }>) =>
         rows.map((r) => `<div class="kv"><span>${esc(r.label)}</span><span>${esc(r.value)}</span></div>`).join("");
 
+    const RTL_NARROW_CSS = [
+        "html[dir=rtl] .kv span:last-child{text-align:left}",
+        "html[dir=rtl] table.items th{text-align:right}",
+        "html[dir=rtl] table.items th.am,html[dir=rtl] table.items td.am{text-align:left}",
+    ].join("\n");
+
     return `<!DOCTYPE html>
-<html lang="en">
+<html lang="${lang}" dir="${dir}">
 <head>
 <meta charset="UTF-8">
-<title>Receipt ${esc(invoiceNo)} — ${esc(salonName)}</title>
+<title>${esc(tr("receipt.titleReceipt", { no: String(invoiceNo), name: salonName }))}</title>
 <style id="page-style">@page{size:80mm 297mm;margin:4mm}</style>
 <style>
   *{box-sizing:border-box;margin:0;padding:0}
@@ -593,6 +627,7 @@ export function buildReceiptHtml(params: {
   .mt b{color:#222}
   .total{display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:19px;font-weight:800;border-top:2px solid #000;border-bottom:2px solid #000;padding:6px 0;margin:8px 0}
   .thanks{font-size:11.5px;margin-top:2px}
+${dir === "rtl" ? RTL_NARROW_CSS : ""}
 </style>
 </head>
 <body>
@@ -603,22 +638,22 @@ export function buildReceiptHtml(params: {
     <div class="meta">${metaLines}</div>
   </div>
   <hr class="rule">
-  ${kvRow("Invoice", String(invoiceNo))}
-  ${kvRow("Date", receiptDate)}
-  ${kvRow("Client", client.name || "Walk-In")}
-  ${kvRow("Phone", client.phone || "")}
-  ${kvRow("Payment Method", methodLabel)}
+  ${kvRow(tr("receipt.invoice"), String(invoiceNo))}
+  ${kvRow(tr("receipt.date"), receiptDate)}
+  ${kvRow(tr("receipt.client"), client.name || tr("receipt.walkIn"))}
+  ${kvRow(tr("receipt.phone"), client.phone || "")}
+  ${kvRow(tr("receipt.paymentMethod"), methodLabel)}
   <hr class="rule">
   <table class="items">
-    <thead><tr><th>Item</th><th class="qt">Qty</th><th class="am">Amount</th></tr></thead>
-    <tbody>${itemRows || `<tr><td colspan="3" class="c">No items</td></tr>`}</tbody>
+    <thead><tr><th>${tr("receipt.col.item")}</th><th class="qt">${tr("receipt.col.qty")}</th><th class="am">${tr("receipt.col.amount")}</th></tr></thead>
+    <tbody>${itemRows || `<tr><td colspan="3" class="c">${tr("receipt.noItems")}</td></tr>`}</tbody>
   </table>
   <hr class="rule">
   ${rows2(lines)}
-  <div class="total"><span>TOTAL</span><span>${fmt(grandTotal)}</span></div>
+  <div class="total"><span>${tr("receipt.total")}</span><span>${fmt(grandTotal)}</span></div>
   ${rows2(paidLines)}
   <hr class="rule">
-  <div class="c thanks">Thank You!</div>
+  <div class="c thanks">${tr("receipt.thanks")}</div>
 </div>
 <script>(function(){
   function fit(){

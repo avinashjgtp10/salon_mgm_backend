@@ -3,6 +3,7 @@
 // ============================================================
 
 import logger from "../../config/logger"
+import { getSalonLanguage } from "../../config/language"
 import config from "../../config/env"
 import { transporter } from "../utils/email.service"
 import { AutomationTriggerPayload } from "../whatsapp-automation/whatsapp-automation.types"
@@ -323,7 +324,7 @@ export const notificationChannelsService = {
 
       const subject = renderTemplate(tpl.subject ?? "", namedVars, true)
       const bodyHtml = renderTemplate(tpl.body, namedVars, true)
-      const html = renderChannelEmailHtml({ subject, bodyText: bodyHtml, salonName: namedVars.salon_name ?? "" })
+      const html = renderChannelEmailHtml({ subject, bodyText: bodyHtml, salonName: namedVars.salon_name ?? "", language: await getSalonLanguage(payload.salonId) })
 
       // Recorded as PENDING before the handoff to SMTP, then resolved in place.
       // A send that hangs or dies mid-flight then still leaves a row, instead

@@ -76,6 +76,7 @@ async function optionalProfileColumns(): Promise<Set<string>> {
 const PUBLIC_SALON_SELECT = `
     SELECT s.id, s.slug, s.description, s.city, s.state, s.country,
            s.logo_url, s.banner_url, s.currency, s.timezone,
+           COALESCE(to_jsonb(s) ->> 'language', 'en') AS language,
            COALESCE(NULLIF(s.business_name, ''), NULLIF(TRIM(CONCAT(u.first_name, ' ', COALESCE(u.last_name, ''))), '')) AS business_name,
            COALESCE(NULLIF(mp.business_phone, ''), NULLIF(s.phone, ''), u.phone) AS phone,
            COALESCE(NULLIF(s.email, ''), u.email) AS email,
