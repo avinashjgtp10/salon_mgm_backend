@@ -56,44 +56,88 @@ function normalizeAdditionalPhones(input: unknown, primary: string | null | unde
     return out;
 }
 
+// A salon signing up from a country we support (e.g. UAE) starts with that country's
+// timezone and currency instead of the India defaults — unless the body already chose its own.
+// India (and any unlisted country) is left exactly as before.
+async function applyRegionalDefaults(salon: Salon, body: { timezone?: unknown; currency?: unknown }) {
+    const regional = regionalDefaultsForCountry(salon.country);
+    if (regional && !body.timezone && !body.currency) {
+        await salonsRepository.update(salon.id, regional).catch((err) =>
+            logger.error("regional defaults failed", { salonId: salon.id, error: err?.message })
+        );
+    }
+    // UAE salons also start with a 5% VAT mapping (module off until they confirm VAT registration).
+    if (normalizeCountryCode(salon.country) === "AE") {
+        await seedUaeVatDefaults(salon.id).catch((err) =>
+            logger.error("UAE VAT defaults failed", { salonId: salon.id, error: err?.message })
+        );
+    }
+}
+
 export const salonsService = {
+    // The owner's salon, created from their registration details if it doesn't exist yet. Used when a payment arrives before
+    // onboarding, so the subscription and its invoice have a salon to belong to; onboarding later fills the same salon in
+    // (create() above). Safe to call repeatedly or concurrently: it never makes a second salon.
+    async ensureForOwner(ownerId: string): Promise<Salon | null> {
+        const existing = await salonsRepository.findByOwnerId(ownerId);
+        if (existing) return existing;
+        const registrant: any = await authRepository.findUserById(ownerId);
+        if (!registrant) return null;
+        const fullName = [registrant.first_name, registrant.last_name].filter(Boolean).join(" ").trim();
+        const name = String(registrant.business_name ?? "").trim() || fullName || "My Salon";
+        try {
+            const salon = await salonsRepository.create(ownerId, {
+                business_name: name,
+                slug: await ensureUniqueSlug(name),
+                email: registrant.email ?? undefined,
+                phone: registrant.phone ?? undefined,
+                address: registrant.address || undefined,
+                country: registrant.country || undefined,
+            } as CreateSalonBody);
+            await applyRegionalDefaults(salon, {});
+            logger.info("Salon created for owner at payment time", { ownerId, salonId: salon.id });
+            return salon;
+        } catch (e: any) {
+            // A concurrent call made it first.
+            const raced = await salonsRepository.findByOwnerId(ownerId);
+            if (raced) return raced;
+            throw e;
+        }
+    },
+
     async create(ownerId: string, body: CreateSalonBody) {
         logger.info("salonsService.create called", { ownerId });
 
+        // A salon that already exists is fine while onboarding is unfinished: it was created when the owner's payment arrived
+        // (see ensureForOwner), so onboarding fills it in. Once onboarding is complete a second create is still refused.
         const existing = await salonsRepository.findByOwnerId(ownerId);
-        if (existing) {
-            throw new AppError(409, "Salon already exists for this owner", "SALON_EXISTS");
-        }
-
-        const finalSlug = await ensureUniqueSlug(body.slug?.trim() || body.business_name);
-
         // The business address lives on the salon only. Registration collected an address/country
         // on the user row before any salon existed — carry those over so the salon starts with them
         // (anything sent in the onboarding body wins).
         const registrant = await authRepository.findUserById(ownerId);
+        if (existing && (registrant as any)?.is_onboarding_complete) {
+            throw new AppError(409, "Salon already exists for this owner", "SALON_EXISTS");
+        }
 
         try {
-            const salon = await salonsRepository.create(ownerId, {
-                ...body,
-                slug: finalSlug,
-                address: body.address || registrant?.address || undefined,
-                country: body.country || registrant?.country || undefined,
-            });
-
-            // A salon signing up from a country we support (e.g. UAE) starts with that country's
-            // timezone and currency instead of the India defaults — unless the onboarding body
-            // already chose its own. India (and any unlisted country) is left exactly as before.
-            const regional = regionalDefaultsForCountry(salon.country);
-            if (regional && !body.timezone && !body.currency) {
-                await salonsRepository.update(salon.id, regional).catch((err) =>
-                    logger.error("regional defaults failed", { salonId: salon.id, error: err?.message })
-                );
-            }
-            // UAE salons also start with a 5% VAT mapping (module off until they confirm VAT registration).
-            if (normalizeCountryCode(salon.country) === "AE") {
-                await seedUaeVatDefaults(salon.id).catch((err) =>
-                    logger.error("UAE VAT defaults failed", { salonId: salon.id, error: err?.message })
-                );
+            let salon: Salon;
+            if (existing) {
+                const wantsSlug = body.slug?.trim();
+                salon = await salonsRepository.update(existing.id, {
+                    ...body,
+                    slug: wantsSlug && wantsSlug !== existing.slug ? await ensureUniqueSlug(wantsSlug) : existing.slug,
+                    address: body.address || registrant?.address || undefined,
+                    country: body.country || registrant?.country || undefined,
+                } as UpdateSalonBody);
+            } else {
+                const finalSlug = await ensureUniqueSlug(body.slug?.trim() || body.business_name);
+                salon = await salonsRepository.create(ownerId, {
+                    ...body,
+                    slug: finalSlug,
+                    address: body.address || registrant?.address || undefined,
+                    country: body.country || registrant?.country || undefined,
+                });
+                await applyRegionalDefaults(salon, body);
             }
 
             // Anything the owner subscribed to on the plan page before this salon existed now belongs to it.

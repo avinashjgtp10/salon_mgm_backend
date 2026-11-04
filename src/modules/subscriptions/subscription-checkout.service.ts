@@ -5,6 +5,10 @@ import logger from "../../config/logger";
 import { AppError } from "../../middleware/error.middleware";
 import { getRazorpay, getRazorpayCredentials } from "../../config/razorpay";
 import { subscriptionInvoicesService } from "../subscription-invoices/subscription-invoices.service";
+// salons.service imports this file too; each only uses the other inside functions, never while loading, so the cycle is safe.
+import { salonsService } from "../salons/salons.service";
+import { salonSubscriptionService } from "../salon-subscription/salon-subscription.service";
+import { salonSubscriptionRepository } from "../salon-subscription/salon-subscription.repository";
 import { subscriptionUpgradeService } from "../subscription-upgrade/subscription-upgrade.service";
 import { salonModulesService } from "../salon-modules/salon-modules.service";
 import { tierOfPlan } from "../subscription-billing/plan-tier";
@@ -185,7 +189,7 @@ export const subscriptionCheckoutService = {
         const { rows } = await pool.query(
             `UPDATE subscriptions SET salon_id = $2, updated_at = NOW()
              WHERE user_id = $1 AND salon_id IS NULL
-             RETURNING id, status`,
+             RETURNING id, status, plan_id, razorpay_subscription_id, current_period_start, current_period_end`,
             [userId, salonId]
         );
         if (rows.some((r) => r.status === "active")) {
@@ -215,6 +219,16 @@ export const subscriptionCheckoutService = {
             await subscriptionInvoicesService.billAllUnbilledForSalon(salonId).catch((err) =>
                 logger.error("Billing attached payments failed", { salonId, error: err?.message })
             );
+            // A plan a Super Admin gave this user before the salon existed has no payment: invoice it (and email the PDF) now.
+            for (const r of rows) {
+                if (r.status !== "active" || r.razorpay_subscription_id || !r.plan_id || !r.current_period_start || !r.current_period_end) continue;
+                const plan = await salonSubscriptionRepository.findPlan(r.plan_id).catch(() => null);
+                if (plan) {
+                    await salonSubscriptionService.billAndEmailGrant(salonId, plan, new Date(r.current_period_start), new Date(r.current_period_end)).catch((err) =>
+                        logger.error("Billing the granted plan failed", { salonId, error: err?.message })
+                    );
+                }
+            }
         }
         return rows.length;
     },
@@ -411,6 +425,21 @@ export const subscriptionCheckoutService = {
         }
     },
 
+    // A subscription that was paid for before its owner had a salon: create the salon (from the registration details), attach the
+    // owner's subscriptions to it and bill them. Returns true when it did that. Does nothing for a subscription that already has a salon.
+    async ensureSalonForPaidOwner(razorpaySubscriptionId: string | undefined): Promise<boolean> {
+        if (!razorpaySubscriptionId) return false;
+        const { rows } = await pool.query(
+            `SELECT user_id FROM subscriptions WHERE razorpay_subscription_id = $1 AND salon_id IS NULL AND user_id IS NOT NULL`,
+            [razorpaySubscriptionId]
+        );
+        const userId = rows[0]?.user_id as string | undefined;
+        if (!userId) return false;
+        const salon = await salonsService.ensureForOwner(userId);
+        if (!salon) return false;
+        return (await this.attachPendingToSalon(userId, salon.id)) > 0;
+    },
+
     async applyPlanFeatures(razorpaySubscriptionId: string | undefined) {
         if (!razorpaySubscriptionId) return;
         const { rows } = await pool.query(
@@ -434,7 +463,14 @@ export const subscriptionCheckoutService = {
             await client.query("COMMIT");
             // After the commit, mail the invoice PDF to the owner (best effort, never blocks Razorpay's 200).
             const paymentId = event?.payload?.payment?.entity?.id;
-            if (result === "charged" && paymentId) subscriptionInvoicesService.emailForTransaction(paymentId).catch((err) => logger.warn("Subscription invoice email failed", { paymentId, error: err?.message }));
+            // Paid right after registration, before onboarding: give the owner their salon now so the plan attaches to it and the
+            // invoice is created (and emailed) immediately. attachPendingToSalon bills and emails the invoice itself.
+            let billedOnAttach = false;
+            if (result === "charged" || result === "activated") {
+                billedOnAttach = await this.ensureSalonForPaidOwner(event?.payload?.subscription?.entity?.id)
+                    .catch((err: any) => { logger.error("Creating the salon for a paid owner failed", { error: err?.message }); return false; });
+            }
+            if (result === "charged" && paymentId && !billedOnAttach) subscriptionInvoicesService.emailForTransaction(paymentId).catch((err) => logger.warn("Subscription invoice email failed", { paymentId, error: err?.message }));
             // A replacement subscription was just authorised: the one it replaces now stops renewing at the end of its cycle.
             // If this fails the webhook fails too, so Razorpay delivers it again (the event itself is already stored and handling it again is idempotent).
             if (result === "authenticated") await subscriptionPlanChangeService.onAuthenticated(event?.payload?.subscription?.entity?.id);

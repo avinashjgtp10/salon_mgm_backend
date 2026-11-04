@@ -8,6 +8,7 @@ import { buildInvoiceHtml, type InvoicePrintPayload } from "./invoice-html.templ
 import { amountInWords, BILLING_CYCLE_LABEL, SELLER } from "./invoice-format";
 import { subscriptionInvoicesRepository as repo, type InvoiceFilters } from "./subscription-invoices.repository";
 import { PLATFORM_BILLING_CURRENCY } from "../../config/currency";
+import { billingSchemaReady } from "../subscription-pricing/billing-schema";
 
 const num = (v: unknown) => Number(v ?? 0);
 const isoDate = (v: unknown) => (v ? new Date(v as string).toISOString() : null);
@@ -167,6 +168,7 @@ export const subscriptionInvoicesService = {
                 invoiceNo: inv.invoice_no,
                 planLabel: `${inv.plan_name ?? "Subscription"}${inv.billing_cycle ? ` (${inv.billing_cycle})` : ""}`,
                 amount: num(inv.total),
+                currency: inv.currency ?? PLATFORM_BILLING_CURRENCY,
                 pdfBuffer: pdf,
                 pdfFilename: filename,
             });
@@ -179,6 +181,37 @@ export const subscriptionInvoicesService = {
     // Used right after the webhook commits a charge.
     async emailForTransaction(transactionId: string) {
         const inv = await repo.findByTransactionId(transactionId);
-        if (inv) await this.emailInvoice(inv.id);
+        if (inv) { await this.emailInvoice(inv.id); return; }
+        await this.emailPaymentReceived(transactionId);
+    },
+
+    // A payment made before the salon exists (right after sign-up) has no invoice yet, so there is no PDF to attach. Confirm the
+    // payment straight away; the invoice PDF follows by email once onboarding creates the salon and the payment is billed.
+    // Best-effort, like the invoice email.
+    async emailPaymentReceived(transactionId: string) {
+        try {
+            const { rows } = await pool.query(
+                `SELECT p.amount::float8 AS amount, ${(await billingSchemaReady()) ? "p.currency" : "'INR'::text"} AS currency,
+                        sp.name AS plan_name, sp.billing_cycle, u.email, u.first_name
+                 FROM subscription_payments p
+                 JOIN subscriptions s ON s.id = p.subscription_id
+                 LEFT JOIN subscription_plans sp ON sp.id = s.plan_id
+                 LEFT JOIN users u ON u.id = s.user_id
+                 WHERE p.transaction_id = $1 AND p.payment_status = 'paid' AND s.salon_id IS NULL`,
+                [transactionId]
+            );
+            const p = rows[0];
+            if (!p?.email) return;
+            await emailService.sendSubscriptionPaymentReceivedEmail({
+                to: p.email,
+                name: p.first_name || "there",
+                planLabel: `${p.plan_name ?? "Subscription"}${p.billing_cycle ? ` (${p.billing_cycle})` : ""}`,
+                amount: num(p.amount),
+                currency: p.currency ?? PLATFORM_BILLING_CURRENCY,
+                transactionId,
+            });
+        } catch (err: any) {
+            logger.error("Payment received email failed", { transactionId, error: err?.message });
+        }
     },
 };
