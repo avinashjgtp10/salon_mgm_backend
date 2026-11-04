@@ -2,6 +2,7 @@ import type { PoolClient } from "pg";
 import pool from "../../config/database";
 import { CreateSalonBody, UpdateSalonBody, Salon } from "./salons.types";
 import { invalidateSalonCurrency } from "../../config/currency";
+import { invalidateSalonLanguage } from "../../config/language";
 
 // The batched delete scripts below inline the salon id (a multi-statement
 // query can't take bind parameters), so it must be a real UUID first.
@@ -381,7 +382,9 @@ const SALON_SELECT_WITH_OWNER_CONTACT = `
            s.logo_url, s.banner_url, s.email, s.phone, s.additional_phones, s.website_url, s.google_review_url,
            s.gst_number, s.pan_number, s.is_verified, s.is_active, s.onboarding_completed,
            s.address, s.address_line2, s.city, s.state, s.country, s.pincode, s.timezone,
-           s.currency, s.business_category, s.gst_registration_type, s.created_at, s.updated_at
+           s.currency, s.business_category, s.gst_registration_type, s.created_at, s.updated_at,
+           -- Read tolerantly: until Migration/add_salon_language.sql runs there is no column, and that must not break salons.
+           COALESCE(to_jsonb(s) ->> 'language', 'en') AS language
     FROM salons s
 `;
 
@@ -500,6 +503,7 @@ export const salonsRepository = {
         // Messages, documents and bill rounding read the salon's currency through a short-lived cache — drop it so a
         // change takes effect immediately.
         if (patch.currency !== undefined) invalidateSalonCurrency(id);
+        if (patch.language !== undefined) invalidateSalonLanguage(id);
 
         return rows[0];
     },

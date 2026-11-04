@@ -111,6 +111,7 @@ export const appointmentsRepository = {
                 COALESCE(s.email, u.email)               AS salon_email,
                 s.currency                                AS salon_currency,
                 s.timezone                                AS salon_timezone,
+                COALESCE(to_jsonb(s) ->> 'language', 'en')  AS salon_language,
                 COALESCE((SELECT SUM(paid_amount) FROM payments p WHERE p.appointment_id = a.id AND p.status IN ('completed', 'partial')), 0) AS paid_amount,
                 (SELECT payment_method FROM payments p WHERE p.appointment_id = a.id ORDER BY p.created_at DESC LIMIT 1) AS payment_method,
                 -- appointments.due_amount is never updated after a payment, so a.* returned

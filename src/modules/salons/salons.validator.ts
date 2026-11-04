@@ -1,6 +1,7 @@
 import { NextFunction, Request, Response } from "express";
 import { AppError } from "../../middleware/error.middleware";
 import { isValidTaxRegistrationNumber, TAX_ID_ERROR } from "./tax-id";
+import { isSupportedLanguage, SUPPORTED_LANGUAGE_CODES } from "../../config/language";
 
 const isNonEmptyString = (v: unknown) => typeof v === "string" && v.trim().length > 0;
 const isOptionalString = (v: unknown) => v === undefined || typeof v === "string";
@@ -106,6 +107,10 @@ export const validateUpdateSalon = (req: Request, _res: Response, next: NextFunc
 
         if (b.currency !== undefined && b.currency !== "" && !/^[A-Z]{3}$/.test(b.currency)) {
             throw new AppError(400, "currency must be a 3-letter ISO 4217 code (e.g. INR, USD)", "VALIDATION_ERROR");
+        }
+
+        if (b.language !== undefined && !isSupportedLanguage(b.language)) {
+            throw new AppError(400, `language must be one of: ${SUPPORTED_LANGUAGE_CODES.join(", ")}`, "VALIDATION_ERROR");
         }
 
         if (b.timezone !== undefined && !isValidTimezone(b.timezone)) {
