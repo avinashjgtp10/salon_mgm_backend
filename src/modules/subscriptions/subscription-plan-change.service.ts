@@ -8,6 +8,7 @@ import { resolveRazorpayPlan } from "../subscription-pricing/razorpay-plans";
 import { checkPlanChangeToken, issuePlanChangeToken, type PlanChangeBinding } from "../subscription-pricing/currency-consent";
 import { dbDate, normalizeCycle, tierOfPlan } from "../subscription-billing/plan-tier";
 import { changeKindOf } from "../subscription-upgrade/upgrade-quote";
+import { PLATFORM_BILLING_CURRENCY } from "../../config/currency";
 
 // Changing a plan so that it takes effect WHEN THE CURRENT PERIOD ENDS: a lower plan (downgrade) or the same plan on a shorter billing
 // cycle, for a subscription billed in INR or in any other currency.
@@ -56,7 +57,7 @@ export const subscriptionPlanChangeService = {
         const current = rows[0];
         if (!current) throw new AppError(409, "This salon has no active subscription to change.", "NO_SUBSCRIPTION");
         // A subscription with no recorded currency is an INR one (the original behaviour).
-        const currency: string = current.charged_currency ?? "INR";
+        const currency: string = current.charged_currency ?? PLATFORM_BILLING_CURRENCY;
         // Without a Razorpay subscription (a plan assigned by SalonOx) there is nothing to stop later: it simply ends on its date and the new
         // one starts then. A fixed end date is all that is needed.
         if (!current.current_period_end) {
@@ -69,12 +70,12 @@ export const subscriptionPlanChangeService = {
 
         // Priced by the server, in the subscription's own currency and country. An INR subscription is priced from the Indian list (price + GST),
         // exactly what its renewals charge, whatever country the customer picked.
-        const { base, quote } = await subscriptionPricingService.quote(tier, cycle, currency === "INR" ? "IN" : current.country_code);
+        const { base, quote } = await subscriptionPricingService.quote(tier, cycle, currency === PLATFORM_BILLING_CURRENCY ? "IN" : current.country_code);
         if (base.id === current.plan_id) throw new AppError(409, "That is already your current plan.", "SAME_PLAN");
         const currentTier = tierOfPlan({ tier: current.plan_tier, name: current.plan_name, slug: current.slug });
         const currentCycle = normalizeCycle(current.plan_cycle) ?? normalizeCycle(/-(monthly|quarterly|yearly)$/.exec(String(current.slug ?? ""))?.[1]);
         const kind = currentCycle ? changeKindOf({ tier: currentTier, cycle: currentCycle }, { tier, cycle }) : "upgrade";
-        if (quote.charge.currency !== currency || (quote.charge.fallback && currency !== "INR")) {
+        if (quote.charge.currency !== currency || (quote.charge.fallback && currency !== PLATFORM_BILLING_CURRENCY)) {
             throw new AppError(
                 409,
                 `Subscriptions in ${currency} are not available right now, so this plan change can't be scheduled. Contact support.`,

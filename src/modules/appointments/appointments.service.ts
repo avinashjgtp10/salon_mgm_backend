@@ -49,7 +49,7 @@ import {
     CancelAppointmentBody,
     TipBreakdownEntry,
 } from "./appointments.types";
-import { getBillRoundingUnit } from "../pricing/rounding";
+import { getBillRoundingUnit, formatSalonMoney, getSalonCurrency, getSalonDateLocale } from "../../config/currency";
 
 // A "Booked" (never paid) appointment has no persisted, tax-inclusive total
 // anywhere — `appointments` only stores the raw inputs (discount, ex_charges,
@@ -277,9 +277,9 @@ function formatDate(dateStr: string, timeZone: string): string {
     return `${day}-${month}-${year}`;
 }
 
-function formatTime(dateStr: string, timeZone: string): string {
-    return new Date(dateStr).toLocaleTimeString("en-IN", {
-        timeZone,
+async function formatTime(dateStr: string, salonId: string): Promise<string> {
+    return new Date(dateStr).toLocaleTimeString(await getSalonDateLocale(salonId), {
+        timeZone: await getSalonTimezone(salonId),
         hour: "2-digit", minute: "2-digit", hour12: true,
     });
 }
@@ -616,7 +616,7 @@ export const appointmentsService = {
                 type:     "appointment",
                 reference_id: appointment.id,
                 title:    "New Appointment Booked",
-                body:     `${full?.client_name ?? "Walk-in"} — ${formatDate(appointment.scheduled_at, await getSalonTimezone(appointment.salon_id))} at ${formatTime(appointment.scheduled_at, await getSalonTimezone(appointment.salon_id))}`,
+                body:     `${full?.client_name ?? "Walk-in"} — ${formatDate(appointment.scheduled_at, await getSalonTimezone(appointment.salon_id))} at ${await formatTime(appointment.scheduled_at, appointment.salon_id)}`,
                 event_key: "newAppointment",
                 scheduled_at: appointment.scheduled_at,
             }).catch((err: any) => {
@@ -653,7 +653,7 @@ export const appointmentsService = {
                                 "1": full.client_name                      ?? "Valued Customer",
                                 "2": (full as any).salon_name              ?? "our salon",
                                 "3": formatDate(full.scheduled_at, await getSalonTimezone(full.salon_id)),
-                                "4": formatTime(full.scheduled_at, await getSalonTimezone(full.salon_id)),
+                                "4": await formatTime(full.scheduled_at, full.salon_id),
                                 "5": full.services?.[0]?.name ?? full.title ?? "your service",
                                 "6": full.staff_name ?? "our team",
                             },
@@ -705,7 +705,7 @@ export const appointmentsService = {
                     clientName:    full.client_name          ?? "Walk-in",
                     services:      full.services?.map((s: any) => s.name).join(", ") ?? "Service",
                     date:          formatDate(full.scheduled_at, await getSalonTimezone(full.salon_id)),
-                    time:          formatTime(full.scheduled_at, await getSalonTimezone(full.salon_id)),
+                    time:          await formatTime(full.scheduled_at, full.salon_id),
                     appointmentId: full.id,
                 });
             } catch (err: any) { logger.error("[email] newAppointment failed:", err?.message ?? err); }
@@ -1307,7 +1307,7 @@ export const appointmentsService = {
                 type:     "appointment",
             reference_id: updated.id,
                 title:    "Appointment Updated",
-                body:     `${existing.client_name ?? "Walk-in"} — ${formatDate(updated.scheduled_at, await getSalonTimezone(updated.salon_id))} at ${formatTime(updated.scheduled_at, await getSalonTimezone(updated.salon_id))}`,
+                body:     `${existing.client_name ?? "Walk-in"} — ${formatDate(updated.scheduled_at, await getSalonTimezone(updated.salon_id))} at ${await formatTime(updated.scheduled_at, updated.salon_id)}`,
                 scheduled_at: updated.scheduled_at,
             }).catch((err: any) => {
                 logger.error("Appointment update notification failed", {
@@ -1376,9 +1376,9 @@ export const appointmentsService = {
                             "1": full.client_name         ?? "Valued Customer",
                             "2": (full as any).salon_name ?? "our salon",
                             "3": formatDate(existing.scheduled_at, await getSalonTimezone(existing.salon_id)),
-                            "4": formatTime(existing.scheduled_at, await getSalonTimezone(existing.salon_id)),
+                            "4": await formatTime(existing.scheduled_at, existing.salon_id),
                             "5": formatDate(full.scheduled_at, await getSalonTimezone(full.salon_id)),
-                            "6": formatTime(full.scheduled_at, await getSalonTimezone(full.salon_id)),
+                            "6": await formatTime(full.scheduled_at, full.salon_id),
                             "7": full.services?.[0]?.name ?? full.title ?? "your service",
                             "8": full.staff_name ?? "our team",
                         },
@@ -1431,7 +1431,7 @@ export const appointmentsService = {
             type:     "appointment",
             reference_id: existing.id,
             title:    "Appointment Cancelled",
-            body:     `${existing.client_name ?? "Walk-in"} — ${formatDate(existing.scheduled_at, await getSalonTimezone(existing.salon_id))} at ${formatTime(existing.scheduled_at, await getSalonTimezone(existing.salon_id))}`,
+            body:     `${existing.client_name ?? "Walk-in"} — ${formatDate(existing.scheduled_at, await getSalonTimezone(existing.salon_id))} at ${await formatTime(existing.scheduled_at, existing.salon_id)}`,
             event_key: "appointmentCancelled",
             scheduled_at: existing.scheduled_at,
         }).catch((err: any) => {
@@ -1456,7 +1456,7 @@ export const appointmentsService = {
                     "1": existing.client_name         ?? "Valued Customer",
                     "2": (existing as any).salon_name ?? "our salon",
                     "3": formatDate(existing.scheduled_at, await getSalonTimezone(existing.salon_id)),
-                    "4": formatTime(existing.scheduled_at, await getSalonTimezone(existing.salon_id)),
+                    "4": await formatTime(existing.scheduled_at, existing.salon_id),
                     "5": existing.services?.[0]?.name ?? existing.title ?? "your service",
                 },
                 referenceId:   existing.id,
@@ -1478,7 +1478,7 @@ export const appointmentsService = {
                     salonName:     (existing as any).salon_name ?? "your salon",
                     clientName:    existing.client_name         ?? "Walk-in",
                     date:          formatDate(existing.scheduled_at, await getSalonTimezone(existing.salon_id)),
-                    time:          formatTime(existing.scheduled_at, await getSalonTimezone(existing.salon_id)),
+                    time:          await formatTime(existing.scheduled_at, existing.salon_id),
                     appointmentId: existing.id,
                 });
                 logger.debug(`[email] appointmentCancelled (owner) sent to ${ownerEmail}`);
@@ -1660,7 +1660,7 @@ export const appointmentsService = {
                             '2': String(preExistingSale.total_amount ?? '0'),
                             '3': (existing as any).salon_name ?? 'our salon',
                             '4': formatDate(existing.scheduled_at, await getSalonTimezone(existing.salon_id)),
-                            '5': formatTime(existing.scheduled_at, await getSalonTimezone(existing.salon_id)),
+                            '5': await formatTime(existing.scheduled_at, existing.salon_id),
                         },
                         referenceId:   preExistingSale.id,
                         referenceType: 'invoice',
@@ -1732,6 +1732,7 @@ export const appointmentsService = {
                         salonName:     (existing as any).salon_name ?? "your salon",
                         clientName:    existing.client_name         ?? "Walk-in",
                         amount:        String(preExistingSale.total_amount ?? "0"),
+                        currency:      await getSalonCurrency(existing.salon_id),
                         paymentMethod: params.payment_method        ?? "N/A",
                         invoiceId:     preExistingSale.invoice_number ?? "",
                     });
@@ -1746,7 +1747,7 @@ export const appointmentsService = {
                 type:     "payment",
                 appointment_id: existing.id,
                 title:    "Payment Complete",
-                body:     `${existing.client_name ?? "Walk-in"} — ₹${preExistingSale.total_amount ?? 0}`,
+                body:     `${existing.client_name ?? "Walk-in"} — ${await formatSalonMoney(existing.salon_id, preExistingSale.total_amount ?? 0)}`,
                 event_key: "newPayment",
                 scheduled_at: existing.scheduled_at,
             }).catch((err: any) => {
@@ -1913,7 +1914,7 @@ export const appointmentsService = {
                     '2': String(sale.total_amount     ?? '0'),
                     '3': (existing as any).salon_name ?? 'our salon',
                     '4': formatDate(existing.scheduled_at, await getSalonTimezone(existing.salon_id)),
-                    '5': formatTime(existing.scheduled_at, await getSalonTimezone(existing.salon_id)),
+                    '5': await formatTime(existing.scheduled_at, existing.salon_id),
                 },
                 referenceId:   sale.id,
                 referenceType: 'invoice',
@@ -2001,6 +2002,7 @@ export const appointmentsService = {
                     salonName:     (existing as any).salon_name ?? "your salon",
                     clientName:    existing.client_name         ?? "Walk-in",
                     amount:        String(sale.total_amount     ?? "0"),
+                    currency:      await getSalonCurrency(existing.salon_id),
                     paymentMethod: params.payment_method        ?? "N/A",
                     invoiceId:     sale.invoice_number ?? "",
                 });
@@ -2014,7 +2016,7 @@ export const appointmentsService = {
             type:     "payment",
                 appointment_id: existing.id,
             title:    "Payment Complete",
-            body:     `${existing.client_name ?? "Walk-in"} — ₹${sale.total_amount ?? 0}`,
+            body:     `${existing.client_name ?? "Walk-in"} — ${await formatSalonMoney(existing.salon_id, sale.total_amount ?? 0)}`,
             event_key: "newPayment",
             scheduled_at: existing.scheduled_at,
         }).catch((err: any) => {

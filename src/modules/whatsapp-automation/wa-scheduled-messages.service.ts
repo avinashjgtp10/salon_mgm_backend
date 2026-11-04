@@ -13,11 +13,12 @@ import {
   ScheduledMessage,
   ListScheduledMessagesFilters,
 } from './whatsapp-automation.types'
+import { formatSalonMoney, dateLocale, getSalonDateLocale } from "../../config/currency";
 
 // ── IST date helpers ─────────────────────────────────────────────────────────
 
-function formatDateIST(date: Date | string, timeZone: string = DEFAULT_SALON_TIMEZONE): string {
-  return new Date(date).toLocaleDateString('en-IN', { timeZone, day: '2-digit', month: 'short', year: 'numeric' })
+function formatDateIST(date: Date | string, timeZone: string = DEFAULT_SALON_TIMEZONE, locale: string = dateLocale()): string {
+  return new Date(date).toLocaleDateString(locale, { timeZone, day: '2-digit', month: 'short', year: 'numeric' })
 }
 
 // Real UTC Date for a salon-local calendar date + hour.
@@ -69,8 +70,8 @@ export const waScheduledMessagesService = {
         // never '', or Meta rejects the send with 131008 "Required parameter
         // is missing".
         variables: p.eventType === 'package_expiring_7d'
-          ? { '1': params.clientName, '2': params.packageName, '3': formatDateIST(expiry, await getSalonTimezone(params.salonId)), '4': String(params.remainingSessions ?? 0) }
-          : { '1': params.clientName, '2': params.packageName, '3': String(params.remainingSessions ?? 0), '4': formatDateIST(expiry, await getSalonTimezone(params.salonId)) },
+          ? { '1': params.clientName, '2': params.packageName, '3': formatDateIST(expiry, await getSalonTimezone(params.salonId), await getSalonDateLocale(params.salonId)), '4': String(params.remainingSessions ?? 0) }
+          : { '1': params.clientName, '2': params.packageName, '3': String(params.remainingSessions ?? 0), '4': formatDateIST(expiry, await getSalonTimezone(params.salonId), await getSalonDateLocale(params.salonId)) },
         messagePreview: `${params.packageName} ${p.label}`,
         isPreview: false,
       })
@@ -99,8 +100,8 @@ export const waScheduledMessagesService = {
         // runMembershipExpiringReminders) — every slot must carry a real
         // value, never '', or Meta rejects the send with 131008.
         variables: p.eventType === 'membership_expiring_7d'
-          ? { '1': params.clientName, '2': params.membershipName, '3': formatDateIST(expiry, await getSalonTimezone(params.salonId)), '4': String(params.remainingBalance ?? 0) }
-          : { '1': params.clientName, '2': params.membershipName, '3': String(params.remainingBalance ?? 0), '4': formatDateIST(expiry, await getSalonTimezone(params.salonId)) },
+          ? { '1': params.clientName, '2': params.membershipName, '3': formatDateIST(expiry, await getSalonTimezone(params.salonId), await getSalonDateLocale(params.salonId)), '4': String(params.remainingBalance ?? 0) }
+          : { '1': params.clientName, '2': params.membershipName, '3': String(params.remainingBalance ?? 0), '4': formatDateIST(expiry, await getSalonTimezone(params.salonId), await getSalonDateLocale(params.salonId)) },
         messagePreview: `${params.membershipName} ${p.label}`,
         isPreview: false,
       })
@@ -121,8 +122,8 @@ export const waScheduledMessagesService = {
     if (reminderAt.getTime() <= Date.now()) return // already <24h out — the old-instant-fire path (removed) would've caught this; skip here
 
     const eventType: AutomationEventType = params.packageLinked ? 'package_appointment_reminder_24h' : 'service_reminder_24h'
-    const dateStr = formatDateIST(apptTime, await getSalonTimezone(params.salonId))
-    const timeStr = new Date(apptTime).toLocaleTimeString('en-IN', { timeZone: await getSalonTimezone(params.salonId), hour: '2-digit', minute: '2-digit', hour12: true })
+    const dateStr = formatDateIST(apptTime, await getSalonTimezone(params.salonId), await getSalonDateLocale(params.salonId))
+    const timeStr = new Date(apptTime).toLocaleTimeString(await getSalonDateLocale(params.salonId), { timeZone: await getSalonTimezone(params.salonId), hour: '2-digit', minute: '2-digit', hour12: true })
 
     await waScheduledMessagesRepository.upsertScheduled({
       salonId: params.salonId, clientId: params.clientId, phone: params.phone, countryCode: params.countryCode,
@@ -181,12 +182,12 @@ export const waScheduledMessagesService = {
         for (const sale of sales) {
           if (!sale.phone_number) continue
           currentRefIds.push(sale.sale_id)
-          const dueDate = sale.due_date ? formatDateIST(sale.due_date, await getSalonTimezone(sale.salon_id)) : 'as soon as possible'
+          const dueDate = sale.due_date ? formatDateIST(sale.due_date, await getSalonTimezone(sale.salon_id), await getSalonDateLocale(sale.salon_id)) : 'as soon as possible'
           await waScheduledMessagesRepository.upsertScheduled({
             salonId: sale.salon_id, clientId: sale.client_id, phone: sale.phone_number, countryCode: sale.phone_country_code,
             eventType, referenceId: sale.sale_id, referenceType: 'sale', scheduledAt: tomorrow,
             variables: { '1': sale.client_name ?? 'Valued Customer', '2': sale.total_amount ?? '0', '3': dueDate },
-            messagePreview: `Payment reminder — ₹${sale.total_amount ?? '0'} due`,
+            messagePreview: `Payment reminder — ${await formatSalonMoney(sale.salon_id, sale.total_amount ?? 0)} due`,
             isPreview: true,
           })
         }

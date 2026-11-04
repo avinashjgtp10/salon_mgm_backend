@@ -19,6 +19,7 @@ import {
   PaymentProvider, ProviderCancelResult, ProviderCreateResult, ProviderStatusResult, ProviderTxnContext,
 } from './providers/provider.types';
 import type { Payment } from '../payments/payments.types';
+import { getSalonMoneyFormatter, formatSalonMoney } from "../../config/currency";
 
 const AMOUNT_TOLERANCE = 0.5; // rupees — guards against float/rounding noise, not real mismatches
 // Provider statuses that prove no money moved — the only basis for marking a
@@ -81,7 +82,7 @@ export const posPaymentsService = {
     // payments.controller.ts enforces salon_id from the JWT.
     const payload = { ...params.payload, salon_id: salonId, appointment_id: appointmentId };
     const paymentMode = resolvePosPaymentMode(payload, params.paymentMode);
-    assertPosAmountMatchesPayload(params.amount, payload);
+    assertPosAmountMatchesPayload(params.amount, payload, await getSalonMoneyFormatter(salonId));
 
     const appt = await appointmentsRepository.findById(appointmentId);
     if (!appt || String((appt as any).salon_id) !== String(salonId)) {
@@ -284,7 +285,7 @@ export const posPaymentsService = {
     if (Math.abs(Number(confirmedAmount) - Number(request.amount)) > AMOUNT_TOLERANCE) {
       await posPaymentsRepository.flagNeedsReview(
         request.id,
-        `Provider confirmed ₹${confirmedAmount} but request was for ₹${request.amount} — not auto-completed, needs manual reconciliation.`,
+        `Provider confirmed ${await formatSalonMoney(request.salon_id, confirmedAmount)} but request was for ${await formatSalonMoney(request.salon_id, request.amount)} — not auto-completed, needs manual reconciliation.`,
       );
       await posPaymentsRepository.addEvent(request.id, 'AMOUNT_MISMATCH', request.status, request.status, providerResponse);
       return (await posPaymentsRepository.findById(request.id, request.salon_id)) ?? request;

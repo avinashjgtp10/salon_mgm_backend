@@ -49,13 +49,13 @@ export const DEFAULT_PURCHASE_TEMPLATES: Record<
         label: "Package Purchased",
         category: "UTILITY",
         language: "en",
-        bodyText: "Hi {{customer_name}},\nThank you for purchasing our {{package_name}}!\n\nPackage: {{package_name}}\nServices: {{services}}\nSessions: {{total_sessions}}\nValid Until: {{expiry_date}}\nAmount: ₹{{package_value}}\nInvoice: {{invoice_number}}\n\nWe look forward to seeing you again. Book your next visit with us!",
+        bodyText: "Hi {{customer_name}},\nThank you for purchasing our {{package_name}}!\n\nPackage: {{package_name}}\nServices: {{services}}\nSessions: {{total_sessions}}\nValid Until: {{expiry_date}}\nAmount: ¤{{package_value}}\nInvoice: {{invoice_number}}\n\nWe look forward to seeing you again. Book your next visit with us!",
     },
     membership_purchased: {
         label: "Membership Purchased",
         category: "UTILITY",
         language: "en",
-        bodyText: "Hi {{customer_name}},\n\n🎉 Your {{membership_name}} is now active!\n\nMembership: {{membership_name}}\nBenefit: {{benefit}}\nStart Date: {{start_date}}\nValid Until: {{expiry_date}}\nMembership Price: ₹{{membership_price}}\nInvoice: {{invoice_number}}\n\nEnjoy your exclusive membership benefits on your future visits!",
+        bodyText: "Hi {{customer_name}},\n\n🎉 Your {{membership_name}} is now active!\n\nMembership: {{membership_name}}\nBenefit: {{benefit}}\nStart Date: {{start_date}}\nValid Until: {{expiry_date}}\nMembership Price: ¤{{membership_price}}\nInvoice: {{invoice_number}}\n\nEnjoy your exclusive membership benefits on your future visits!",
     },
     // Document-header Meta template — the bill PDF is submitted/sent as the
     // template's HEADER component (see wa-bill-receipt-template.helper.ts),
@@ -93,7 +93,7 @@ export const DEFAULT_PURCHASE_TEMPLATES: Record<
         label: "Payment Received (Appointment)",
         category: "UTILITY",
         language: "en",
-        bodyText: "Hi {{customer_name}},\nYour bill of ₹{{amount}} at {{salon_name}} has been successfully paid.\nAppointment: {{appointment_date}}\nTime: {{appointment_time}}\nThank you for choosing {{salon_name}} — we appreciate you!",
+        bodyText: "Hi {{customer_name}},\nYour bill of ¤{{amount}} at {{salon_name}} has been successfully paid.\nAppointment: {{appointment_date}}\nTime: {{appointment_time}}\nThank you for choosing {{salon_name}} — we appreciate you!",
     },
     package_expiring_7d: {
         label: "Package Expiring (7 Days)",
@@ -111,13 +111,13 @@ export const DEFAULT_PURCHASE_TEMPLATES: Record<
         label: "Membership Expiring (7 Days)",
         category: "UTILITY",
         language: "en",
-        bodyText: "Hi {{customer_name}},\nYour {{membership_name}} membership expires in 7 days.\nExpiry Date: {{expiry_date}}\nBalance Remaining: ₹{{remaining_balance}}\nMake the most of your remaining membership benefits before it expires.",
+        bodyText: "Hi {{customer_name}},\nYour {{membership_name}} membership expires in 7 days.\nExpiry Date: {{expiry_date}}\nBalance Remaining: ¤{{remaining_balance}}\nMake the most of your remaining membership benefits before it expires.",
     },
     membership_expiring_24h: {
         label: "Membership Expiring (Tomorrow)",
         category: "UTILITY",
         language: "en",
-        bodyText: "Hi {{customer_name}},\nYour {{membership_name}} membership expires tomorrow.\nRemaining Balance: ₹{{remaining_balance}}\nExpiry Date: {{expiry_date}}\nDon't let your remaining membership balance go unused.",
+        bodyText: "Hi {{customer_name}},\nYour {{membership_name}} membership expires tomorrow.\nRemaining Balance: ¤{{remaining_balance}}\nExpiry Date: {{expiry_date}}\nDon't let your remaining membership balance go unused.",
     },
     package_session_used: {
         label: "Package Session Used",
@@ -129,7 +129,7 @@ export const DEFAULT_PURCHASE_TEMPLATES: Record<
         label: "Membership Session Used",
         category: "UTILITY",
         language: "en",
-        bodyText: "Hi {{customer_name}},\nYour {{service_name}} service has been successfully redeemed from your membership.\nAmount Used: ₹{{amount_used}}\nRemaining Balance: ₹{{remaining_balance}}\nThank you for visiting {{salon_name}} — we appreciate you!",
+        bodyText: "Hi {{customer_name}},\nYour {{service_name}} service has been successfully redeemed from your membership.\nAmount Used: ¤{{amount_used}}\nRemaining Balance: ¤{{remaining_balance}}\nThank you for visiting {{salon_name}} — we appreciate you!",
     },
     package_appointment_reminder_24h: {
         label: "Package Appointment Reminder (Tomorrow)",
@@ -159,13 +159,13 @@ export const DEFAULT_PURCHASE_TEMPLATES: Record<
         label: "eWallet Used",
         category: "UTILITY",
         language: "en",
-        bodyText: "Hi {{customer_name}},\nYour eWallet was used for a payment at {{salon_name}}.\nAmount Used: ₹{{amount_used}}\nRemaining Balance: ₹{{remaining_balance}}\nThank you for choosing {{salon_name}} — we appreciate you!",
+        bodyText: "Hi {{customer_name}},\nYour eWallet was used for a payment at {{salon_name}}.\nAmount Used: ¤{{amount_used}}\nRemaining Balance: ¤{{remaining_balance}}\nThank you for choosing {{salon_name}} — we appreciate you!",
     },
     referral_credit_used: {
         label: "Referral Credit Used",
         category: "UTILITY",
         language: "en",
-        bodyText: "Hi {{customer_name}},\nYour Referral Balance was used for a payment at {{salon_name}}.\nAmount Used: ₹{{amount_used}}\nRemaining Referral Balance: ₹{{remaining_balance}}\nThank you for choosing {{salon_name}} — we appreciate you!",
+        bodyText: "Hi {{customer_name}},\nYour Referral Balance was used for a payment at {{salon_name}}.\nAmount Used: ¤{{amount_used}}\nRemaining Referral Balance: ¤{{remaining_balance}}\nThank you for choosing {{salon_name}} — we appreciate you!",
     },
     reward_points_used: {
         label: "Reward Points Used",

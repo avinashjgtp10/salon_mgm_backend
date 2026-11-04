@@ -4,7 +4,7 @@ import { reportsRepository } from "../../reports/reports.repository";
 import { reportsService } from "../../reports/reports.service";
 import { salonsRepository } from "../../salons/salons.repository";
 import { AssistantUser, Tool } from "../ai-assistant.types";
-import { moneyFormatter } from "./money";
+import { moneyFormatter } from "../../../config/currency";
 import { PERIODS, ResolvedPeriod, resolvePeriod } from "./periods";
 
 // Read-only tools for the dashboard "Ask your data" box. Money figures come from the SAME report functions the
@@ -37,7 +37,7 @@ const uniq = (xs: string[]) => [...new Set(xs)];
 // The salon's timezone (for "today"/"last month") and currency (for every amount we print).
 async function getSalonContext(salonId: string): Promise<{ tz: string; fmt: (n: number) => string }> {
     const salon = await salonsRepository.findById(salonId);
-    return { tz: salon?.timezone || "Asia/Kolkata", fmt: moneyFormatter(salon?.currency) };
+    return { tz: salon?.timezone || "Asia/Kolkata", fmt: moneyFormatter(salon?.currency, { trimZeroDecimals: true }) };
 }
 
 const periodParams = {

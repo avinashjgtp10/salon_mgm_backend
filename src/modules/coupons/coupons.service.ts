@@ -9,6 +9,7 @@ import {
   ValidateCouponBody,
   ValidateCouponResult,
 } from './coupons.types';
+import { formatSalonMoney } from "../../config/currency";
 
 // Excludes 0/O/1/I — these get handed out as printed vouchers, where the two
 // are easy to misread.
@@ -166,7 +167,7 @@ export const couponsService = {
     if (orderAmount < Number(coupon.min_order_amount))
       throw new AppError(
         400,
-        `Minimum order amount of ₹${coupon.min_order_amount} required for this coupon`,
+        `Minimum order amount of ${await formatSalonMoney(salonId, coupon.min_order_amount)} required for this coupon`,
         'MIN_ORDER_NOT_MET'
       );
 
@@ -191,7 +192,7 @@ export const couponsService = {
       discountValue: Number(coupon.value),
       discountAmount: Math.round(capped * 100) / 100,
       finalAmount: Math.round(finalAmount * 100) / 100,
-      message: `Coupon applied! You save ₹${capped.toFixed(2)}`,
+      message: `Coupon applied! You save ${await formatSalonMoney(salonId, capped)}`,
     };
   },
 };

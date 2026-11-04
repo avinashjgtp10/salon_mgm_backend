@@ -89,7 +89,7 @@ export const aiAssistantController = {
             if (!user?.userId || !user.salonId) throw new AppError(403, "Salon context required", "NO_SALON_CONTEXT");
             const brief = String(req.body?.brief ?? "").trim();
             if (brief.length < 8 || brief.length > 500) {
-                throw new AppError(400, "Describe the message in 8–500 characters, e.g. 'Diwali offer on Hair Spa at ₹999'.", "VALIDATION_ERROR");
+                throw new AppError(400, "Describe the message in 8–500 characters, e.g. 'Festive offer on Hair Spa this week'.", "VALIDATION_ERROR");
             }
             const result = await writeTemplateCopy(
                 { userId: user.userId, role: user.role, salonId: user.salonId },

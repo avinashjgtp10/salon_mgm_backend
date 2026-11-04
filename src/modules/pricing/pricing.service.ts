@@ -14,7 +14,7 @@ import { paymentsRepository } from '../payments/payments.repository';
 import { couponsService } from '../coupons/coupons.service';
 import { AppError } from '../../middleware/error.middleware';
 import { CalculateTotalsBody, CalculateTotalsResponse } from './pricing.types';
-import { getBillRoundingUnit } from "./rounding";
+import { getBillRoundingUnit } from "../../config/currency";
 
 // Read-only mirror of AppointmentModal.tsx's membershipWalletMap allocation
 // — NOT the same code path as payments.service.ts's deductWalletForBooking,

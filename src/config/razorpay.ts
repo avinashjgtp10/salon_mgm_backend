@@ -3,6 +3,7 @@ import pool from "./database";
 import logger from "./logger";
 import { AppError } from "../middleware/error.middleware";
 import { decryptSecret } from "../modules/ai-credentials/secret-box";
+import { PLATFORM_BILLING_CURRENCY } from "./currency";
 
 // Razorpay credentials are platform-wide. Super Admin saves them in the DB (platform_razorpay_settings, secrets encrypted);
 // the RAZORPAY_* environment variables remain as a fallback, field by field, so an existing deployment keeps working.
@@ -111,7 +112,7 @@ export async function createRazorpayPlan(opts: {
                 name: opts.name,
                 description: opts.description,
                 amount: Math.round(opts.amountRupees * 100),
-                currency: opts.currency ?? "INR",
+                currency: opts.currency ?? PLATFORM_BILLING_CURRENCY,
             },
         });
         return plan.id;

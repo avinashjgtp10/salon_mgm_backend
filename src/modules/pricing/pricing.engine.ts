@@ -1,4 +1,4 @@
-import { roundToUnit } from "./rounding";
+import { roundToUnit } from "../../config/currency";
 // Single source of truth for appointment/quick-sale bill-total math — tax
 // bucket allocation, discount proportioning, grand total. This is a backend
 // port + superset of the frontend's src/features/bookings/utils/totalsUtils.ts

@@ -1,4 +1,5 @@
 import logger from "../../config/logger";
+import { PLATFORM_BILLING_CURRENCY } from "../../config/currency";
 
 // Exchange rates for the plan prices, from the SAME source the landing page uses (open.er-api.com, INR base) and with the same
 // validation, so a country's converted price is calculated from the same numbers on the landing page and on the server.
@@ -18,7 +19,7 @@ let inflight: Promise<RatesResult | null> | null = null;
 // Same rules as the landing page's parseRates: only a successful INR-based response, three-letter codes, positive finite numbers.
 export function parseRates(data: unknown): InrRates | null {
     const body = data as { result?: string; base_code?: string; rates?: Record<string, unknown> } | null;
-    if (body?.result !== "success" || body.base_code !== "INR" || !body.rates) return null;
+    if (body?.result !== "success" || body.base_code !== PLATFORM_BILLING_CURRENCY || !body.rates) return null;
     const rates: InrRates = { INR: 1 };
     for (const [code, value] of Object.entries(body.rates)) {
         if (/^[A-Z]{3}$/.test(code) && typeof value === "number" && Number.isFinite(value) && value > 0) rates[code] = value;

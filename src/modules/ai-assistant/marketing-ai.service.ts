@@ -9,6 +9,7 @@ import { assertWithinLimits } from "./ai-assistant.service";
 import { llmClient } from "./llm.client";
 import { AssistantUser } from "./ai-assistant.types";
 import { requireUuid } from "./uuid";
+import { formatMoney } from "../../config/currency";
 
 const clean = (v: unknown, max: number) => String(v ?? "").replace(/\s+/g, " ").trim().slice(0, max);
 
@@ -160,7 +161,7 @@ export async function suggestInboxReplies(user: AssistantUser, phoneRaw: unknown
 Facts you may use (nothing else):
 - Address/hours: ${branch ? `${branch.address_line1}, ${branch.city}; open ${branch.opening_time ?? "?"}–${branch.closing_time ?? "?"}` : "not provided"}
 - Phone: ${salon.phone ?? "not provided"}
-- Services and prices: ${(services.data ?? []).map((s: any) => `${s.name} ₹${s.price} (${s.duration} min)`).join("; ") || "not provided"}
+- Services and prices: ${(services.data ?? []).map((s: any) => `${s.name} ${formatMoney(s.price, salon.currency)} (${s.duration} min)`).join("; ") || "not provided"}
 Rules:
 - Reply to the customer's LAST message, in the language they used. Warm, short (1–3 sentences), natural.
 - Never promise a time slot, discount or price that isn't in the facts. If they want to book, ask for their preferred service, day and time, and say the team will confirm.

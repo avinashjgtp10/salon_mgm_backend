@@ -1,10 +1,11 @@
 import { Sale, SaleItem, TipBreakdownEntry } from "./sales.types";
 import { formatSalonPhones } from "../salons/salon-phones";
 import { DEFAULT_SALON_TIMEZONE } from "../../config/salonTimezone";
-import { formatDocumentMoney } from "../../config/documentMoney";
+import { formatMoney } from "../../config/currency";
 import { TaxBreakdownEntry } from "../payments/payments.types";
 import config from "../../config/env";
 import { docTaxLabels } from "../../config/taxLabels";
+import { dateLocale } from "../../config/currency";
 
 // Ported from the dashboard's ViewBillModal.tsx `printReceipt()` — same visual
 // invoice staff see when they print/save a bill from the Calendar, adapted
@@ -93,15 +94,15 @@ export function buildReceiptHtml(params: {
     const taxL = docTaxLabels(salon.country);
     const IST = salon.timezone || DEFAULT_SALON_TIMEZONE;
     const now = new Date();
-    const printDate = now.toLocaleDateString("en-IN", { timeZone: IST, year: "numeric", month: "long", day: "numeric" });
-    const printTime = now.toLocaleTimeString("en-IN", { timeZone: IST, hour: "2-digit", minute: "2-digit" });
+    const printDate = now.toLocaleDateString(dateLocale(salon.currency), { timeZone: IST, year: "numeric", month: "long", day: "numeric" });
+    const printTime = now.toLocaleTimeString(dateLocale(salon.currency), { timeZone: IST, hour: "2-digit", minute: "2-digit" });
     const invoiceNo = sale.invoice_number ?? "Not billed yet";
 
     const formatTime12 = (iso: string) =>
-        new Date(iso).toLocaleTimeString("en-IN", { timeZone: IST, hour: "2-digit", minute: "2-digit", hour12: true });
+        new Date(iso).toLocaleTimeString(dateLocale(salon.currency), { timeZone: IST, hour: "2-digit", minute: "2-digit", hour12: true });
 
     const apptDate = appointment
-        ? new Date(appointment.scheduledAt).toLocaleDateString("en-IN", { timeZone: IST, year: "numeric", month: "long", day: "numeric" })
+        ? new Date(appointment.scheduledAt).toLocaleDateString(dateLocale(salon.currency), { timeZone: IST, year: "numeric", month: "long", day: "numeric" })
         : "—";
     const apptStartTime = appointment ? formatTime12(appointment.scheduledAt) : null;
     const apptTime = appointment
@@ -120,7 +121,7 @@ export function buildReceiptHtml(params: {
     // Every amount on the printed page goes through this — the previous
     // version of this file never prepended a currency symbol at all, so
     // every figure on the WhatsApp-sent PDF read as a bare number.
-    const fmt = (n: number) => formatDocumentMoney(n, salon.currency);
+    const fmt = (n: number) => formatMoney(n, salon.currency);
 
     // A package-covered visit collects no new money (the package's price was
     // already booked as revenue at purchase time) — same isPackagePaid
@@ -330,7 +331,7 @@ export function buildReceiptHtml(params: {
     const fmtDate = (raw: string | null) => {
         if (!raw) return "";
         const d = new Date(raw);
-        return isNaN(d.getTime()) ? "" : d.toLocaleDateString("en-IN", { timeZone: IST, year: "numeric", month: "short", day: "2-digit" });
+        return isNaN(d.getTime()) ? "" : d.toLocaleDateString(dateLocale(salon.currency), { timeZone: IST, year: "numeric", month: "short", day: "2-digit" });
     };
     const primaryMembershipName = activeMemberships[0]?.membershipName || "";
     const clientGst = client.gst_number || "";

@@ -7,6 +7,7 @@ import { GST_PERCENT } from "../plan-pricing/plan-pricing.service";
 import { buildInvoiceHtml, type InvoicePrintPayload } from "./invoice-html.template";
 import { amountInWords, BILLING_CYCLE_LABEL, SELLER } from "./invoice-format";
 import { subscriptionInvoicesRepository as repo, type InvoiceFilters } from "./subscription-invoices.repository";
+import { PLATFORM_BILLING_CURRENCY } from "../../config/currency";
 
 const num = (v: unknown) => Number(v ?? 0);
 const isoDate = (v: unknown) => (v ? new Date(v as string).toISOString() : null);
@@ -125,7 +126,7 @@ export const subscriptionInvoicesService = {
                 payment_mode: inv.payment_mode,
                 transaction_id: inv.transaction_id,
                 status: inv.status,
-                currency: inv.currency ?? "INR",
+                currency: inv.currency ?? PLATFORM_BILLING_CURRENCY,
                 subtotal: num(inv.subtotal),
                 gst_percent: num(inv.gst_percent),
                 gst_amount: num(inv.gst_amount),
@@ -143,7 +144,7 @@ export const subscriptionInvoicesService = {
             },
             seller: { ...SELLER },
             // The words are in rupees, so they are only printed for INR invoices.
-            amount_in_words: (inv.currency ?? "INR") === "INR" ? amountInWords(total) : "",
+            amount_in_words: (inv.currency ?? PLATFORM_BILLING_CURRENCY) === PLATFORM_BILLING_CURRENCY ? amountInWords(total) : "",
         };
     },
 

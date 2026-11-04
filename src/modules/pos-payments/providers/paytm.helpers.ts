@@ -8,6 +8,10 @@
 // formats with). If Paytm confirms UTC instead, change only this constant.
 export const PAYTM_TIMEZONE = 'Asia/Kolkata';
 
+// Paytm EDC machines settle in rupees only. This is the PROVIDER's capability, not a salon setting — a salon billing in
+// another currency simply can't use this provider (the salon currency itself comes from config/currency.ts).
+export const PAYTM_CURRENCY = 'INR';
+
 /** `yyyy-MM-dd HH:mm:ss` in an explicit timezone — never the server's local zone. */
 export function formatPaytmDateTime(date: Date, timeZone: string = PAYTM_TIMEZONE): string {
   if (!(date instanceof Date) || Number.isNaN(date.getTime())) {

@@ -1,5 +1,6 @@
 import pool from "../../config/database";
 import { botQuestionsRepository } from "../bot/bot-questions.repository";
+import { formatMoney, PLATFORM_BILLING_CURRENCY } from "../../config/currency";
 
 // Everything the Super Admin Overview page shows, in ONE response (GET /super-admin/overview?from=&to=).
 // Dates are IST calendar days (YYYY-MM-DD, inclusive) like the rest of the Super Admin figures. "Salons" here are
@@ -238,7 +239,7 @@ export async function getSuperAdminOverview(fromIn?: string, toIn?: string, acti
         const d = new Date(t);
         return Number.isNaN(d.getTime()) ? new Date().toISOString() : d.toISOString();
       };
-      const inr = (n: unknown) => `₹${Number(n || 0).toLocaleString("en-IN")}`;
+      const inr = (n: unknown) => formatMoney(n, PLATFORM_BILLING_CURRENCY, { decimals: 0 });
       const reqNo = (n: unknown) => `REQ-${String(n ?? "").padStart(3, "0")}`;
       const statusLabel: Record<string, string> = { open: "Open", in_progress: "In Progress", completed: "Completed" };
       return [

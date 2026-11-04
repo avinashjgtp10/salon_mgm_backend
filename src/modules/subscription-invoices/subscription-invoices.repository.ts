@@ -2,6 +2,7 @@ import type { PoolClient } from "pg";
 import pool from "../../config/database";
 import { financialYearCode, round2 } from "./invoice-format";
 import { billingSchemaReady } from "../subscription-pricing/billing-schema";
+import { PLATFORM_BILLING_CURRENCY } from "../../config/currency";
 
 // Rows always reach callers with the salon's name/owner joined in (the list and the PDF both need them).
 // `currency` comes from the invoice once the country-billing columns exist, and is 'INR' before that (every older invoice is INR).
@@ -160,8 +161,8 @@ export const subscriptionInvoicesRepository = {
 
         // The payment is what the salon actually paid. In INR that includes GST, so it is split back into price + GST. A payment in
         // another currency is a plain invoice in that currency: no Indian GST is carved out of it.
-        const currency: string = p.currency ?? "INR";
-        const taxPercent = currency === "INR" ? gstPercent : 0;
+        const currency: string = p.currency ?? PLATFORM_BILLING_CURRENCY;
+        const taxPercent = currency === PLATFORM_BILLING_CURRENCY ? gstPercent : 0;
         const total = round2(Number(p.amount));
         const subtotal = taxPercent > 0 ? round2((total * 100) / (100 + taxPercent)) : total;
         const gst = round2(total - subtotal);
@@ -169,7 +170,7 @@ export const subscriptionInvoicesRepository = {
         const invoiceNo = await nextInvoiceNo(db, issued);
 
         // INR keeps the column default; another currency is written explicitly.
-        const withCurrency = currency !== "INR" && (await billingSchemaReady());
+        const withCurrency = currency !== PLATFORM_BILLING_CURRENCY && (await billingSchemaReady());
         const ins = await db.query(
             `INSERT INTO subscription_invoices
                 (invoice_no, salon_id, subscription_id, payment_id, plan_name, billing_cycle, period_start, period_end,
@@ -223,7 +224,7 @@ export const subscriptionInvoicesRepository = {
         if (existing.rows[0]) return { id: existing.rows[0].id as string, created: false };
 
         const invoiceNo = await nextInvoiceNo(db, u.issuedAt);
-        const overseas = !!u.currency && u.currency !== "INR";
+        const overseas = !!u.currency && u.currency !== PLATFORM_BILLING_CURRENCY;
         const ins = await db.query(
             `INSERT INTO subscription_invoices
                 (invoice_no, salon_id, subscription_id, payment_id, plan_name, billing_cycle, period_start, period_end,

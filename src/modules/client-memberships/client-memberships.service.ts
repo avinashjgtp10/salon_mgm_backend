@@ -16,6 +16,7 @@ import { whatsappAutomationService } from '../whatsapp-automation/whatsapp-autom
 import { waScheduledMessagesService } from '../whatsapp-automation/wa-scheduled-messages.service';
 import { salonsRepository } from '../salons/salons.repository';
 import type { Sale, SaleItem } from '../sales/sales.types';
+import { getSalonMoneyFormatter } from "../../config/currency";
 
 // Memberships have no real `sales`/`sale_items` rows to attach a receipt to —
 // this builds a lightweight in-memory Sale/SaleItem purely to feed the
@@ -93,12 +94,12 @@ function buildSyntheticSale(membership: ClientMembership): { sale: Sale; items: 
 // already covers it, so this itemized confirmation would just duplicate it.
 // One-line description of what this membership actually gives the client —
 // varies by pricingType (see memberships.types.ts's discriminated fields).
-function buildMembershipBenefitText(membership: ClientMembership): string {
+function buildMembershipBenefitText(membership: ClientMembership, fmt: (n: number) => string): string {
   switch (membership.pricingType) {
     case 'percentage':
       return `${membership.discountPercent ?? 0}% discount on eligible services`;
     case 'value':
-      return `₹${membership.membershipWalletBalance ?? 0} wallet balance for eligible services`;
+      return `${fmt(membership.membershipWalletBalance ?? 0)} wallet balance for eligible services`;
     case 'loyalty':
       return 'Loyalty rewards on eligible services';
     default:
@@ -122,7 +123,7 @@ async function notifyMembershipPurchased(membership: ClientMembership, includeRe
       variables: {
         '1': membership.clientName ?? 'Valued Customer',
         '2': membership.membershipName,
-        '3': buildMembershipBenefitText(membership),
+        '3': buildMembershipBenefitText(membership, await getSalonMoneyFormatter(membership.salonId)),
         '4': membership.purchasedAt ?? '',
         '5': membership.expiresAt ?? '',
         '6': String(membership.pricePaid ?? 0),

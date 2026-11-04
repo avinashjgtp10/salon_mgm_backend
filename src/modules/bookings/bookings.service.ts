@@ -15,6 +15,7 @@ import { PublicBookingRequest } from "./bookings.types";
 import { bookingEmailOtpService } from "./booking-email-otp.service";
 import { loadStaffPresence } from "../attendance/attendance.presence";
 import logger from "../../config/logger";
+import { formatMoney, getSalonDateLocale } from "../../config/currency";
 
 // Attaches booking policy, brand kit, the marketplace gallery, and (only when
 // About Us is enabled) its Facilities/Specialities — everything the public
@@ -444,31 +445,15 @@ async function computeAvailableSlotsMultiStaff(params: {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function formatDate(dateStr: string, timeZone: string): string {
-    return new Date(dateStr).toLocaleDateString("en-IN", {
+function formatDate(dateStr: string, timeZone: string, locale: string): string {
+    return new Date(dateStr).toLocaleDateString(locale, {
         timeZone,
         day: "2-digit", month: "short", year: "numeric",
     });
 }
 
-// Money for message templates. Uses the salon's own currency where it has one
-// so an email doesn't quote rupees to a salon billing in dirhams.
-function formatMoney(amount: number, currency?: string | null): string {
-    const value = Number.isFinite(amount) ? amount : 0;
-    try {
-        return new Intl.NumberFormat("en-IN", {
-            style: "currency",
-            currency: (currency || "INR").toUpperCase(),
-            maximumFractionDigits: 2,
-        }).format(value);
-    } catch {
-        // Unknown/garbage currency code — never let formatting break a send.
-        return value.toFixed(2);
-    }
-}
-
-function formatTime(dateStr: string, timeZone: string): string {
-    return new Date(dateStr).toLocaleTimeString("en-IN", {
+function formatTime(dateStr: string, timeZone: string, locale: string): string {
+    return new Date(dateStr).toLocaleTimeString(locale, {
         timeZone,
         hour: "2-digit", minute: "2-digit", hour12: true,
     });
@@ -620,6 +605,7 @@ export const bookingsService = {
         // is written. The offered slot list already excludes these, but a tab
         // left open across midnight or a direct API call would sail past it.
         const salonTz = await getSalonTimezone(body.salon_id);
+        const salonLocale = await getSalonDateLocale(body.salon_id);
         const requested = salonLocalParts(body.scheduled_at, salonTz);
         const policy = await bookingsRepository.findBookingPolicy(body.salon_id);
         const window = resolveDateWindow(requested.dateStr, policy, salonTz);
@@ -854,7 +840,7 @@ export const bookingsService = {
             type: "appointment",
             reference_id: appointment.id,
             title: "New Appointment Booked",
-            body: `${body.client_name} — ${formatDate(body.scheduled_at, salonTz)} at ${formatTime(body.scheduled_at, salonTz)}`,
+            body: `${body.client_name} — ${formatDate(body.scheduled_at, salonTz, salonLocale)} at ${formatTime(body.scheduled_at, salonTz, salonLocale)}`,
             event_key: "newAppointment",
             scheduled_at: body.scheduled_at,
         }).catch((err: any) => {
@@ -945,8 +931,8 @@ export const bookingsService = {
                     variables: {
                         "1": full.client_name                 ?? "Valued Customer",
                         "2": (full as any).salon_name         ?? "our salon",
-                        "3": formatDate(full.scheduled_at, salonTz),
-                        "4": formatTime(full.scheduled_at, salonTz),
+                        "3": formatDate(full.scheduled_at, salonTz, salonLocale),
+                        "4": formatTime(full.scheduled_at, salonTz, salonLocale),
                         "5": full.services?.[0]?.name ?? full.title ?? "your service",
                         "6": staffNameForMessages,
                     },

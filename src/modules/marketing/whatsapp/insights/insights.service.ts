@@ -8,6 +8,7 @@ import pool from '../../../../config/database'
 import { AppError } from '../../../../middleware/error.middleware'
 import { configRepository } from '../config/config.repository'
 import logger from '../../../../config/logger'
+import { DEFAULT_CURRENCY } from '../../../../config/currency'
 
 const WA_BASE_URL    = process.env.WA_BASE_URL    ?? 'https://graph.facebook.com'
 const WA_API_VERSION = process.env.WA_API_VERSION ?? 'v22.0'
@@ -61,7 +62,7 @@ export const insightsService = {
     const errors: string[] = []
 
     // ── Currency of the account (prices come back as bare numbers) ───────────
-    let currency = 'INR'
+    let currency: string = DEFAULT_CURRENCY
     try {
       const r = await http.get(base, { headers, params: { fields: 'currency' } })
       if (r.data?.currency) currency = String(r.data.currency)

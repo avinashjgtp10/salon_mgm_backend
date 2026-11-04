@@ -5,7 +5,7 @@ import { reportsRepository } from "../reports/reports.repository";
 import { reportsService } from "../reports/reports.service";
 import { salonsRepository } from "../salons/salons.repository";
 import { assertWithinLimits } from "./ai-assistant.service";
-import { moneyFormatter } from "./data/money";
+import { moneyFormatter } from "../../config/currency";
 import { todayIn } from "./data/periods";
 import { llmClient } from "./llm.client";
 import { AssistantUser } from "./ai-assistant.types";
@@ -91,7 +91,7 @@ export async function explainSalesSummary(user: AssistantUser, rawFilters: unkno
 
     const salon = await salonsRepository.findById(user.salonId);
     if (!salon) throw new AppError(404, "Salon not found", "NOT_FOUND");
-    const fmt = moneyFormatter(salon.currency);
+    const fmt = moneyFormatter(salon.currency, { trimZeroDecimals: true });
 
     const [stats, chart] = await Promise.all([
         reportsRepository.getSalesSummaryReportStats(user.salonId, filters),

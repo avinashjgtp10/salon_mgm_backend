@@ -20,6 +20,7 @@ import {
 } from "./attendance.types";
 import { loadStaffPresence } from "./attendance.presence";
 import { getIO, salonRoom, salonStaffRoom } from "../../config/socket";
+import { getSalonDateLocale } from "../../config/currency";
 
 // Invalidation only (no staff data is sent): open Calendars / Quick Sale screens refetch staff-presence
 // when they hear this, instead of polling for it.
@@ -527,6 +528,7 @@ export const attendanceService = {
     async exportCSV(salonId: string, year: number, month: number): Promise<{ buffer: Buffer; filename: string }> {
         const records = await attendanceRepository.getMonthlyForExport(salonId, year, month);
         const tz = await getSalonTimezone(salonId);
+        const locale = await getSalonDateLocale(salonId);
 
         const headers = ["Date", "Staff Name", "Role", "Status", "Check In", "Check Out", "Break Time", "Actual Working Hours", "Source", "Note"];
         const rows = records.map(r => [
@@ -534,8 +536,8 @@ export const attendanceService = {
             r.staff_name ?? "",
             r.staff_role ?? "",
             r.status,
-            r.check_in  ? new Date(r.check_in).toLocaleString("en-IN", { timeZone: tz })  : "",
-            r.check_out ? new Date(r.check_out).toLocaleString("en-IN", { timeZone: tz }) : "",
+            r.check_in  ? new Date(r.check_in).toLocaleString(locale, { timeZone: tz })  : "",
+            r.check_out ? new Date(r.check_out).toLocaleString(locale, { timeZone: tz }) : "",
             fmtDuration(Number((r as any).break_seconds ?? 0) / 3600),
             r.hours_worked != null ? fmtDuration(Number(r.hours_worked)) : "",
             r.source,

@@ -15,6 +15,7 @@ import { checkConsentToken, issueConsentToken, type ConsentBinding } from "../su
 import { currencyForCountry } from "../subscription-pricing/country-currency";
 import { exponentOf, markCurrencyRefused } from "../subscription-pricing/pricing.service";
 import { subscriptionPlanChangeService } from "./subscription-plan-change.service";
+import { formatMoney, PLATFORM_BILLING_CURRENCY } from "../../config/currency";
 
 const TIERS = ["basic", "advance", "growth"] as const;
 const CYCLES = ["monthly", "quarterly", "yearly"] as const;
@@ -40,7 +41,7 @@ export const subscriptionCheckoutService = {
     // options, and it is only ever done after the customer confirms it: the offer carries a signed consent token for the exact INR amount.
     consentRequired(binding: ConsentBinding, quote: Awaited<ReturnType<typeof subscriptionPricingService.quote>>["quote"], status: string): AppError {
         const c = quote.charge;
-        const inr = `₹${c.total.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+        const inr = formatMoney(c.total, PLATFORM_BILLING_CURRENCY);
         return new AppError(
             409,
             `Subscriptions in ${binding.requestedCurrency} are not available yet. You can continue and be billed ${inr} in INR per ${binding.cycle === "yearly" ? "year" : binding.cycle === "quarterly" ? "quarter" : "month"} (GST included), choose a different country, or contact support.`,
@@ -53,7 +54,7 @@ export const subscriptionCheckoutService = {
                 display: quote.display,
                 alternatives: [
                     {
-                        type: "continue_in_inr", label: `Continue and be billed in INR (${inr})`, currency: "INR",
+                        type: "continue_in_inr", label: `Continue and be billed in INR (${inr})`, currency: PLATFORM_BILLING_CURRENCY,
                         subtotal: c.subtotal, tax: c.tax, tax_percent: c.tax_percent, total: c.total, recurring_amount: c.recurring_amount,
                         consent_token: issueConsentToken(binding),
                     },
@@ -117,10 +118,10 @@ export const subscriptionCheckoutService = {
             try {
                 // INR plans carry price + GST; a non-INR plan carries the converted amount (no tax added). Either way it is the plan
                 // registered for THIS Razorpay account, never one that belongs to another account or mode.
-                razorpayPlanId = await resolveRazorpayPlan(base, charge.currency, charge.currency === "INR" ? charge.total : charge.subtotal, charge.fx_rate);
+                razorpayPlanId = await resolveRazorpayPlan(base, charge.currency, charge.currency === PLATFORM_BILLING_CURRENCY ? charge.total : charge.subtotal, charge.fx_rate);
                 break;
             } catch (err: any) {
-                if (attempt === 0 && err?.code === "CURRENCY_NOT_SUPPORTED" && charge.currency !== "INR") {
+                if (attempt === 0 && err?.code === "CURRENCY_NOT_SUPPORTED" && charge.currency !== PLATFORM_BILLING_CURRENCY) {
                     markCurrencyRefused(charge.currency);
                     quoted = await subscriptionPricingService.quote(tier, cycle, customerCountry);
                     continue;
@@ -360,7 +361,7 @@ export const subscriptionCheckoutService = {
                         const dup = await client.query(`SELECT 1 FROM subscription_payments WHERE transaction_id = $1`, [pay.id]);
                         if (dup.rowCount === 0) {
                             // The payment's own currency and amount, as Razorpay reports them (never assumed to be INR).
-                            const payCurrency = typeof pay.currency === "string" && /^[A-Za-z]{3}$/.test(pay.currency) ? pay.currency.toUpperCase() : "INR";
+                            const payCurrency = typeof pay.currency === "string" && /^[A-Za-z]{3}$/.test(pay.currency) ? pay.currency.toUpperCase() : PLATFORM_BILLING_CURRENCY;
                             const payAmount = Number(pay.amount) / 10 ** exponentOf(payCurrency);
                             const hasCurrency = await billingSchemaReady();
                             const inserted = hasCurrency

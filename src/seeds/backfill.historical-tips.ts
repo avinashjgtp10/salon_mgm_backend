@@ -2,7 +2,7 @@
  * One-time backfill: creates tip_earned rows (status 'paid') for every
  * sale that already has a tip but predates the Tip Settle feature — so
  * the Tip Settle tab's totals reflect real history from day one, instead
- * of every staff member starting at ₹0.
+ * of every staff member starting at 0.
  *
  * Deliberately marks these rows 'paid', not 'pending': the tip was
  * already physically handed to staff at the time (tips have always
@@ -70,7 +70,7 @@ async function backfillHistoricalTips() {
 
       if (entries.length === 0) {
         skipped++;
-        console.log(`  skip  sale ${sale.id} — ₹${tipAmount.toFixed(2)} tip, no staff to attribute to`);
+        console.log(`  skip  sale ${sale.id} — ${tipAmount.toFixed(2)} tip, no staff to attribute to`);
         continue;
       }
 
@@ -85,7 +85,7 @@ async function backfillHistoricalTips() {
       attributed++;
     }
 
-    console.log(`\n✅ Backfilled ${attributed} sale(s), totalling ₹${totalBackfilled.toFixed(2)} in tip_earned rows.`);
+    console.log(`\n✅ Backfilled ${attributed} sale(s), totalling ${totalBackfilled.toFixed(2)} in tip_earned rows.`);
     if (skipped > 0) {
       console.log(`⚠️  Skipped ${skipped} sale(s) with a tip but no attributable staff — see lines above.`);
     }
