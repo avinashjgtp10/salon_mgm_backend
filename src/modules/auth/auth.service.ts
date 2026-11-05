@@ -108,6 +108,20 @@ export const authService = {
       country_code: body.countryCode?.trim() ? body.countryCode.trim() : null,
     } as any);
 
+    // A salon owner gets their salon row now (name/address/country from the registration), so a plan paid for right after
+    // sign-up is already tied to a salon: the tax invoice is created and emailed the moment Razorpay confirms the payment.
+    // Onboarding later fills this salon in (salonsService.create updates an unfinished one). Best effort: if it fails here,
+    // it is created when the payment arrives or when onboarding finishes, as before.
+    if (role === "salon_owner") {
+      try {
+        // Loaded here, not at the top, so auth.service and the salons/subscriptions modules can't import each other in a loop.
+        const { salonsService } = require("../salons/salons.service") as typeof import("../salons/salons.service");
+        await salonsService.ensureForOwner(user.id);
+      } catch (err: any) {
+        logger.error("[authService.register] Could not create the salon at registration", { userId: user.id, error: err?.message });
+      }
+    }
+
     const salonId = await authRepository.findSalonIdByUserId(user.id);
     const { accessToken, refreshToken } = await issueSessionTokens({
       userId: user.id, role: user.role, salonId, kickOthers: true,
