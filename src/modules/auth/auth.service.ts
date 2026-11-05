@@ -9,6 +9,7 @@ import type { RegisterBody, LoginBody } from "./auth.types";
 import { generateOtp, hashOtp, compareOtp, otpExpiry } from "../utils/otp.util";
 import { emailService } from "../utils/email.service";
 import { salonsRepository } from "../salons/salons.repository";
+import { salonBranchesService } from "../salon-branches/salon-branches.service";
 import { canSendEmail } from "../utils/notif-prefs";
 import { getSalonTimezone } from "../../config/salonTimezone";
 import { exotelSendSmsOtp, exotelVerifySmsOtp } from "../utils/exotel.service";
@@ -156,8 +157,17 @@ export const authService = {
     logger.debug("[authService.login] Start", { email: body?.email });
     assertEnv();
 
-    const email = String(body.email || "").trim().toLowerCase();
+    let email = String(body.email || "").trim().toLowerCase();
     const password = String(body.password || "");
+
+    // Not an email: the shared branch-login username from Settings > Migration > Connected Branches. It belongs to a
+    // `branch_owner` user whose sign-in email nobody types, so map the username to it and let the normal path below do the
+    // password check and session. An unknown username fails exactly like a wrong password.
+    if (!email.includes("@")) {
+      const branchEmail = await salonBranchesService.resolveLoginEmail(email, password);
+      if (!branchEmail) throw new AppError(401, "Invalid credentials", "INVALID_CREDENTIALS");
+      email = branchEmail;
+    }
 
     const user = await authRepository.findUserByEmail(email);
     if (!user) {

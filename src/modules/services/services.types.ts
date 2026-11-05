@@ -1,5 +1,7 @@
 // ─── Shared ───────────────────────────────────────────────────────────────────
 export type PriceType = "fixed" | "from" | "free";
+// Who a service is for. 'unisex' (anyone) is the default and what every pre-existing service is.
+export type ServiceGenderPreference = "unisex" | "female" | "male";
 export type ScheduleType = "sequence" | "parallel";
 export type BundlePriceType = "service_pricing" | "fixed" | "free";
 export type AvailableFor = "all" | "male" | "female" | "other";
@@ -46,6 +48,7 @@ export type Service = {
   // due in 30 days). NULL = no reminder configured. Not yet consumed by any
   // automation — sits alongside client visit history for whenever that's built.
   reminder_after_days: number | null;
+  gender_preference: ServiceGenderPreference;
   consumables_used: ServiceConsumableItem[];
   // Read-only, from STAFF_COUNT_SUBQUERY. 0 means "all staff" (no
   // service_staff rows), not "nobody" — render it accordingly.
@@ -134,6 +137,7 @@ export type CreateServiceBody = {
   // relying on the column default, so a service can be created inactive.
   is_active?: boolean;
   reminder_after_days?: number | null;
+  gender_preference?: ServiceGenderPreference;
   staff_ids?: string[];
   consumables_used?: ServiceConsumableItem[];
 };

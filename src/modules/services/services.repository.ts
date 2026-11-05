@@ -257,8 +257,8 @@ export const servicesRepository = {
           salon_id, name, category_id, treatment_type, description,
           price_type, price, duration_minutes,
           online_booking, commission_enabled, resource_required, is_active,
-          commission_rate, commission_kind, reminder_after_days
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+          commission_rate, commission_kind, reminder_after_days, gender_preference
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
         RETURNING *, duration_minutes AS duration`,
         [
           salonId,
@@ -278,6 +278,7 @@ export const servicesRepository = {
           data.commission_rate ?? null,
           data.commission_kind ?? null,
           data.reminder_after_days ?? null,
+          data.gender_preference ?? "unisex",
         ]
       );
       await client.query("COMMIT");
@@ -304,6 +305,7 @@ export const servicesRepository = {
       "commission_rate", "commission_kind",
       // Explicit null clears a configured reminder the same way.
       "reminder_after_days",
+      "gender_preference",
     ]);
 
     const raw = patch as Record<string, unknown>;

@@ -473,6 +473,7 @@ export const branchOwnerRepository = {
         p.status, p.payment_method, p.created_at,
         COALESCE(p.paid_at, p.created_at)            AS payment_date,
         s.id                                        AS salon_id,
+        COALESCE(NULLIF(s.timezone, ''), 'Asia/Kolkata') AS salon_timezone,
         COALESCE(s.business_name, s.slug, 'Unnamed') AS salon_name,
         sa.invoice_number                            AS invoice_number,
         COALESCE(c.full_name, 'Walk-in Client')      AS client_name,

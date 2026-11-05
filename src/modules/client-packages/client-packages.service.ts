@@ -208,8 +208,13 @@ export const clientPackagesService = {
   },
 
   async create(salonId: string, dto: CreateClientPackageDTO, requesterUserId?: string): Promise<ClientPackage> {
-    // A deactivated custom payment method can't take a new package payment.
-    await paymentMethodsService.assertNotInactive(salonId, dto.paymentMethod, dto.splitDetails);
+    // A switched-off payment method can't take a new package payment. Built-ins
+    // are checked only for a package sold on its own: one sold inside a bill
+    // (appointmentId set) carries the bill's label, which payments.create
+    // already vetted when the payment itself was recorded.
+    await paymentMethodsService.assertNotInactive(salonId, dto.paymentMethod, dto.splitDetails, {
+      includeBuiltIns: !dto.appointmentId,
+    });
 
     const pkg = await clientPackagesRepository.create(salonId, dto);
 
