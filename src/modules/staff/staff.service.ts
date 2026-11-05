@@ -231,6 +231,7 @@ export const staffService = {
 
                 emailService.sendStaffInvitation({
                     to: staff.email,
+                    salonId,
                     token: invitation.token,
                     staffFirstName: body.first_name,
                     salonName,
@@ -798,6 +799,7 @@ export const staffInvitationService = {
 
         emailService.sendStaffInvitation({
             to: staff.email,
+            salonId,
             token: invitation.token,
             staffFirstName: staff.first_name ?? "Team Member",
             salonName: resolvedSalonName,

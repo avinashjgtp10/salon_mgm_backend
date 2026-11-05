@@ -3,6 +3,9 @@
 // ============================================================
 
 import pool from "../../config/database"
+import { applyCurrencyMarker, getSalonCurrency } from '../../config/currency'
+import { translationFor } from '../../config/i18n'
+import { DEFAULT_LANGUAGE, getSalonLanguage } from '../../config/language'
 
 // Postgres check_violation — raised when the status CHECK constraint still
 // predates PENDING (see logPending below).
@@ -51,8 +54,15 @@ export const notificationChannelsRepository = {
     if (rows[0]) return rows[0]
 
     const enabled = await seedEnabledFor(salonId, eventType, channel)
-    const body = channel === "SMS" ? DEFAULT_SMS_TEMPLATES[eventType] : DEFAULT_EMAIL_TEMPLATES[eventType].body
-    const subject = channel === "EMAIL" ? DEFAULT_EMAIL_TEMPLATES[eventType].subject : null
+    // Default wording carries a currency marker (¤{{amount}}); the salon's copy gets its currency's ASCII-safe label.
+    // A salon whose language has wording for this event gets it; otherwise the English default, exactly as before.
+    const salonLanguage = await getSalonLanguage(salonId)
+    const localized = (kind: string) => (salonLanguage === DEFAULT_LANGUAGE ? undefined : translationFor(salonLanguage, `messages.${kind}.${eventType}`))
+    const defaultBody = channel === "SMS"
+      ? (localized("sms") ?? DEFAULT_SMS_TEMPLATES[eventType])
+      : (localized("emailBody") ?? DEFAULT_EMAIL_TEMPLATES[eventType].body)
+    const body = applyCurrencyMarker(defaultBody, await getSalonCurrency(salonId), { sms: true })
+    const subject = channel === "EMAIL" ? (localized("emailSubject") ?? DEFAULT_EMAIL_TEMPLATES[eventType].subject) : null
 
     const { rows: inserted } = await pool.query(
       `INSERT INTO notification_channel_templates (salon_id, event_type, channel, enabled, subject, body)

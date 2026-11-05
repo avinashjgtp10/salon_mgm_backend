@@ -10,6 +10,8 @@ export type RegisterBody = {
   phone?: string;
   password: string;
   terms: boolean;
+  /** Language the sign-up screen was shown in — used for the welcome email (the salon has no language of its own yet). */
+  language?: string;
 
   // role should NOT come from frontend normally
   role?: "salon_owner" | "staff" | "client" | "admin";

@@ -29,6 +29,7 @@ export const superAdminService = {
 
     if (!ACCESS_SECRET || !REFRESH_SECRET) throw new AppError(500, "JWT config missing", "SERVER_ERROR");
 
+    await authRepository.updateLastLogin(user.id);   // so Last login / login count show for Super Admin and developer logins too
     const accessToken  = jwt.sign({ userId: user.id, role: "super_admin", salonId: null }, ACCESS_SECRET,  accessOptions);
     const refreshToken = jwt.sign({ userId: user.id },                                      REFRESH_SECRET, refreshOptions);
 
@@ -144,6 +145,7 @@ export const superAdminService = {
           }
           await emailService.sendSalonDeactivatedEmail({
             to: contact.owner_email,
+            salonId: id,
             salonName: contact.name,
             ownerName: contact.owner_name,
           });

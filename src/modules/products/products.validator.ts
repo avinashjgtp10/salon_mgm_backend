@@ -31,7 +31,7 @@ const isUUID = (v: unknown): v is string => typeof v === "string" && UUID_RE.tes
 const isOptionalUUID = (v: unknown) => v === undefined || v === null || isUUID(v);
 
 const VALID_MEASURE_UNITS: MeasureUnit[] = ["ml", "l", "g", "kg", "pcs", "oz", "lb", "bottle", "tube", "pack", "box", "roll"];
-const VALID_TAX_TYPES: TaxType[] = ["no_tax", "gst_5", "gst_12", "gst_18", "gst_28", "custom"];
+const VALID_TAX_TYPES: TaxType[] = ["no_tax", "gst_5", "gst_12", "gst_18", "gst_28", "vat_5", "custom"];
 const VALID_PRODUCT_TYPES: ProductType[] = ["retail", "consumable", "both"];
 
 // ─── Coercion for FormData (Multipart) Requests ───────────────────────────────

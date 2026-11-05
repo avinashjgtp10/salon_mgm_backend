@@ -37,7 +37,7 @@ ON CONFLICT DO NOTHING;
 
 -- Per-staff overrides: same mapping.
 INSERT INTO staff_permission_overrides (staff_id, permission_key, allowed, set_by)
-SELECT o.staff_id, m.new_key, BOOL_OR(o.allowed), MAX(o.set_by)
+SELECT o.staff_id, m.new_key, BOOL_OR(o.allowed), (ARRAY_AGG(o.set_by))[1]
 FROM staff_permission_overrides o
 JOIN (VALUES
   ('view_clients',        'calendar_view_client'),

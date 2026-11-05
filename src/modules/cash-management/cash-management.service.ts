@@ -8,6 +8,7 @@ import { whatsappAutomationService } from "../whatsapp-automation/whatsapp-autom
 import { whatsappAutomationRepository } from "../whatsapp-automation/whatsapp-automation.repository";
 import { configRepository } from "../marketing/whatsapp/config/config.repository";
 import logger from "../../config/logger";
+import { getSalonTimezone } from "../../config/salonTimezone";
 import type {
   CloseCounterBody,
   CounterListFilters,
@@ -18,6 +19,7 @@ import type {
   SummaryBundleSection,
   UpdateExpenseBody,
 } from "./cash-management.types";
+import { getSalonMoneyFormatter, getSalonDateLocale } from "../../config/currency";
 
 const SUMMARY_BUNDLE_SECTIONS: SummaryBundleSection[] = [
   "cash_dashboard",
@@ -26,13 +28,12 @@ const SUMMARY_BUNDLE_SECTIONS: SummaryBundleSection[] = [
   "dashboard_summary",
 ];
 
-const formatDateIST = (d: Date | string) =>
-  new Date(d).toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", day: "2-digit", month: "short", year: "numeric" });
+const formatDateIST = (d: Date | string, timeZone: string, locale: string) =>
+  new Date(d).toLocaleDateString(locale, { timeZone, day: "2-digit", month: "short", year: "numeric" });
 
-const formatTimeIST = (d: Date | string) =>
-  new Date(d).toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit", hour12: true });
+const formatTimeIST = (d: Date | string, timeZone: string, locale: string) =>
+  new Date(d).toLocaleTimeString(locale, { timeZone, hour: "2-digit", minute: "2-digit", hour12: true });
 
-const formatMoney = (n: number) => `₹${(Number.isFinite(n) ? n : 0).toFixed(2)}`;
 
 // The owner's own "WhatsApp Alerts Number" (users.phone, Settings > Profile
 // & Business > Contact Details) is the first choice — it's specifically
@@ -89,10 +90,11 @@ async function notifyOwnerCashCounterOpened(salonId: string, counter: any): Prom
       logger.info(`[WA-AUTO] cash_counter_opened skipped — salon ${salonId} has no owner WhatsApp number on file`);
       return;
     }
+    const formatMoney = await getSalonMoneyFormatter(salonId);
     const variables = {
       "1": salon?.business_name ?? "your salon",
-      "2": formatDateIST(counter.opened_at),
-      "3": formatTimeIST(counter.opened_at),
+      "2": formatDateIST(counter.opened_at, await getSalonTimezone(salonId), await getSalonDateLocale(salonId)),
+      "3": formatTimeIST(counter.opened_at, await getSalonTimezone(salonId), await getSalonDateLocale(salonId)),
       "4": formatMoney(parseFloat(counter.opening_balance ?? "0")),
     };
     await triggerForOwnerPhones(ownerPhones, {
@@ -132,6 +134,7 @@ async function notifyOwnerCashCounterClosed(
     // (error 132018), independent of whether the template's own approved
     // BODY text has real line breaks. bill_receipt's {{items}} avoids this
     // the same way — a single-line, comma-joined value, never \n-joined.
+    const formatMoney = await getSalonMoneyFormatter(salonId);
     const cashAmt = Number(counter.cash_amount ?? 0);
     const cardAmt = Number(counter.card_amount ?? 0);
     const upiAmt  = Number(counter.upi_amount ?? 0);
@@ -152,8 +155,8 @@ async function notifyOwnerCashCounterClosed(
 
     const variables = {
       "1": salon?.business_name ?? "your salon",
-      "2": formatDateIST(counter.closed_at ?? new Date()),
-      "3": formatTimeIST(counter.closed_at ?? new Date()),
+      "2": formatDateIST(counter.closed_at ?? new Date(), await getSalonTimezone(salonId), await getSalonDateLocale(salonId)),
+      "3": formatTimeIST(counter.closed_at ?? new Date(), await getSalonTimezone(salonId), await getSalonDateLocale(salonId)),
       "4": collectionBreakdown,
       "5": formatMoney(cashAmt + cardAmt + upiAmt),
       "6": formatMoney(expenses),

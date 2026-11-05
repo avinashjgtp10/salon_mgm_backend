@@ -5,7 +5,7 @@ import pool from "../../config/database";
 import { reportsService } from "../reports/reports.service";
 import { salonsRepository } from "../salons/salons.repository";
 import { assertWithinLimits } from "./ai-assistant.service";
-import { moneyFormatter } from "./data/money";
+import { moneyFormatter } from "../../config/currency";
 import { llmClient } from "./llm.client";
 import { AssistantUser } from "./ai-assistant.types";
 import { explainSalesSummary } from "./report-insights.service";
@@ -495,7 +495,7 @@ export async function explainReport(user: AssistantUser, report: ReportKey, rawF
     await assertModuleUnlocked(user.salonId, "reports");
     const salon = await salonsRepository.findById(user.salonId);
     if (!salon) throw new AppError(404, "Salon not found", "NOT_FOUND");
-    const ctx: Ctx = { user, fmt: moneyFormatter(salon.currency), tz: salon.timezone || "Asia/Kolkata" };
+    const ctx: Ctx = { user, fmt: moneyFormatter(salon.currency, { trimZeroDecimals: true }), tz: salon.timezone || "Asia/Kolkata" };
 
     const filters = rawFilters && typeof rawFilters === "object" ? rawFilters : {};
     const prepared = await PREPARERS[report](ctx, filters);

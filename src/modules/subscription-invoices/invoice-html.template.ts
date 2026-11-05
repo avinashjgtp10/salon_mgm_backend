@@ -1,3 +1,4 @@
+import { formatMoneyAscii, numberLocale, PLATFORM_BILLING_CURRENCY } from "../../config/currency";
 // Server-side HTML for the subscription tax-invoice PDF (seller, Bill To, one subscription line, CGST/SGST split,
 // amount in words).
 
@@ -30,16 +31,14 @@ export interface InvoicePrintPayload {
     amount_in_words: string;
 }
 
-const moneyIn = (n: number, currency: string) => currency === "INR"
-    ? `Rs. ${n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-    : `${currency} ${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+const moneyIn = (n: number, currency: string) => formatMoneyAscii(n, currency);
 const dShort = (iso: string) => new Date(iso).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
 const dLong = (iso: string) => new Date(iso).toLocaleDateString("en-GB", { day: "2-digit", month: "2-digit", year: "numeric" });
 const esc = (s: string | null | undefined) => (s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
 export function buildInvoiceHtml(p: InvoicePrintPayload): string {
     const { invoice, customer, seller, amount_in_words } = p;
-    const currency = invoice.currency ?? "INR";
+    const currency = invoice.currency ?? PLATFORM_BILLING_CURRENCY;
     const money = (n: number) => moneyIn(n, currency);
     // An invoice without GST (0%) is a plain invoice: no tax lines, and the seller's GST number isn't printed.
     const withGst = invoice.gst_percent > 0;
@@ -134,7 +133,7 @@ export function buildInvoiceHtml(p: InvoicePrintPayload): string {
 
     <table class="items">
       <thead>
-        <tr><th style="width:44px">#</th><th>Description</th><th class="right" style="width:150px">Amount (${currency === "INR" ? "Rs." : currency})</th></tr>
+        <tr><th style="width:44px">#</th><th>Description</th><th class="right" style="width:150px">Amount (${currency === PLATFORM_BILLING_CURRENCY ? "Rs." : currency})</th></tr>
       </thead>
       <tbody>
         <tr>
@@ -144,7 +143,7 @@ export function buildInvoiceHtml(p: InvoicePrintPayload): string {
             <div class="item-sub">${esc(invoice.plan_label)}${period ? ` (${esc(period)})` : ""}</div>
             ${invoice.description ? `<div class="item-sub">${esc(invoice.description)}</div>` : ""}
           </td>
-          <td class="right">${invoice.subtotal.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td>
+          <td class="right">${invoice.subtotal.toLocaleString(numberLocale(currency), { minimumFractionDigits: 2 })}</td>
         </tr>
       </tbody>
     </table>

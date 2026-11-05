@@ -13,6 +13,7 @@ import {
   UsageHistoryFilters,
   UsageHistoryResponse,
 } from "./consumable-inventory.types";
+import { getSalonDateLocale } from "../../config/currency";
 
 // Shared "derived Stock Quantity" expression — a partially-consumed bottle
 // still counts as 1 until fully empty (CEIL, not FLOOR/ROUND). Products
@@ -325,6 +326,7 @@ export const consumableInventoryRepository = {
       [productId, salonId]
     );
 
+    const locale = await getSalonDateLocale(salonId);
     const points: { label: string; remaining: number }[] = [{ label: "Current", remaining: currentRemaining }];
     let runningRemaining = currentRemaining;
     for (const row of rows) {
@@ -332,7 +334,7 @@ export const consumableInventoryRepository = {
       // today's/prior point's remaining PLUS what this day itself consumed —
       // walking backward in time, each day's usage gets added back.
       runningRemaining += Number(row.net_used);
-      points.push({ label: new Date(row.day).toLocaleDateString("en-IN", { day: "2-digit", month: "short" }), remaining: runningRemaining });
+      points.push({ label: new Date(row.day).toLocaleDateString(locale, { day: "2-digit", month: "short" }), remaining: runningRemaining });
     }
     return points;
   },

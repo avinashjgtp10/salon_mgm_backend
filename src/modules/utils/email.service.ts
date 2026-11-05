@@ -1,5 +1,8 @@
 import nodemailer from "nodemailer";
 import config from "../../config/env";
+import { formatMoney, dateLocale } from "../../config/currency";
+import { translator } from "../../config/i18n";
+import { DEFAULT_LANGUAGE, getSalonLanguage, languageDateLocale, languageDir, normalizeLanguage } from "../../config/language";
 
 export const transporter = nodemailer.createTransport({
   host: config.smtp.host,
@@ -12,6 +15,20 @@ export const transporter = nodemailer.createTransport({
   requireTLS: true,
 });
 
+/**
+ * The language an email is written in: an explicit one (what the person's screen shows when nothing is known about a salon yet —
+ * registration, forgotten password), else the salon's own (salons.language), else English. English output is unchanged.
+ */
+async function emailLanguage(p: { language?: string | null; salonId?: string | null }): Promise<string> {
+  if (p.language) return normalizeLanguage(p.language);
+  return p.salonId ? getSalonLanguage(p.salonId) : DEFAULT_LANGUAGE;
+}
+
+/** lang/dir for the <html> tag. Only right-to-left languages get a dir, so English output stays as it was. */
+const htmlAttrs = (lang: string) => `lang="${lang}"${languageDir(lang) === "rtl" ? ' dir="rtl"' : ""}`;
+/** dir for <body> or a root <div> (some mail clients ignore the one on <html>). */
+const bodyDir = (lang: string) => (languageDir(lang) === "rtl" ? ' dir="rtl"' : "");
+
 const escapeHtml = (value: string | null | undefined) =>
   String(value ?? "")
     .replace(/&/g, "&amp;")
@@ -23,7 +40,7 @@ const escapeHtml = (value: string | null | undefined) =>
 const formatDateTime = (value: string | undefined) => {
   const date = value ? new Date(value) : new Date();
   if (Number.isNaN(date.getTime())) return escapeHtml(value);
-  return date.toLocaleString("en-IN", {
+  return date.toLocaleString(dateLocale(), {
     dateStyle: "medium",
     timeStyle: "short",
     timeZone: "Asia/Kolkata",
@@ -117,17 +134,19 @@ export const emailService = {
     await transporter.verify();
   },
 
-  async sendOtpEmail(email: string, otp: string) {
+  async sendOtpEmail(email: string, otp: string, options: { language?: string | null; salonId?: string | null } = {}) {
+    const lang = await emailLanguage(options);
+    const t = translator(lang);
     await transporter.sendMail({
       from: config.smtp.from,
       to: email,
-      subject: "Your Email OTP Verification",
+      subject: t("email.otp.subject"),
       html: `
-        <div style="font-family: Arial, sans-serif">
-          <h2>Email Verification</h2>
-          <p>Your OTP code is:</p>
+        <div${bodyDir(lang)} style="font-family: Arial, sans-serif">
+          <h2>${t("email.otp.title")}</h2>
+          <p>${t("email.otp.intro")}</p>
           <h1 style="letter-spacing: 4px;">${otp}</h1>
-          <p>This OTP expires in ${config.otp.expMinutes} minutes.</p>
+          <p>${t("email.otp.expiry", { minutes: config.otp.expMinutes })}</p>
         </div>
       `,
     });
@@ -153,19 +172,21 @@ export const emailService = {
     });
   },
 
-  async sendPasswordResetOtpEmail(email: string, otp: string) {
+  async sendPasswordResetOtpEmail(email: string, otp: string, options: { language?: string | null; salonId?: string | null } = {}) {
+    const lang = await emailLanguage(options);
+    const t = translator(lang);
     await transporter.sendMail({
       from: config.smtp.from,
       to: email,
-      subject: "Password Reset Request",
+      subject: t("email.resetOtp.subject"),
       html: `
-        <div style="font-family: Arial, sans-serif, max-width: 600px; margin: 0 auto; padding: 20px;">
-          <h2 style="color: #333;">Password Reset Verification</h2>
-          <p style="color: #666; font-size: 16px;">We received a request to reset your password. Here is your verification code:</p>
+        <div${bodyDir(lang)} style="font-family: Arial, sans-serif, max-width: 600px; margin: 0 auto; padding: 20px;">
+          <h2 style="color: #333;">${t("email.resetOtp.title")}</h2>
+          <p style="color: #666; font-size: 16px;">${t("email.resetOtp.intro")}</p>
           <div style="background-color: #f4f4f7; padding: 20px; border-radius: 8px; text-align: center; margin: 20px 0;">
             <h1 style="letter-spacing: 6px; color: #6366f1; margin: 0; font-size: 32px;">${otp}</h1>
           </div>
-          <p style="color: #666; font-size: 14px;">This code expires in ${config.otp.expMinutes} minutes. If you did not request a password reset, please ignore this email.</p>
+          <p style="color: #666; font-size: 14px;">${t("email.resetOtp.expiry", { minutes: config.otp.expMinutes })}</p>
         </div>
       `,
     });
@@ -173,18 +194,25 @@ export const emailService = {
 
   async sendPasswordResetConfirmationEmail(params: {
     to: string;
+    /** Recipient's salon — its language (salons.language) is used. */
+    salonId?: string | null;
+    /** Explicit language; wins over the salon's. */
+    language?: string | null;
     fullName: string;
     resetAt: Date;
   }) {
+    const lang = await emailLanguage(params);
+    const t = translator(lang);
     const { to, fullName, resetAt } = params;
     const loginUrl = `${config.frontend.url}/login`;
-    const formattedDate = resetAt.toLocaleDateString("en-US", {
+    const dateLoc = languageDateLocale(lang) ?? "en-US";
+    const formattedDate = resetAt.toLocaleDateString(dateLoc, {
       weekday: "long",
       year: "numeric",
       month: "long",
       day: "numeric",
     });
-    const formattedTime = resetAt.toLocaleTimeString("en-US", {
+    const formattedTime = resetAt.toLocaleTimeString(dateLoc, {
       hour: "2-digit",
       minute: "2-digit",
       timeZoneName: "short",
@@ -193,16 +221,16 @@ export const emailService = {
     await transporter.sendMail({
       from: config.smtp.from,
       to,
-      subject: "Your SalonOx Password Has Been Reset Successfully",
+      subject: t("email.resetDone.subject"),
       html: `
         <!DOCTYPE html>
-        <html lang="en">
+        <html ${htmlAttrs(lang)}>
         <head>
           <meta charset="UTF-8" />
           <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-          <title>Password Reset Confirmation</title>
+          <title>${t("email.resetDone.title")}</title>
         </head>
-        <body style="margin:0;padding:0;background:#f4f4f7;font-family:'Segoe UI',Arial,sans-serif;">
+        <body${bodyDir(lang)} style="margin:0;padding:0;background:#f4f4f7;font-family:'Segoe UI',Arial,sans-serif;">
           <table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f7;padding:40px 0;">
             <tr>
               <td align="center">
@@ -218,7 +246,7 @@ export const emailService = {
                         SalonOx
                       </h1>
                       <p style="margin:8px 0 0;color:rgba(255,255,255,0.85);font-size:14px;">
-                        Password Reset Confirmation
+                        ${t("email.resetDone.title")}
                       </p>
                     </td>
                   </tr>
@@ -227,10 +255,10 @@ export const emailService = {
                   <tr>
                     <td style="padding:40px 40px 24px;">
                       <p style="margin:0 0 16px;color:#374151;font-size:16px;line-height:1.6;">
-                        Hi <strong>${fullName}</strong>,
+                        ${t("email.common.hiBold", { name: fullName })}
                       </p>
                       <p style="margin:0 0 16px;color:#374151;font-size:16px;line-height:1.6;">
-                        Your <strong>SalonOx</strong> account password has been successfully reset.
+                        ${t("email.resetDone.body")}
                       </p>
 
                       <!-- Reset Details Box -->
@@ -240,20 +268,20 @@ export const emailService = {
                           <td style="padding:20px 24px;">
                             <p style="margin:0 0 8px;color:#6b7280;font-size:13px;text-transform:uppercase;
                                       letter-spacing:0.05em;font-weight:600;">
-                              Reset Details
+                              ${t("email.resetDone.details")}
                             </p>
                             <p style="margin:0 0 4px;color:#374151;font-size:14px;">
-                              <strong>Date:</strong> ${formattedDate}
+                              <strong>${t("email.label.date")}:</strong> ${formattedDate}
                             </p>
                             <p style="margin:0;color:#374151;font-size:14px;">
-                              <strong>Time:</strong> ${formattedTime}
+                              <strong>${t("email.label.time")}:</strong> ${formattedTime}
                             </p>
                           </td>
                         </tr>
                       </table>
 
                       <p style="margin:0 0 32px;color:#374151;font-size:15px;line-height:1.6;">
-                        You can now log in to your SalonOx account using your new password.
+                        ${t("email.resetDone.loginNote")}
                       </p>
 
                       <!-- CTA Button -->
@@ -265,7 +293,7 @@ export const emailService = {
                                       color:#ffffff;text-decoration:none;font-size:16px;font-weight:600;
                                       padding:14px 48px;border-radius:8px;
                                       box-shadow:0 4px 12px rgba(99,102,241,0.4);">
-                              Login Now
+                              ${t("email.resetDone.loginButton")}
                             </a>
                           </td>
                         </tr>
@@ -281,13 +309,13 @@ export const emailService = {
                         <tr>
                           <td style="padding:16px 20px;">
                             <p style="margin:0 0 8px;color:#92400e;font-size:14px;font-weight:600;">
-                              Security Notice
+                              ${t("email.resetDone.securityTitle")}
                             </p>
                             <p style="margin:0 0 6px;color:#92400e;font-size:13px;line-height:1.6;">
-                              If you did not request this password reset, please contact our support team immediately — your account may be at risk.
+                              ${t("email.resetDone.securityBody")}
                             </p>
                             <p style="margin:0;color:#92400e;font-size:13px;">
-                              Support: <a href="mailto:support@salonox.com" style="color:#6366f1;">support@salonox.com</a>
+                              ${t("email.resetDone.support")} <a href="mailto:support@salonox.com" style="color:#6366f1;">support@salonox.com</a>
                             </p>
                           </td>
                         </tr>
@@ -299,10 +327,10 @@ export const emailService = {
                   <tr>
                     <td style="background:#f9fafb;padding:20px 40px;border-top:1px solid #e5e7eb;">
                       <p style="margin:0 0 6px;color:#9ca3af;font-size:12px;text-align:center;">
-                        © ${new Date().getFullYear()} SalonOx. All rights reserved.
+                        ${t("email.common.rights", { year: new Date().getFullYear() })}
                       </p>
                       <p style="margin:0;color:#9ca3af;font-size:12px;text-align:center;">
-                        This is an automated security notification. Please do not reply to this email.
+                        ${t("email.resetDone.footerAuto")}
                       </p>
                     </td>
                   </tr>
@@ -319,24 +347,32 @@ export const emailService = {
 
   async sendWelcomeEmail(params: {
     to: string;
+    /** Recipient's salon — its language (salons.language) is used. */
+    salonId?: string | null;
+    /** Explicit language; wins over the salon's. */
+    language?: string | null;
     fullName: string;
     salonName: string;
   }) {
+    const lang = await emailLanguage(params);
+    const t = translator(lang);
     const { to, fullName, salonName } = params;
+    const frontendUrl = config.frontend.url;
+    const loginUrl = `${frontendUrl}/login`;
 
     await transporter.sendMail({
       from: config.smtp.from,
       to,
-      subject: `Welcome to SalonOx, ${fullName}! 🎉`,
+      subject: t("email.welcome.subject", { name: fullName }),
       html: `
         <!DOCTYPE html>
-        <html lang="en">
+        <html ${htmlAttrs(lang)}>
         <head>
           <meta charset="UTF-8" />
           <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-          <title>Welcome to SalonOx</title>
+          <title>${t("email.welcome.pageTitle")}</title>
         </head>
-        <body style="margin:0;padding:0;background:#f4f4f7;font-family:'Segoe UI',Arial,sans-serif;">
+        <body${bodyDir(lang)} style="margin:0;padding:0;background:#f4f4f7;font-family:'Segoe UI',Arial,sans-serif;">
           <table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f7;padding:40px 0;">
             <tr>
               <td align="center">
@@ -354,7 +390,7 @@ export const emailService = {
                       </h1>
                       <p style="margin:0;color:rgba(255,255,255,0.80);font-size:13px;
                                 letter-spacing:2px;text-transform:uppercase;">
-                        Salon Management Platform
+                        ${t("email.welcome.tagline")}
                       </p>
                     </td>
                   </tr>
@@ -365,10 +401,10 @@ export const emailService = {
                                padding:0 40px 40px;text-align:center;">
                       <div style="background:rgba(255,255,255,0.15);border-radius:8px;padding:20px 24px;">
                         <p style="margin:0;color:#ffffff;font-size:22px;font-weight:700;">
-                          Welcome aboard, ${fullName}!
+                          ${t("email.welcome.banner", { name: fullName })}
                         </p>
                         <p style="margin:8px 0 0;color:rgba(255,255,255,0.85);font-size:15px;">
-                          Your salon account is ready.
+                          ${t("email.welcome.bannerSub")}
                         </p>
                       </div>
                     </td>
@@ -378,22 +414,49 @@ export const emailService = {
                   <tr>
                     <td style="padding:36px 40px 28px;">
                       <p style="margin:0 0 16px;color:#374151;font-size:16px;line-height:1.7;">
-                        Hi <strong>${fullName}</strong>,
+                        ${t("email.common.hiBold", { name: fullName })}
                       </p>
                       <p style="margin:0 0 16px;color:#374151;font-size:16px;line-height:1.7;">
-                        Congratulations! Your SalonOx account for
-                        <strong>${salonName}</strong> has been successfully created.
-                        We're thrilled to have you on board.
+                        ${t("email.welcome.intro", { salon: salonName })}
                       </p>
                       <p style="margin:0 0 24px;color:#6b7280;font-size:15px;line-height:1.7;">
-                        SalonOx helps you manage appointments, staff, clients, and
-                        grow your salon business — all from one place.
+                        ${t("email.welcome.about")}
                       </p>
+
+                      <!-- Login Details -->
+                      <div style="background:#f9fafb;border-radius:10px;padding:20px 28px;margin-bottom:24px;">
+                        <p style="margin:0 0 10px;color:#374151;font-size:15px;font-weight:700;">
+                          Your Login Details
+                        </p>
+                        <p style="margin:0 0 6px;color:#374151;font-size:14px;line-height:1.6;">
+                          <span style="color:#6b7280;">Registered Email:</span>
+                          <strong>${to}</strong>
+                        </p>
+                        <p style="margin:0;color:#374151;font-size:14px;line-height:1.6;">
+                          <span style="color:#6b7280;">Password:</span>
+                          Use the password you set during sign-up. For your security, we never send passwords by email.
+                          Forgot it? <a href="${frontendUrl}/forgot-password" style="color:#6366f1;text-decoration:underline;">Reset your password</a>.
+                        </p>
+                      </div>
+
+                      <!-- Login Button -->
+                      <table cellpadding="0" cellspacing="0" width="100%" style="margin-bottom:28px;">
+                        <tr>
+                          <td align="center">
+                            <a href="${loginUrl}"
+                               style="display:inline-block;background:#6366f1;background-image:linear-gradient(135deg,#6366f1 0%,#8b5cf6 100%);
+                                      color:#ffffff;font-size:15px;font-weight:700;text-decoration:none;
+                                      padding:14px 36px;border-radius:8px;">
+                              Login to SalonOx
+                            </a>
+                          </td>
+                        </tr>
+                      </table>
 
                       <!-- Getting Started Steps -->
                       <div style="background:#f9fafb;border-radius:10px;padding:24px 28px;margin-bottom:28px;">
                         <p style="margin:0 0 16px;color:#374151;font-size:15px;font-weight:700;">
-                          Get started in 3 easy steps:
+                          ${t("email.welcome.stepsTitle")}
                         </p>
                         <table cellpadding="0" cellspacing="0" width="100%">
                           <tr>
@@ -402,12 +465,12 @@ export const emailService = {
                                           border-radius:50%;text-align:center;line-height:24px;
                                           color:#fff;font-size:12px;font-weight:700;">1</div>
                             </td>
-                            <td style="padding-left:12px;padding-bottom:14px;">
+                            <td style="padding-${languageDir(lang) === "rtl" ? "right" : "left"}:12px;padding-bottom:14px;">
                               <p style="margin:0;color:#374151;font-size:14px;font-weight:600;">
-                                Complete your salon profile
+                                ${t("email.welcome.step1")}
                               </p>
                               <p style="margin:2px 0 0;color:#6b7280;font-size:13px;">
-                                Add your salon details, logo, and working hours.
+                                ${t("email.welcome.step1Body")}
                               </p>
                             </td>
                           </tr>
@@ -417,12 +480,12 @@ export const emailService = {
                                           border-radius:50%;text-align:center;line-height:24px;
                                           color:#fff;font-size:12px;font-weight:700;">2</div>
                             </td>
-                            <td style="padding-left:12px;padding-bottom:14px;">
+                            <td style="padding-${languageDir(lang) === "rtl" ? "right" : "left"}:12px;padding-bottom:14px;">
                               <p style="margin:0;color:#374151;font-size:14px;font-weight:600;">
-                                Add your services &amp; staff
+                                ${t("email.welcome.step2")}
                               </p>
                               <p style="margin:2px 0 0;color:#6b7280;font-size:13px;">
-                                Set up your service menu and invite your team members.
+                                ${t("email.welcome.step2Body")}
                               </p>
                             </td>
                           </tr>
@@ -432,17 +495,29 @@ export const emailService = {
                                           border-radius:50%;text-align:center;line-height:24px;
                                           color:#fff;font-size:12px;font-weight:700;">3</div>
                             </td>
-                            <td style="padding-left:12px;">
+                            <td style="padding-${languageDir(lang) === "rtl" ? "right" : "left"}:12px;">
                               <p style="margin:0;color:#374151;font-size:14px;font-weight:600;">
-                                Start accepting bookings
+                                ${t("email.welcome.step3")}
                               </p>
                               <p style="margin:2px 0 0;color:#6b7280;font-size:13px;">
-                                Share your booking link and watch appointments roll in.
+                                ${t("email.welcome.step3Body")}
                               </p>
                             </td>
                           </tr>
                         </table>
                       </div>
+
+                      <!-- Support -->
+                      <p style="margin:0 0 4px;color:#374151;font-size:15px;font-weight:700;">
+                        Need help getting started?
+                      </p>
+                      <p style="margin:0 0 4px;color:#6b7280;font-size:14px;line-height:1.6;">
+                        Our support team is here to help you.
+                      </p>
+                      <p style="margin:0;color:#374151;font-size:14px;">
+                        Email:
+                        <a href="mailto:support@salonox.com" style="color:#6366f1;text-decoration:underline;">support@salonox.com</a>
+                      </p>
 
                     </td>
                   </tr>
@@ -451,14 +526,432 @@ export const emailService = {
                   <tr>
                     <td style="background:#f9fafb;padding:20px 40px;border-top:1px solid #e5e7eb;">
                       <p style="margin:0 0 4px;color:#9ca3af;font-size:12px;text-align:center;">
-                        &copy; ${new Date().getFullYear()} SalonOx. All rights reserved.
+                        ${t("email.common.rights", { year: new Date().getFullYear() })}
                       </p>
                       <p style="margin:0;color:#d1d5db;font-size:11px;text-align:center;">
-                        You received this email because you created an account on SalonOx.
+                        ${t("email.welcome.footer")}
                       </p>
                     </td>
                   </tr>
 
+                </table>
+              </td>
+            </tr>
+          </table>
+        </body>
+        </html>
+      `,
+    });
+  },
+
+  // Daily reminder in the last days of a subscription that will not renew by itself (subscription-expiry-reminder.service).
+  async sendSubscriptionExpiryReminderEmail(params: {
+    to: string;
+    ownerName?: string | null;
+    salonName: string;
+    planName: string;
+    expiryDate: string;
+    /** 0 = it expires today. */
+    daysRemaining: number;
+    subscriptionUrl: string;
+  }) {
+    const e = escapeHtml;
+    const days = Math.max(0, Math.floor(params.daysRemaining));
+    const when = days === 0 ? "today" : days === 1 ? "in 1 day" : `in ${days} days`;
+    const detail = (label: string, value: string) => `
+      <tr>
+        <td style="padding:7px 0;color:#6b7280;font-size:14px;width:46%;vertical-align:top;">${label}</td>
+        <td style="padding:7px 0;color:#111827;font-size:14px;font-weight:600;vertical-align:top;word-break:break-word;">${e(value)}</td>
+      </tr>`;
+
+    await transporter.sendMail({
+      from: config.smtp.from,
+      to: params.to,
+      subject: days === 0
+        ? `Your SalonOx ${params.planName} subscription expires today`
+        : `Your SalonOx ${params.planName} subscription expires ${when}`,
+      html: `
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+          <meta charset="UTF-8" />
+          <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+          <title>Subscription expiry reminder</title>
+        </head>
+        <body style="margin:0;padding:0;background:#f4f4f7;font-family:'Segoe UI',Arial,sans-serif;">
+          <table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f7;padding:24px 12px;">
+            <tr>
+              <td align="center">
+                <table width="580" cellpadding="0" cellspacing="0"
+                  style="background:#ffffff;border-radius:12px;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,0.08);max-width:580px;width:100%;">
+                  <tr>
+                    <td style="background:#f59e0b;background-image:linear-gradient(135deg,#f59e0b 0%,#f97316 100%);padding:30px 32px;text-align:center;">
+                      <p style="margin:0 0 6px;color:rgba(255,255,255,0.9);font-size:12px;font-weight:700;letter-spacing:2px;text-transform:uppercase;">SalonOx</p>
+                      <h1 style="margin:0;color:#ffffff;font-size:22px;font-weight:800;">Subscription expiry reminder</h1>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td style="padding:32px 32px 8px;">
+                      <p style="margin:0 0 14px;color:#374151;font-size:16px;line-height:1.7;">Hi ${e(params.ownerName?.trim() || "there")},</p>
+                      <p style="margin:0 0 22px;color:#374151;font-size:16px;line-height:1.7;">
+                        This is a friendly reminder that your SalonOx ${e(params.planName)} subscription is approaching its expiry date.
+                      </p>
+                      <p style="margin:0 0 8px;color:#111827;font-size:15px;font-weight:700;">Subscription Details:</p>
+                      <table cellpadding="0" cellspacing="0" width="100%" style="background:#f9fafb;border:1px solid #eef2f6;border-radius:10px;padding:8px 18px;margin-bottom:22px;">
+                        ${detail("Salon Name", params.salonName)}
+                        ${detail("Current Plan", params.planName)}
+                        ${detail("Expiry Date", params.expiryDate)}
+                        ${detail("Days Remaining", String(days))}
+                      </table>
+                      <p style="margin:0 0 16px;color:#111827;font-size:16px;font-weight:700;line-height:1.6;">Your subscription will expire ${when}.</p>
+                      <p style="margin:0 0 18px;color:#374151;font-size:15px;line-height:1.7;">
+                        To continue enjoying uninterrupted access to SalonOx features, please renew your subscription before the expiry date.
+                      </p>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td align="center" style="padding:4px 32px 12px;">
+                      <a href="${e(params.subscriptionUrl)}"
+                         style="display:inline-block;background:#6366f1;background-image:linear-gradient(135deg,#6366f1 0%,#8b5cf6 100%);
+                                color:#ffffff;font-size:15px;font-weight:700;text-decoration:none;padding:14px 36px;border-radius:8px;">
+                        Renew Your Subscription
+                      </a>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td style="padding:20px 32px 32px;">
+                      <p style="margin:0 0 14px;color:#374151;font-size:15px;line-height:1.7;">
+                        Avoid interruptions to your salon operations, appointments, billing, reports, and other essential features.
+                      </p>
+                      <p style="margin:0 0 14px;color:#374151;font-size:15px;line-height:1.7;">Thank you for choosing SalonOx!</p>
+                      <p style="margin:0;color:#374151;font-size:15px;line-height:1.6;">Regards,<br /><strong>Team SalonOx</strong><br />
+                        <a href="https://salonox.com" style="color:#6366f1;text-decoration:none;">https://salonox.com</a></p>
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+          </table>
+        </body>
+        </html>
+      `,
+    });
+  },
+
+  // Sent once per verified subscription payment (see subscription-invoices.service emailInvoice) to an owner who has finished
+  // onboarding: the payment details and the GST invoice PDF.
+  async sendPaymentSuccessEmail(params: {
+    to: string;
+    ownerName?: string | null;
+    salonName: string;
+    planName: string;
+    billingCycle: string;
+    /** Already formatted with the payment's currency, e.g. "₹11,313.84". */
+    amount: string;
+    paymentId: string;
+    paymentDate: string;
+    startDate: string;
+    endDate: string;
+    pdfBuffer: Buffer;
+    pdfFilename: string;
+  }) {
+    const loginUrl = `${config.frontend.url}/login`;
+    const e = escapeHtml;
+    const detail = (label: string, value: string) => `
+      <tr>
+        <td style="padding:7px 0;color:#6b7280;font-size:14px;width:46%;vertical-align:top;">${label}</td>
+        <td style="padding:7px 0;color:#111827;font-size:14px;font-weight:600;vertical-align:top;word-break:break-word;">${e(value)}</td>
+      </tr>`;
+    // For an owner who has finished onboarding; one who hasn't gets sendPaymentReceivedOnboardingPendingEmail instead.
+    const closing = `<p style="margin:0 0 18px;color:#374151;font-size:15px;line-height:1.7;">Your SalonOx account is ready. You can log in and start using all the features included in your subscription.</p>`;
+    const ctaLabel = "Login Now";
+
+    await transporter.sendMail({
+      from: config.smtp.from,
+      to: params.to,
+      subject: "Payment Successful – Your SalonOx Subscription is Active!",
+      html: `
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+          <meta charset="UTF-8" />
+          <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+          <title>Payment Successful</title>
+        </head>
+        <body style="margin:0;padding:0;background:#f4f4f7;font-family:'Segoe UI',Arial,sans-serif;">
+          <table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f7;padding:24px 12px;">
+            <tr>
+              <td align="center">
+                <table width="580" cellpadding="0" cellspacing="0"
+                  style="background:#ffffff;border-radius:12px;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,0.08);max-width:580px;width:100%;">
+                  <tr>
+                    <td style="background:#16a34a;background-image:linear-gradient(135deg,#16a34a 0%,#22c55e 100%);padding:32px;text-align:center;">
+                      <p style="margin:0 0 6px;color:rgba(255,255,255,0.85);font-size:12px;font-weight:700;letter-spacing:2px;text-transform:uppercase;">SalonOx</p>
+                      <h1 style="margin:0;color:#ffffff;font-size:24px;font-weight:800;">Payment Successful</h1>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td style="padding:32px 32px 8px;">
+                      <p style="margin:0 0 14px;color:#374151;font-size:16px;line-height:1.7;">Hi ${e(params.ownerName?.trim() || "there")},</p>
+                      <p style="margin:0 0 22px;color:#374151;font-size:16px;line-height:1.7;">
+                        Your payment has been successfully received. Thank you for choosing SalonOx!
+                      </p>
+                      <p style="margin:0 0 8px;color:#111827;font-size:15px;font-weight:700;">Payment Details:</p>
+                      <table cellpadding="0" cellspacing="0" width="100%" style="background:#f9fafb;border:1px solid #eef2f6;border-radius:10px;padding:8px 18px;margin-bottom:22px;">
+                        ${detail("Salon Name", params.salonName)}
+                        ${detail("Plan", params.planName)}
+                        ${detail("Billing Cycle", params.billingCycle)}
+                        ${detail("Amount Paid", params.amount)}
+                        ${detail("Payment ID", params.paymentId)}
+                        ${detail("Payment Date", params.paymentDate)}
+                        ${detail("Subscription Start Date", params.startDate)}
+                        ${detail("Subscription End Date", params.endDate)}
+                      </table>
+                      <p style="margin:0 0 18px;color:#374151;font-size:15px;line-height:1.7;">Your subscription payment has been confirmed successfully.</p>
+                      <p style="margin:0 0 18px;color:#374151;font-size:15px;line-height:1.7;">
+                        <strong>Invoice:</strong> Your official GST invoice is attached to this email for your records.
+                      </p>
+                      ${closing}
+                    </td>
+                  </tr>
+                  <tr>
+                    <td align="center" style="padding:4px 32px 12px;">
+                      <a href="${loginUrl}"
+                         style="display:inline-block;background:#6366f1;background-image:linear-gradient(135deg,#6366f1 0%,#8b5cf6 100%);
+                                color:#ffffff;font-size:15px;font-weight:700;text-decoration:none;padding:14px 36px;border-radius:8px;">
+                        ${ctaLabel}
+                      </a>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td style="padding:20px 32px 32px;">
+                      <p style="margin:0 0 14px;color:#374151;font-size:15px;line-height:1.7;">Thank you for being a part of SalonOx!</p>
+                      <p style="margin:0;color:#374151;font-size:15px;line-height:1.6;">Regards,<br /><strong>Team SalonOx</strong><br />
+                        <a href="https://salonox.in" style="color:#6366f1;text-decoration:none;">https://salonox.in</a></p>
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+          </table>
+        </body>
+        </html>
+      `,
+      attachments: [{ filename: params.pdfFilename, content: params.pdfBuffer }],
+    });
+  },
+
+  // The same verified payment, for an owner whose onboarding is NOT finished yet (they paid right after sign-up): confirms the
+  // payment, attaches the invoice and sends them back to finish setting up.
+  async sendPaymentReceivedOnboardingPendingEmail(params: {
+    to: string;
+    ownerName?: string | null;
+    salonName: string;
+    planName: string;
+    /** Already formatted with the payment's currency, e.g. "₹11,313.84". */
+    amount: string;
+    paymentId: string;
+    paymentDate: string;
+    pdfBuffer: Buffer;
+    pdfFilename: string;
+  }) {
+    const e = escapeHtml;
+    const loginUrl = `${config.frontend.url}/login`;
+    const detail = (label: string, value: string) => `
+      <tr>
+        <td style="padding:7px 0;color:#6b7280;font-size:14px;width:46%;vertical-align:top;">${label}</td>
+        <td style="padding:7px 0;color:#111827;font-size:14px;font-weight:600;vertical-align:top;word-break:break-word;">${e(value)}</td>
+      </tr>`;
+
+    await transporter.sendMail({
+      from: config.smtp.from,
+      to: params.to,
+      subject: "Payment Received – Complete Your SalonOx Setup",
+      html: `
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+          <meta charset="UTF-8" />
+          <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+          <title>Payment received</title>
+        </head>
+        <body style="margin:0;padding:0;background:#f4f4f7;font-family:'Segoe UI',Arial,sans-serif;">
+          <table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f7;padding:24px 12px;">
+            <tr>
+              <td align="center">
+                <table width="580" cellpadding="0" cellspacing="0"
+                  style="background:#ffffff;border-radius:12px;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,0.08);max-width:580px;width:100%;">
+                  <tr>
+                    <td style="background:#16a34a;background-image:linear-gradient(135deg,#16a34a 0%,#22c55e 100%);padding:32px;text-align:center;">
+                      <p style="margin:0 0 6px;color:rgba(255,255,255,0.85);font-size:12px;font-weight:700;letter-spacing:2px;text-transform:uppercase;">SalonOx</p>
+                      <h1 style="margin:0;color:#ffffff;font-size:24px;font-weight:800;">Payment Received</h1>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td style="padding:32px 32px 8px;">
+                      <p style="margin:0 0 14px;color:#374151;font-size:16px;line-height:1.7;">Hi ${e(params.ownerName?.trim() || "there")},</p>
+                      <p style="margin:0 0 14px;color:#374151;font-size:16px;line-height:1.7;">
+                        <strong>Great news! Your SalonOx subscription payment has been successfully received.</strong>
+                      </p>
+                      <p style="margin:0 0 22px;color:#374151;font-size:16px;line-height:1.7;">
+                        Your account has been created, and you are just one step away from getting started.
+                      </p>
+                      <p style="margin:0 0 8px;color:#111827;font-size:15px;font-weight:700;">Payment Details:</p>
+                      <table cellpadding="0" cellspacing="0" width="100%" style="background:#f9fafb;border:1px solid #eef2f6;border-radius:10px;padding:8px 18px;margin-bottom:24px;">
+                        ${detail("Salon Name", params.salonName)}
+                        ${detail("Plan", params.planName)}
+                        ${detail("Amount Paid", params.amount)}
+                        ${detail("Payment ID", params.paymentId)}
+                        ${detail("Payment Date", params.paymentDate)}
+                      </table>
+
+                      <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:18px 20px;margin-bottom:22px;">
+                        <p style="margin:0 0 8px;color:#92400e;font-size:16px;font-weight:800;">Complete Your Salon Setup</p>
+                        <p style="margin:0 0 10px;color:#78350f;font-size:15px;line-height:1.7;">We noticed that your onboarding process is still incomplete.</p>
+                        <p style="margin:0;color:#78350f;font-size:15px;line-height:1.7;">Please use the link below to log in and continue from where you left off.</p>
+                      </div>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td align="center" style="padding:0 32px 8px;">
+                      <p style="margin:0 0 12px;color:#111827;font-size:15px;font-weight:700;">Continue Onboarding:</p>
+                      <a href="${loginUrl}"
+                         style="display:inline-block;background:#6366f1;background-image:linear-gradient(135deg,#6366f1 0%,#8b5cf6 100%);
+                                color:#ffffff;font-size:15px;font-weight:700;text-decoration:none;padding:14px 36px;border-radius:8px;">
+                        Continue Onboarding
+                      </a>
+                      <p style="margin:12px 0 0;font-size:13px;color:#6b7280;word-break:break-all;">
+                        <a href="${loginUrl}" style="color:#6366f1;text-decoration:none;">${loginUrl}</a>
+                      </p>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td style="padding:22px 32px 32px;">
+                      <p style="margin:0 0 14px;color:#374151;font-size:15px;line-height:1.7;">
+                        Once you complete the onboarding process, you will be able to access your SalonOx dashboard and start managing your salon.
+                      </p>
+                      <p style="margin:0 0 14px;color:#374151;font-size:15px;line-height:1.7;">
+                        Your payment invoice is attached to this email for your reference.
+                      </p>
+                      <p style="margin:0 0 14px;color:#374151;font-size:15px;line-height:1.7;">
+                        If you need any assistance, feel free to contact our support team.
+                      </p>
+                      <p style="margin:0 0 14px;color:#374151;font-size:15px;line-height:1.7;">Welcome to SalonOx!</p>
+                      <p style="margin:0;color:#374151;font-size:15px;line-height:1.6;">Regards,<br /><strong>Team SalonOx</strong><br />
+                        <a href="https://salonox.com" style="color:#6366f1;text-decoration:none;">https://salonox.com</a></p>
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+          </table>
+        </body>
+        </html>
+      `,
+      attachments: [{ filename: params.pdfFilename, content: params.pdfBuffer }],
+    });
+  },
+
+  // Sent once, when an owner has completed every mandatory onboarding step (salons.service completeOnboarding): the account
+  // details and what they can do next. Not sent for registering or buying a plan on their own.
+  async sendOnboardingCompleteEmail(params: {
+    to: string;
+    ownerName?: string | null;
+    salonName: string;
+    /** The salon's current plan; the two plan rows are left out when the salon has none yet. */
+    planName?: string | null;
+    /** Already formatted, e.g. "5 Nov 2027". */
+    validUntil?: string | null;
+  }) {
+    const e = escapeHtml;
+    const loginUrl = `${config.frontend.url}/login`;
+    const detail = (label: string, value: string) => `
+      <tr>
+        <td style="padding:7px 0;color:#6b7280;font-size:14px;width:46%;vertical-align:top;">${label}</td>
+        <td style="padding:7px 0;color:#111827;font-size:14px;font-weight:600;vertical-align:top;word-break:break-word;">${e(value)}</td>
+      </tr>`;
+    const features = [
+      "Appointment &amp; Calendar Management",
+      "Quick Sale &amp; Billing",
+      "Client Management",
+      "Staff Management",
+      "Inventory Management",
+      "Reports &amp; Analytics",
+      "WhatsApp Marketing",
+      "Online Booking",
+    ];
+
+    await transporter.sendMail({
+      from: config.smtp.from,
+      to: params.to,
+      subject: "Congratulations! Your SalonOx Onboarding is Complete",
+      html: `
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+          <meta charset="UTF-8" />
+          <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+          <title>Your SalonOx onboarding is complete</title>
+        </head>
+        <body style="margin:0;padding:0;background:#f4f4f7;font-family:'Segoe UI',Arial,sans-serif;">
+          <table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f7;padding:24px 12px;">
+            <tr>
+              <td align="center">
+                <table width="580" cellpadding="0" cellspacing="0"
+                  style="background:#ffffff;border-radius:12px;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,0.08);max-width:580px;width:100%;">
+                  <tr>
+                    <td style="background:#6366f1;background-image:linear-gradient(135deg,#6366f1 0%,#8b5cf6 100%);padding:34px 32px;text-align:center;">
+                      <h1 style="margin:0 0 6px;color:#ffffff;font-size:28px;font-weight:800;letter-spacing:-0.5px;">SalonOx</h1>
+                      <p style="margin:0;color:rgba(255,255,255,0.9);font-size:16px;font-weight:600;">Your onboarding is complete</p>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td style="padding:32px 32px 8px;">
+                      <p style="margin:0 0 14px;color:#374151;font-size:16px;line-height:1.7;">Hi ${e(params.ownerName?.trim() || "there")},</p>
+                      <p style="margin:0 0 14px;color:#374151;font-size:16px;line-height:1.7;">
+                        <strong>Congratulations! Your SalonOx onboarding process has been successfully completed.</strong>
+                      </p>
+                      <p style="margin:0 0 22px;color:#374151;font-size:16px;line-height:1.7;">
+                        Your salon account is now ready, and you can start managing your salon operations with SalonOx.
+                      </p>
+                      <p style="margin:0 0 8px;color:#111827;font-size:15px;font-weight:700;">Your Account Details:</p>
+                      <table cellpadding="0" cellspacing="0" width="100%" style="background:#f9fafb;border:1px solid #eef2f6;border-radius:10px;padding:8px 18px;margin-bottom:22px;">
+                        ${detail("Salon Name", params.salonName)}
+                        ${params.planName ? detail("Subscription Plan", params.planName) : ""}
+                        ${detail("Account Email", params.to)}
+                        ${params.validUntil ? detail("Subscription Valid Until", params.validUntil) : ""}
+                      </table>
+                      <p style="margin:0 0 10px;color:#374151;font-size:15px;line-height:1.7;">
+                        You can now explore the features available in your subscription, including:
+                      </p>
+                      <ul style="margin:0 0 22px;padding-left:22px;color:#374151;font-size:15px;line-height:1.9;">
+                        ${features.map((f) => `<li>${f}</li>`).join("")}
+                      </ul>
+                      <p style="margin:0 0 12px;color:#111827;font-size:15px;font-weight:700;">Access Your SalonOx Dashboard:</p>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td align="center" style="padding:0 32px 8px;">
+                      <a href="${loginUrl}"
+                         style="display:inline-block;background:#6366f1;background-image:linear-gradient(135deg,#6366f1 0%,#8b5cf6 100%);
+                                color:#ffffff;font-size:15px;font-weight:700;text-decoration:none;padding:14px 36px;border-radius:8px;">
+                        Open Your Dashboard
+                      </a>
+                      <p style="margin:12px 0 0;font-size:13px;color:#6b7280;word-break:break-all;">
+                        <a href="${loginUrl}" style="color:#6366f1;text-decoration:none;">${loginUrl}</a>
+                      </p>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td style="padding:22px 32px 32px;">
+                      <p style="margin:0 0 14px;color:#374151;font-size:15px;line-height:1.7;">
+                        We're excited to help you simplify your salon operations and grow your business.
+                      </p>
+                      <p style="margin:0 0 14px;color:#374151;font-size:15px;line-height:1.7;">Thank you for choosing SalonOx!</p>
+                      <p style="margin:0;color:#374151;font-size:15px;line-height:1.6;">Regards,<br /><strong>Team SalonOx</strong><br />
+                        <a href="https://salonox.com" style="color:#6366f1;text-decoration:none;">https://salonox.com</a></p>
+                    </td>
+                  </tr>
                 </table>
               </td>
             </tr>
@@ -717,6 +1210,10 @@ export const emailService = {
 
   async sendNewAppointmentEmail(params: {
     to: string;
+    /** Recipient's salon — its language (salons.language) is used. */
+    salonId?: string | null;
+    /** Explicit language; wins over the salon's. */
+    language?: string | null;
     salonName: string;
     clientName: string;
     services: string;
@@ -724,14 +1221,16 @@ export const emailService = {
     time: string;
     appointmentId: string;
   }) {
+    const lang = await emailLanguage(params);
+    const t = translator(lang);
     const { to, salonName, clientName, services, date, time, appointmentId } = params;
     await transporter.sendMail({
       from: config.smtp.from,
       to,
-      subject: `New Appointment Booked — ${clientName}`,
+      subject: t("email.newAppointment.subject", { name: clientName }),
       html: `
-        <!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"/></head>
-        <body style="margin:0;padding:0;background:#f4f4f7;font-family:'Segoe UI',Arial,sans-serif;">
+        <!DOCTYPE html><html ${htmlAttrs(lang)}><head><meta charset="UTF-8"/></head>
+        <body${bodyDir(lang)} style="margin:0;padding:0;background:#f4f4f7;font-family:'Segoe UI',Arial,sans-serif;">
           <table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f7;padding:36px 0;">
             <tr><td align="center">
               <table width="560" cellpadding="0" cellspacing="0"
@@ -739,24 +1238,24 @@ export const emailService = {
                 <tr>
                   <td style="background:#111827;padding:28px 36px;">
                     <p style="margin:0;color:#fff;font-size:12px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;opacity:0.7;">${salonName}</p>
-                    <h1 style="margin:6px 0 0;color:#fff;font-size:22px;font-weight:800;">New Appointment Booked</h1>
+                    <h1 style="margin:6px 0 0;color:#fff;font-size:22px;font-weight:800;">${t("email.newAppointment.title")}</h1>
                   </td>
                 </tr>
                 <tr>
                   <td style="padding:32px 36px;">
                     <p style="margin:0 0 20px;color:#374151;font-size:15px;line-height:1.6;">
-                      A new appointment has been booked. Here are the details:
+                      ${t("email.newAppointment.intro")}
                     </p>
                     <table width="100%" cellpadding="0" cellspacing="0"
                       style="background:#f9fafb;border-radius:10px;border:1px solid #e5e7eb;">
                       <tr>
                         <td style="padding:20px 24px;">
-                          <p style="margin:0 0 12px;color:#6b7280;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;">Appointment Details</p>
-                          <p style="margin:0 0 8px;color:#111827;font-size:14px;"><strong>Client:</strong> ${escapeHtml(clientName)}</p>
-                          <p style="margin:0 0 8px;color:#111827;font-size:14px;"><strong>Service:</strong> ${escapeHtml(services)}</p>
-                          <p style="margin:0 0 8px;color:#111827;font-size:14px;"><strong>Date:</strong> ${escapeHtml(date)}</p>
-                          <p style="margin:0 0 8px;color:#111827;font-size:14px;"><strong>Time:</strong> ${escapeHtml(time)}</p>
-                          <p style="margin:0;color:#6b7280;font-size:12px;">Ref: ${escapeHtml(appointmentId.slice(0, 8).toUpperCase())}</p>
+                          <p style="margin:0 0 12px;color:#6b7280;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;">${t("email.newAppointment.details")}</p>
+                          <p style="margin:0 0 8px;color:#111827;font-size:14px;"><strong>${t("email.label.client")}:</strong> ${escapeHtml(clientName)}</p>
+                          <p style="margin:0 0 8px;color:#111827;font-size:14px;"><strong>${t("email.label.service")}:</strong> ${escapeHtml(services)}</p>
+                          <p style="margin:0 0 8px;color:#111827;font-size:14px;"><strong>${t("email.label.date")}:</strong> ${escapeHtml(date)}</p>
+                          <p style="margin:0 0 8px;color:#111827;font-size:14px;"><strong>${t("email.label.time")}:</strong> ${escapeHtml(time)}</p>
+                          <p style="margin:0;color:#6b7280;font-size:12px;">${t("email.common.ref", { ref: escapeHtml(appointmentId.slice(0, 8).toUpperCase()) })}</p>
                         </td>
                       </tr>
                     </table>
@@ -764,7 +1263,7 @@ export const emailService = {
                 </tr>
                 <tr>
                   <td style="background:#f9fafb;padding:16px 36px;border-top:1px solid #e5e7eb;">
-                    <p style="margin:0;color:#9ca3af;font-size:12px;text-align:center;">© ${new Date().getFullYear()} SalonOx. Automated notification.</p>
+                    <p style="margin:0;color:#9ca3af;font-size:12px;text-align:center;">${t("email.common.footerAuto", { year: new Date().getFullYear() })}</p>
                   </td>
                 </tr>
               </table>
@@ -832,20 +1331,26 @@ export const emailService = {
 
   async sendAppointmentCancelledOwnerEmail(params: {
     to: string;
+    /** Recipient's salon — its language (salons.language) is used. */
+    salonId?: string | null;
+    /** Explicit language; wins over the salon's. */
+    language?: string | null;
     salonName: string;
     clientName: string;
     date: string;
     time: string;
     appointmentId: string;
   }) {
+    const lang = await emailLanguage(params);
+    const t = translator(lang);
     const { to, salonName, clientName, date, time, appointmentId } = params;
     await transporter.sendMail({
       from: config.smtp.from,
       to,
-      subject: `Appointment Cancelled — ${clientName}`,
+      subject: t("email.cancelledOwner.subject", { name: clientName }),
       html: `
-        <!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"/></head>
-        <body style="margin:0;padding:0;background:#f4f4f7;font-family:'Segoe UI',Arial,sans-serif;">
+        <!DOCTYPE html><html ${htmlAttrs(lang)}><head><meta charset="UTF-8"/></head>
+        <body${bodyDir(lang)} style="margin:0;padding:0;background:#f4f4f7;font-family:'Segoe UI',Arial,sans-serif;">
           <table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f7;padding:36px 0;">
             <tr><td align="center">
               <table width="560" cellpadding="0" cellspacing="0"
@@ -853,22 +1358,22 @@ export const emailService = {
                 <tr>
                   <td style="background:#dc2626;padding:28px 36px;">
                     <p style="margin:0;color:#fff;font-size:12px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;opacity:0.7;">${escapeHtml(salonName)}</p>
-                    <h1 style="margin:6px 0 0;color:#fff;font-size:22px;font-weight:800;">Appointment Cancelled</h1>
+                    <h1 style="margin:6px 0 0;color:#fff;font-size:22px;font-weight:800;">${t("email.cancelledOwner.title")}</h1>
                   </td>
                 </tr>
                 <tr>
                   <td style="padding:32px 36px;">
                     <p style="margin:0 0 20px;color:#374151;font-size:15px;line-height:1.6;">
-                      An appointment has been cancelled. Here are the details:
+                      ${t("email.cancelledOwner.intro")}
                     </p>
                     <table width="100%" cellpadding="0" cellspacing="0"
                       style="background:#fef2f2;border-radius:10px;border:1px solid #fecaca;">
                       <tr>
                         <td style="padding:20px 24px;">
-                          <p style="margin:0 0 8px;color:#991b1b;font-size:14px;"><strong>Client:</strong> ${escapeHtml(clientName)}</p>
-                          <p style="margin:0 0 8px;color:#991b1b;font-size:14px;"><strong>Date:</strong> ${escapeHtml(date)}</p>
-                          <p style="margin:0 0 8px;color:#991b1b;font-size:14px;"><strong>Time:</strong> ${escapeHtml(time)}</p>
-                          <p style="margin:0;color:#991b1b;font-size:12px;">Ref: ${escapeHtml(appointmentId.slice(0, 8).toUpperCase())}</p>
+                          <p style="margin:0 0 8px;color:#991b1b;font-size:14px;"><strong>${t("email.label.client")}:</strong> ${escapeHtml(clientName)}</p>
+                          <p style="margin:0 0 8px;color:#991b1b;font-size:14px;"><strong>${t("email.label.date")}:</strong> ${escapeHtml(date)}</p>
+                          <p style="margin:0 0 8px;color:#991b1b;font-size:14px;"><strong>${t("email.label.time")}:</strong> ${escapeHtml(time)}</p>
+                          <p style="margin:0;color:#991b1b;font-size:12px;">${t("email.common.ref", { ref: escapeHtml(appointmentId.slice(0, 8).toUpperCase()) })}</p>
                         </td>
                       </tr>
                     </table>
@@ -876,7 +1381,7 @@ export const emailService = {
                 </tr>
                 <tr>
                   <td style="background:#f9fafb;padding:16px 36px;border-top:1px solid #e5e7eb;">
-                    <p style="margin:0;color:#9ca3af;font-size:12px;text-align:center;">© ${new Date().getFullYear()} SalonOx. Automated notification.</p>
+                    <p style="margin:0;color:#9ca3af;font-size:12px;text-align:center;">${t("email.common.footerAuto", { year: new Date().getFullYear() })}</p>
                   </td>
                 </tr>
               </table>
@@ -892,8 +1397,10 @@ export const emailService = {
     salonName: string;
     services: string;
     amount: string;
+    /** The salon's currency (salons.currency) — the amount is printed in it. */
+    currency?: string | null;
   }) {
-    const { to, clientName, salonName, services, amount } = params;
+    const { to, clientName, salonName, services, amount, currency } = params;
     await transporter.sendMail({
       from: config.smtp.from,
       to,
@@ -921,7 +1428,7 @@ export const emailService = {
                       <tr>
                         <td style="padding:20px 24px;">
                           <p style="margin:0 0 8px;color:#15803d;font-size:14px;"><strong>Services:</strong> ${escapeHtml(services)}</p>
-                          <p style="margin:0;color:#15803d;font-size:16px;font-weight:700;"><strong>Total:</strong> ₹${escapeHtml(amount)}</p>
+                          <p style="margin:0;color:#15803d;font-size:16px;font-weight:700;"><strong>Total:</strong> ${escapeHtml(formatMoney(amount, currency))}</p>
                         </td>
                       </tr>
                     </table>
@@ -944,20 +1451,28 @@ export const emailService = {
 
   async sendNewPaymentEmail(params: {
     to: string;
+    /** Recipient's salon — its language (salons.language) is used. */
+    salonId?: string | null;
+    /** Explicit language; wins over the salon's. */
+    language?: string | null;
     salonName: string;
     clientName: string;
     amount: string;
+    /** The salon's currency (salons.currency) — the amount is printed in it. */
+    currency?: string | null;
     paymentMethod: string;
     invoiceId: string;
   }) {
-    const { to, salonName, clientName, amount, paymentMethod, invoiceId } = params;
+    const lang = await emailLanguage(params);
+    const t = translator(lang);
+    const { to, salonName, clientName, amount, currency, paymentMethod, invoiceId } = params;
     await transporter.sendMail({
       from: config.smtp.from,
       to,
-      subject: `Payment Received — ₹${amount}`,
+      subject: t("email.newPayment.subject", { amount: formatMoney(amount, currency) }),
       html: `
-        <!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"/></head>
-        <body style="margin:0;padding:0;background:#f4f4f7;font-family:'Segoe UI',Arial,sans-serif;">
+        <!DOCTYPE html><html ${htmlAttrs(lang)}><head><meta charset="UTF-8"/></head>
+        <body${bodyDir(lang)} style="margin:0;padding:0;background:#f4f4f7;font-family:'Segoe UI',Arial,sans-serif;">
           <table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f7;padding:36px 0;">
             <tr><td align="center">
               <table width="560" cellpadding="0" cellspacing="0"
@@ -965,22 +1480,22 @@ export const emailService = {
                 <tr>
                   <td style="background:#111827;padding:28px 36px;">
                     <p style="margin:0;color:#fff;font-size:12px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;opacity:0.7;">${escapeHtml(salonName)}</p>
-                    <h1 style="margin:6px 0 0;color:#fff;font-size:22px;font-weight:800;">Payment Received</h1>
+                    <h1 style="margin:6px 0 0;color:#fff;font-size:22px;font-weight:800;">${t("email.newPayment.title")}</h1>
                   </td>
                 </tr>
                 <tr>
                   <td style="padding:32px 36px;">
                     <p style="margin:0 0 20px;color:#374151;font-size:15px;line-height:1.6;">
-                      A payment has been recorded for <strong>${escapeHtml(clientName)}</strong>.
+                      ${t("email.newPayment.intro", { client: escapeHtml(clientName) })}
                     </p>
                     <table width="100%" cellpadding="0" cellspacing="0"
                       style="background:#f9fafb;border-radius:10px;border:1px solid #e5e7eb;">
                       <tr>
                         <td style="padding:20px 24px;">
-                          <p style="margin:0 0 8px;color:#111827;font-size:14px;"><strong>Client:</strong> ${escapeHtml(clientName)}</p>
-                          <p style="margin:0 0 8px;color:#111827;font-size:20px;font-weight:800;color:#16a34a;">₹${escapeHtml(amount)}</p>
-                          <p style="margin:0 0 8px;color:#111827;font-size:14px;"><strong>Method:</strong> ${escapeHtml(paymentMethod)}</p>
-                          <p style="margin:0;color:#6b7280;font-size:12px;">Invoice: ${escapeHtml(invoiceId)}</p>
+                          <p style="margin:0 0 8px;color:#111827;font-size:14px;"><strong>${t("email.label.client")}:</strong> ${escapeHtml(clientName)}</p>
+                          <p style="margin:0 0 8px;color:#111827;font-size:20px;font-weight:800;color:#16a34a;">${escapeHtml(formatMoney(amount, currency))}</p>
+                          <p style="margin:0 0 8px;color:#111827;font-size:14px;"><strong>${t("email.label.method")}:</strong> ${escapeHtml(paymentMethod)}</p>
+                          <p style="margin:0;color:#6b7280;font-size:12px;">${t("email.newPayment.invoice", { id: escapeHtml(invoiceId) })}</p>
                         </td>
                       </tr>
                     </table>
@@ -988,7 +1503,7 @@ export const emailService = {
                 </tr>
                 <tr>
                   <td style="background:#f9fafb;padding:16px 36px;border-top:1px solid #e5e7eb;">
-                    <p style="margin:0;color:#9ca3af;font-size:12px;text-align:center;">© ${new Date().getFullYear()} SalonOx. Automated notification.</p>
+                    <p style="margin:0;color:#9ca3af;font-size:12px;text-align:center;">${t("email.common.footerAuto", { year: new Date().getFullYear() })}</p>
                   </td>
                 </tr>
               </table>
@@ -1000,19 +1515,25 @@ export const emailService = {
 
   async sendNewClientEmail(params: {
     to: string;
+    /** Recipient's salon — its language (salons.language) is used. */
+    salonId?: string | null;
+    /** Explicit language; wins over the salon's. */
+    language?: string | null;
     salonName: string;
     clientName: string;
     clientEmail?: string;
     clientPhone?: string;
   }) {
+    const lang = await emailLanguage(params);
+    const t = translator(lang);
     const { to, salonName, clientName, clientEmail, clientPhone } = params;
     await transporter.sendMail({
       from: config.smtp.from,
       to,
-      subject: `New Client Added — ${clientName}`,
+      subject: t("email.newClient.subject", { name: clientName }),
       html: `
-        <!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"/></head>
-        <body style="margin:0;padding:0;background:#f4f4f7;font-family:'Segoe UI',Arial,sans-serif;">
+        <!DOCTYPE html><html ${htmlAttrs(lang)}><head><meta charset="UTF-8"/></head>
+        <body${bodyDir(lang)} style="margin:0;padding:0;background:#f4f4f7;font-family:'Segoe UI',Arial,sans-serif;">
           <table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f7;padding:36px 0;">
             <tr><td align="center">
               <table width="560" cellpadding="0" cellspacing="0"
@@ -1020,21 +1541,21 @@ export const emailService = {
                 <tr>
                   <td style="background:#111827;padding:28px 36px;">
                     <p style="margin:0;color:#fff;font-size:12px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;opacity:0.7;">${escapeHtml(salonName)}</p>
-                    <h1 style="margin:6px 0 0;color:#fff;font-size:22px;font-weight:800;">New Client Added</h1>
+                    <h1 style="margin:6px 0 0;color:#fff;font-size:22px;font-weight:800;">${t("email.newClient.title")}</h1>
                   </td>
                 </tr>
                 <tr>
                   <td style="padding:32px 36px;">
                     <p style="margin:0 0 20px;color:#374151;font-size:15px;line-height:1.6;">
-                      A new client has been added to <strong>${escapeHtml(salonName)}</strong>.
+                      ${t("email.newClient.intro", { salon: escapeHtml(salonName) })}
                     </p>
                     <table width="100%" cellpadding="0" cellspacing="0"
                       style="background:#f9fafb;border-radius:10px;border:1px solid #e5e7eb;">
                       <tr>
                         <td style="padding:20px 24px;">
-                          <p style="margin:0 0 8px;color:#111827;font-size:14px;"><strong>Name:</strong> ${escapeHtml(clientName)}</p>
-                          ${clientEmail ? `<p style="margin:0 0 8px;color:#111827;font-size:14px;"><strong>Email:</strong> ${escapeHtml(clientEmail)}</p>` : ""}
-                          ${clientPhone ? `<p style="margin:0;color:#111827;font-size:14px;"><strong>Phone:</strong> ${escapeHtml(clientPhone)}</p>` : ""}
+                          <p style="margin:0 0 8px;color:#111827;font-size:14px;"><strong>${t("email.label.name")}:</strong> ${escapeHtml(clientName)}</p>
+                          ${clientEmail ? `<p style="margin:0 0 8px;color:#111827;font-size:14px;"><strong>${t("email.label.email")}:</strong> ${escapeHtml(clientEmail)}</p>` : ""}
+                          ${clientPhone ? `<p style="margin:0;color:#111827;font-size:14px;"><strong>${t("email.label.phone")}:</strong> ${escapeHtml(clientPhone)}</p>` : ""}
                         </td>
                       </tr>
                     </table>
@@ -1042,7 +1563,7 @@ export const emailService = {
                 </tr>
                 <tr>
                   <td style="background:#f9fafb;padding:16px 36px;border-top:1px solid #e5e7eb;">
-                    <p style="margin:0;color:#9ca3af;font-size:12px;text-align:center;">© ${new Date().getFullYear()} SalonOx. Automated notification.</p>
+                    <p style="margin:0;color:#9ca3af;font-size:12px;text-align:center;">${t("email.common.footerAuto", { year: new Date().getFullYear() })}</p>
                   </td>
                 </tr>
               </table>
@@ -1054,19 +1575,25 @@ export const emailService = {
 
   async sendStaffLoginEmail(params: {
     to: string;
+    /** Recipient's salon — its language (salons.language) is used. */
+    salonId?: string | null;
+    /** Explicit language; wins over the salon's. */
+    language?: string | null;
     salonName: string;
     staffName: string;
     staffEmail: string;
     loginTime: string;
   }) {
+    const lang = await emailLanguage(params);
+    const t = translator(lang);
     const { to, salonName, staffName, staffEmail, loginTime } = params;
     await transporter.sendMail({
       from: config.smtp.from,
       to,
-      subject: `Staff Login Alert — ${staffName} signed in`,
+      subject: t("email.staffLogin.subject", { name: staffName }),
       html: `
-        <!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"/></head>
-        <body style="margin:0;padding:0;background:#f4f4f7;font-family:'Segoe UI',Arial,sans-serif;">
+        <!DOCTYPE html><html ${htmlAttrs(lang)}><head><meta charset="UTF-8"/></head>
+        <body${bodyDir(lang)} style="margin:0;padding:0;background:#f4f4f7;font-family:'Segoe UI',Arial,sans-serif;">
           <table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f7;padding:36px 0;">
             <tr><td align="center">
               <table width="560" cellpadding="0" cellspacing="0"
@@ -1074,32 +1601,32 @@ export const emailService = {
                 <tr>
                   <td style="background:#1e40af;padding:28px 36px;">
                     <p style="margin:0;color:#fff;font-size:12px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;opacity:0.7;">${escapeHtml(salonName)}</p>
-                    <h1 style="margin:6px 0 0;color:#fff;font-size:22px;font-weight:800;">Staff Login Alert</h1>
+                    <h1 style="margin:6px 0 0;color:#fff;font-size:22px;font-weight:800;">${t("email.staffLogin.title")}</h1>
                   </td>
                 </tr>
                 <tr>
                   <td style="padding:32px 36px;">
                     <p style="margin:0 0 20px;color:#374151;font-size:15px;line-height:1.6;">
-                      A team member has signed in to <strong>${escapeHtml(salonName)}</strong>.
+                      ${t("email.staffLogin.intro", { salon: escapeHtml(salonName) })}
                     </p>
                     <table width="100%" cellpadding="0" cellspacing="0"
                       style="background:#eff6ff;border-radius:10px;border:1px solid #bfdbfe;">
                       <tr>
                         <td style="padding:20px 24px;">
-                          <p style="margin:0 0 8px;color:#1e40af;font-size:14px;"><strong>Name:</strong> ${escapeHtml(staffName)}</p>
-                          <p style="margin:0 0 8px;color:#1e40af;font-size:14px;"><strong>Email:</strong> ${escapeHtml(staffEmail)}</p>
-                          <p style="margin:0;color:#1e40af;font-size:14px;"><strong>Time:</strong> ${escapeHtml(loginTime)}</p>
+                          <p style="margin:0 0 8px;color:#1e40af;font-size:14px;"><strong>${t("email.label.name")}:</strong> ${escapeHtml(staffName)}</p>
+                          <p style="margin:0 0 8px;color:#1e40af;font-size:14px;"><strong>${t("email.label.email")}:</strong> ${escapeHtml(staffEmail)}</p>
+                          <p style="margin:0;color:#1e40af;font-size:14px;"><strong>${t("email.label.time")}:</strong> ${escapeHtml(loginTime)}</p>
                         </td>
                       </tr>
                     </table>
                     <p style="margin:20px 0 0;color:#6b7280;font-size:13px;line-height:1.6;">
-                      If this login was not expected, please review your team's access permissions.
+                      ${t("email.staffLogin.note")}
                     </p>
                   </td>
                 </tr>
                 <tr>
                   <td style="background:#f9fafb;padding:16px 36px;border-top:1px solid #e5e7eb;">
-                    <p style="margin:0;color:#9ca3af;font-size:12px;text-align:center;">© ${new Date().getFullYear()} SalonOx. Automated notification.</p>
+                    <p style="margin:0;color:#9ca3af;font-size:12px;text-align:center;">${t("email.common.footerAuto", { year: new Date().getFullYear() })}</p>
                   </td>
                 </tr>
               </table>
@@ -1112,15 +1639,17 @@ export const emailService = {
   // Sent both the moment super admin deactivates a salon
   // (super-admin.service.ts::setSalonStatus) and daily at 8am IST as a
   // reminder for any salon still deactivated (salon-deactivation-reminder.scheduler.ts).
-  async sendSalonDeactivatedEmail(params: { to: string; salonName: string; ownerName?: string | null }) {
+  async sendSalonDeactivatedEmail(params: { to: string; salonName: string; ownerName?: string | null; /** Recipient's salon — its language is used. */ salonId?: string | null; language?: string | null }) {
     const { to, salonName, ownerName } = params;
+    const lang = await emailLanguage(params);
+    const t = translator(lang);
     await transporter.sendMail({
       from: config.smtp.from,
       to,
-      subject: `Your SalonOx account has been deactivated`,
+      subject: t("email.deactivated.subject"),
       html: `
-        <!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"/></head>
-        <body style="margin:0;padding:0;background:#f4f4f7;font-family:'Segoe UI',Arial,sans-serif;">
+        <!DOCTYPE html><html ${htmlAttrs(lang)}><head><meta charset="UTF-8"/></head>
+        <body${bodyDir(lang)} style="margin:0;padding:0;background:#f4f4f7;font-family:'Segoe UI',Arial,sans-serif;">
           <table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f7;padding:36px 0;">
             <tr><td align="center">
               <table width="560" cellpadding="0" cellspacing="0"
@@ -1128,30 +1657,30 @@ export const emailService = {
                 <tr>
                   <td style="background:#dc2626;padding:28px 36px;">
                     <p style="margin:0;color:#fff;font-size:12px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;opacity:0.8;">${escapeHtml(salonName)}</p>
-                    <h1 style="margin:6px 0 0;color:#fff;font-size:22px;font-weight:800;">Account Deactivated</h1>
+                    <h1 style="margin:6px 0 0;color:#fff;font-size:22px;font-weight:800;">${t("email.deactivated.title")}</h1>
                   </td>
                 </tr>
                 <tr>
                   <td style="padding:32px 36px;">
                     <p style="margin:0 0 20px;color:#374151;font-size:15px;line-height:1.6;">
-                      ${ownerName ? `Hi ${escapeHtml(ownerName)},` : "Hi,"} your account is deactivated. Kindly contact the Salonox team.
+                      ${t("email.deactivated.body", { greeting: ownerName ? t("email.common.hiName", { name: escapeHtml(ownerName) }) : t("email.common.hiPlain") })}
                     </p>
                     <table width="100%" cellpadding="0" cellspacing="0"
                       style="background:#fef2f2;border-radius:10px;border:1px solid #fecaca;">
                       <tr>
                         <td style="padding:20px 24px;">
-                          <p style="margin:0;color:#991b1b;font-size:14px;"><strong>Salon:</strong> ${escapeHtml(salonName)}</p>
+                          <p style="margin:0;color:#991b1b;font-size:14px;"><strong>${t("email.label.salon")}:</strong> ${escapeHtml(salonName)}</p>
                         </td>
                       </tr>
                     </table>
                     <p style="margin:20px 0 0;color:#6b7280;font-size:13px;line-height:1.6;">
-                      You won't be able to sign in until your account is reactivated. Please reach out to the Salonox team for assistance.
+                      ${t("email.deactivated.note")}
                     </p>
                   </td>
                 </tr>
                 <tr>
                   <td style="background:#f9fafb;padding:16px 36px;border-top:1px solid #e5e7eb;">
-                    <p style="margin:0;color:#9ca3af;font-size:12px;text-align:center;">© ${new Date().getFullYear()} SalonOx. Automated notification.</p>
+                    <p style="margin:0;color:#9ca3af;font-size:12px;text-align:center;">${t("email.common.footerAuto", { year: new Date().getFullYear() })}</p>
                   </td>
                 </tr>
               </table>
@@ -1163,26 +1692,32 @@ export const emailService = {
 
   async sendStaffInvitation(params: {
     to: string;
+    /** Recipient's salon — its language (salons.language) is used. */
+    salonId?: string | null;
+    /** Explicit language; wins over the salon's. */
+    language?: string | null;
     token: string;
     staffFirstName: string;
     salonName: string;
   }) {
+    const lang = await emailLanguage(params);
+    const t = translator(lang);
     const { to, token, staffFirstName, salonName } = params;
     const inviteLink = `${config.frontend.url}/accept-invite?token=${token}`;
 
     await transporter.sendMail({
       from: config.smtp.from,
       to,
-      subject: `You've been invited to join ${salonName}`,
+      subject: t("email.staffInvite.subject", { salon: salonName }),
       html: `
         <!DOCTYPE html>
-        <html lang="en">
+        <html ${htmlAttrs(lang)}>
         <head>
           <meta charset="UTF-8" />
           <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-          <title>Staff Invitation</title>
+          <title>${t("email.staffInvite.title")}</title>
         </head>
-        <body style="margin:0;padding:0;background:#f4f4f7;font-family:'Segoe UI',Arial,sans-serif;">
+        <body${bodyDir(lang)} style="margin:0;padding:0;background:#f4f4f7;font-family:'Segoe UI',Arial,sans-serif;">
           <table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f7;padding:40px 0;">
             <tr>
               <td align="center">
@@ -1199,7 +1734,7 @@ export const emailService = {
                         ${salonName}
                       </h1>
                       <p style="margin:8px 0 0;color:rgba(255,255,255,0.85);font-size:14px;">
-                        Staff Invitation
+                        ${t("email.staffInvite.title")}
                       </p>
                     </td>
                   </tr>
@@ -1208,14 +1743,13 @@ export const emailService = {
                   <tr>
                     <td style="padding:40px 40px 32px;">
                       <p style="margin:0 0 16px;color:#374151;font-size:16px;line-height:1.6;">
-                        Hi <strong>${staffFirstName}</strong>,
+                        ${t("email.common.hiBold", { name: staffFirstName })}
                       </p>
                       <p style="margin:0 0 16px;color:#374151;font-size:16px;line-height:1.6;">
-                        You have been invited to join <strong>${salonName}</strong> as a staff member
-                        on our platform. Click the button below to set up your account and get started.
+                        ${t("email.staffInvite.body", { salon: salonName })}
                       </p>
                       <p style="margin:0 0 32px;color:#6b7280;font-size:14px;line-height:1.6;">
-                        This invitation link will expire in <strong>72 hours</strong>.
+                        ${t("email.staffInvite.expiry")}
                       </p>
 
                       <!-- CTA Button -->
@@ -1227,7 +1761,7 @@ export const emailService = {
                                       color:#ffffff;text-decoration:none;font-size:16px;font-weight:600;
                                       padding:14px 40px;border-radius:8px;
                                       box-shadow:0 4px 12px rgba(99,102,241,0.4);">
-                              Accept Invitation
+                              ${t("email.staffInvite.button")}
                             </a>
                           </td>
                         </tr>
@@ -1239,7 +1773,7 @@ export const emailService = {
                   <tr>
                     <td style="padding:0 40px 24px;">
                       <p style="margin:0;color:#9ca3af;font-size:12px;line-height:1.6;">
-                        If the button doesn't work, copy and paste this link into your browser:
+                        ${t("email.staffInvite.fallback")}
                       </p>
                       <p style="margin:4px 0 0;word-break:break-all;">
                         <a href="${inviteLink}" style="color:#6366f1;font-size:12px;">${inviteLink}</a>
@@ -1251,7 +1785,7 @@ export const emailService = {
                   <tr>
                     <td style="background:#f9fafb;padding:20px 40px;border-top:1px solid #e5e7eb;">
                       <p style="margin:0;color:#9ca3af;font-size:12px;text-align:center;">
-                        If you did not expect this invitation, you can safely ignore this email.
+                        ${t("email.staffInvite.ignore")}
                       </p>
                     </td>
                   </tr>
@@ -1268,6 +1802,12 @@ export const emailService = {
 
   async sendDailySummaryEmail(params: {
     to: string;
+    /** Recipient's salon — its language (salons.language) is used. */
+    salonId?: string | null;
+    /** Explicit language; wins over the salon's. */
+    language?: string | null;
+    /** The salon's currency (salons.currency) — every amount is printed in it. */
+    currency?: string | null;
     summary?: {
       openingBalance?: number;
       cashRevenue?: number;
@@ -1280,8 +1820,11 @@ export const emailService = {
       cardPaymentAmount?: number;
     };
   }) {
+    const lang = await emailLanguage(params);
+    const t = translator(lang);
     const { to, summary = {} } = params;
-    const formatINR = (val: number = 0) => `₹${Number(val || 0).toLocaleString("en-IN", { minimumFractionDigits: 2 })}`;
+    const formatAmount = (val: number = 0) => formatMoney(val, params.currency);
+    const dayLocale = languageDateLocale(lang) ?? dateLocale(params.currency);
 
     const recAmt = summary.reconciliationAmount ?? 0;
     const reconciliationBg = recAmt === 0 ? "#f0fdf4" : recAmt > 0 ? "#f0f9ff" : "#fef2f2";
@@ -1293,16 +1836,16 @@ export const emailService = {
     await transporter.sendMail({
       from: config.smtp.from,
       to,
-      subject: `Daily Salon Cash Summary - ${new Date().toLocaleDateString("en-IN")}`,
+      subject: t("email.dailySummary.subject", { date: new Date().toLocaleDateString(dayLocale) }),
       html: `
         <!DOCTYPE html>
-        <html lang="en">
+        <html ${htmlAttrs(lang)}>
         <head>
           <meta charset="UTF-8"/>
           <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-          <title>Daily Summary Report</title>
+          <title>${t("email.dailySummary.pageTitle")}</title>
         </head>
-        <body style="margin:0;padding:0;background:#f4f4f7;font-family:'Segoe UI',Arial,sans-serif;">
+        <body${bodyDir(lang)} style="margin:0;padding:0;background:#f4f4f7;font-family:'Segoe UI',Arial,sans-serif;">
           <table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f7;padding:36px 0;">
             <tr><td align="center">
               <table width="600" cellpadding="0" cellspacing="0"
@@ -1312,10 +1855,10 @@ export const emailService = {
                 <tr>
                   <td style="background:linear-gradient(135deg,#4f46e5 0%,#7c3aed 100%);padding:32px 36px;">
                     <h1 style="margin:0;color:#ffffff;font-size:24px;font-weight:800;letter-spacing:-0.5px;">
-                      Daily Counter Summary Report
+                      ${t("email.dailySummary.title")}
                     </h1>
                     <p style="margin:6px 0 0;color:rgba(255,255,255,0.85);font-size:14px;">
-                      ${new Date().toLocaleDateString("en-IN", { weekday: "long", year: "numeric", month: "long", day: "numeric" })}
+                      ${new Date().toLocaleDateString(dayLocale, { weekday: "long", year: "numeric", month: "long", day: "numeric" })}
                     </p>
                   </td>
                 </tr>
@@ -1324,7 +1867,7 @@ export const emailService = {
                 <tr>
                   <td style="padding:32px 36px;">
                     <p style="margin:0 0 24px;color:#374151;font-size:15px;line-height:1.6;">
-                      Here is the financial summary for today's cash counter session:
+                      ${t("email.dailySummary.intro")}
                     </p>
 
                     <!-- Summary Cards Grid -->
@@ -1336,8 +1879,8 @@ export const emailService = {
                             style="background:#f8fafc;border:1px solid #e2e8f0;border-left:4px solid #3b82f6;border-radius:8px;padding:16px;">
                             <tr>
                               <td>
-                                <span style="font-size:11px;text-transform:uppercase;font-weight:700;color:#64748b;letter-spacing:0.5px;display:block;margin-bottom:6px;">Opening Balance</span>
-                                <div style="font-size:20px;font-weight:800;color:#1e293b;">${formatINR(summary.openingBalance)}</div>
+                                <span style="font-size:11px;text-transform:uppercase;font-weight:700;color:#64748b;letter-spacing:0.5px;display:block;margin-bottom:6px;">${t("email.dailySummary.opening")}</span>
+                                <div style="font-size:20px;font-weight:800;color:#1e293b;">${formatAmount(summary.openingBalance)}</div>
                               </td>
                             </tr>
                           </table>
@@ -1348,8 +1891,8 @@ export const emailService = {
                             style="background:#f0fdf4;border:1px solid #bbf7d0;border-left:4px solid #16a34a;border-radius:8px;padding:16px;">
                             <tr>
                               <td>
-                                <span style="font-size:11px;text-transform:uppercase;font-weight:700;color:#15803d;letter-spacing:0.5px;display:block;margin-bottom:6px;">Cash Revenue</span>
-                                <div style="font-size:20px;font-weight:800;color:#16a34a;">${formatINR(summary.cashRevenue)}</div>
+                                <span style="font-size:11px;text-transform:uppercase;font-weight:700;color:#15803d;letter-spacing:0.5px;display:block;margin-bottom:6px;">${t("email.dailySummary.cashRevenue")}</span>
+                                <div style="font-size:20px;font-weight:800;color:#16a34a;">${formatAmount(summary.cashRevenue)}</div>
                               </td>
                             </tr>
                           </table>
@@ -1363,8 +1906,8 @@ export const emailService = {
                             style="background:#fffbeb;border:1px solid #fef3c7;border-left:4px solid #d97706;border-radius:8px;padding:16px;">
                             <tr>
                               <td>
-                                <span style="font-size:11px;text-transform:uppercase;font-weight:700;color:#b45309;letter-spacing:0.5px;display:block;margin-bottom:6px;">Cash Expense</span>
-                                <div style="font-size:20px;font-weight:800;color:#d97706;">${formatINR(summary.cashExpense)}</div>
+                                <span style="font-size:11px;text-transform:uppercase;font-weight:700;color:#b45309;letter-spacing:0.5px;display:block;margin-bottom:6px;">${t("email.dailySummary.cashExpense")}</span>
+                                <div style="font-size:20px;font-weight:800;color:#d97706;">${formatAmount(summary.cashExpense)}</div>
                               </td>
                             </tr>
                           </table>
@@ -1375,8 +1918,8 @@ export const emailService = {
                             style="background:#f5f3ff;border:1px solid #ddd6fe;border-left:4px solid #6366f1;border-radius:8px;padding:16px;">
                             <tr>
                               <td>
-                                <span style="font-size:11px;text-transform:uppercase;font-weight:700;color:#4338ca;letter-spacing:0.5px;display:block;margin-bottom:6px;">Closing Balance</span>
-                                <div style="font-size:20px;font-weight:800;color:#4f46e5;">${formatINR(summary.closingBalance)}</div>
+                                <span style="font-size:11px;text-transform:uppercase;font-weight:700;color:#4338ca;letter-spacing:0.5px;display:block;margin-bottom:6px;">${t("email.dailySummary.closing")}</span>
+                                <div style="font-size:20px;font-weight:800;color:#4f46e5;">${formatAmount(summary.closingBalance)}</div>
                               </td>
                             </tr>
                           </table>
@@ -1390,8 +1933,8 @@ export const emailService = {
                             style="background:#f0f9ff;border:1px solid #bae6fd;border-left:4px solid #0284c7;border-radius:8px;padding:16px;">
                             <tr>
                               <td>
-                                <span style="font-size:11px;text-transform:uppercase;font-weight:700;color:#0369a1;letter-spacing:0.5px;display:block;margin-bottom:6px;">In Store Cash</span>
-                                <div style="font-size:20px;font-weight:800;color:#0284c7;">${formatINR(summary.inStoreCash)}</div>
+                                <span style="font-size:11px;text-transform:uppercase;font-weight:700;color:#0369a1;letter-spacing:0.5px;display:block;margin-bottom:6px;">${t("email.dailySummary.inStore")}</span>
+                                <div style="font-size:20px;font-weight:800;color:#0284c7;">${formatAmount(summary.inStoreCash)}</div>
                               </td>
                             </tr>
                           </table>
@@ -1402,8 +1945,8 @@ export const emailService = {
                             style="background:${reconciliationBg};border:1px solid ${reconciliationBorder};border-left:4px solid ${reconciliationColor};border-radius:8px;padding:16px;">
                             <tr>
                               <td>
-                                <span style="font-size:11px;text-transform:uppercase;font-weight:700;color:${reconciliationLabelColor};letter-spacing:0.5px;display:block;margin-bottom:6px;">Reconciliation Amount</span>
-                                <div style="font-size:20px;font-weight:800;color:${reconciliationColor};">${reconciliationPrefix}${formatINR(summary.reconciliationAmount)}</div>
+                                <span style="font-size:11px;text-transform:uppercase;font-weight:700;color:${reconciliationLabelColor};letter-spacing:0.5px;display:block;margin-bottom:6px;">${t("email.dailySummary.reconciliation")}</span>
+                                <div style="font-size:20px;font-weight:800;color:${reconciliationColor};">${reconciliationPrefix}${formatAmount(summary.reconciliationAmount)}</div>
                               </td>
                             </tr>
                           </table>
@@ -1419,8 +1962,8 @@ export const emailService = {
                             style="background:#f5f3ff;border:1px solid #ddd6fe;border-left:4px solid #7c3aed;border-radius:8px;padding:16px;">
                             <tr>
                               <td>
-                                <span style="font-size:11px;text-transform:uppercase;font-weight:700;color:#5b21b6;letter-spacing:0.5px;display:block;margin-bottom:6px;">UPI Payments</span>
-                                <div style="font-size:20px;font-weight:800;color:#7c3aed;">${formatINR(summary.upiPaymentAmount)}</div>
+                                <span style="font-size:11px;text-transform:uppercase;font-weight:700;color:#5b21b6;letter-spacing:0.5px;display:block;margin-bottom:6px;">${t("email.dailySummary.upi")}</span>
+                                <div style="font-size:20px;font-weight:800;color:#7c3aed;">${formatAmount(summary.upiPaymentAmount)}</div>
                               </td>
                             </tr>
                           </table>
@@ -1431,8 +1974,8 @@ export const emailService = {
                             style="background:#eff6ff;border:1px solid #bfdbfe;border-left:4px solid #2563eb;border-radius:8px;padding:16px;">
                             <tr>
                               <td>
-                                <span style="font-size:11px;text-transform:uppercase;font-weight:700;color:#1d4ed8;letter-spacing:0.5px;display:block;margin-bottom:6px;">Card Payments</span>
-                                <div style="font-size:20px;font-weight:800;color:#2563eb;">${formatINR(summary.cardPaymentAmount)}</div>
+                                <span style="font-size:11px;text-transform:uppercase;font-weight:700;color:#1d4ed8;letter-spacing:0.5px;display:block;margin-bottom:6px;">${t("email.dailySummary.card")}</span>
+                                <div style="font-size:20px;font-weight:800;color:#2563eb;">${formatAmount(summary.cardPaymentAmount)}</div>
                               </td>
                             </tr>
                           </table>
@@ -1442,7 +1985,7 @@ export const emailService = {
 
                     ${summary.remarks ? `
                       <div style="background:#f9fafb;border-radius:8px;padding:16px;border:1px solid #e5e7eb;margin-top:8px;">
-                        <span style="font-size:12px;font-weight:700;color:#4b5563;text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:4px;">Closing Remarks</span>
+                        <span style="font-size:12px;font-weight:700;color:#4b5563;text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:4px;">${t("email.dailySummary.remarks")}</span>
                         <p style="margin:0;color:#374151;font-size:14px;line-height:1.5;">${escapeHtml(summary.remarks)}</p>
                       </div>
                     ` : ''}
@@ -1453,7 +1996,7 @@ export const emailService = {
                 <tr>
                   <td style="background:#f9fafb;padding:20px 36px;border-top:1px solid #e5e7eb;">
                     <p style="margin:0 0 4px;color:#9ca3af;font-size:12px;text-align:center;">
-                      © ${new Date().getFullYear()} SalonOx. Automated Daily Summary Report.
+                      ${t("email.dailySummary.footer", { year: new Date().getFullYear() })}
                     </p>
                   </td>
                 </tr>
@@ -1474,23 +2017,31 @@ export const emailService = {
   // only email is needed here, no SMS/WhatsApp fan-out.
   async sendSalaryReceiptEmail(params: {
     to: string;
+    /** Recipient's salon — its language (salons.language) is used. */
+    salonId?: string | null;
+    /** Explicit language; wins over the salon's. */
+    language?: string | null;
     staffFirstName: string;
     salonName: string;
     periodLabel: string;
     netPay: number;
+    /** The salon's currency (salons.currency) — the net pay is printed in it. */
+    currency?: string | null;
     pdfBuffer: Buffer;
     pdfFilename: string;
   }) {
-    const { to, staffFirstName, salonName, periodLabel, netPay, pdfBuffer, pdfFilename } = params;
-    const formattedNetPay = `₹${(Number(netPay) || 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    const lang = await emailLanguage(params);
+    const t = translator(lang);
+    const { to, staffFirstName, salonName, periodLabel, netPay, currency, pdfBuffer, pdfFilename } = params;
+    const formattedNetPay = formatMoney(netPay, currency);
 
     await transporter.sendMail({
       from: config.smtp.from,
       to,
-      subject: `Your Salary Receipt — ${escapeHtml(salonName)}`,
+      subject: t("email.salary.subject", { salon: escapeHtml(salonName) }),
       html: `
-        <!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"/></head>
-        <body style="margin:0;padding:0;background:#f4f4f7;font-family:'Segoe UI',Arial,sans-serif;">
+        <!DOCTYPE html><html ${htmlAttrs(lang)}><head><meta charset="UTF-8"/></head>
+        <body${bodyDir(lang)} style="margin:0;padding:0;background:#f4f4f7;font-family:'Segoe UI',Arial,sans-serif;">
           <table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f7;padding:36px 0;">
             <tr><td align="center">
               <table width="560" cellpadding="0" cellspacing="0"
@@ -1498,20 +2049,20 @@ export const emailService = {
                 <tr>
                   <td style="background:#16a34a;padding:28px 36px;">
                     <p style="margin:0;color:#fff;font-size:12px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;opacity:0.8;">${escapeHtml(salonName)}</p>
-                    <h1 style="margin:6px 0 0;color:#fff;font-size:22px;font-weight:800;">Salary Payment Processed</h1>
+                    <h1 style="margin:6px 0 0;color:#fff;font-size:22px;font-weight:800;">${t("email.salary.title")}</h1>
                   </td>
                 </tr>
                 <tr>
                   <td style="padding:32px 36px;">
                     <p style="margin:0 0 20px;color:#374151;font-size:15px;line-height:1.6;">
-                      Hi <strong>${escapeHtml(staffFirstName)}</strong>, your salary for the period below has been processed. The itemized receipt is attached as a PDF.
+                      ${t("email.salary.body", { name: escapeHtml(staffFirstName) })}
                     </p>
                     <table width="100%" cellpadding="0" cellspacing="0"
                       style="background:#f0fdf4;border-radius:10px;border:1px solid #bbf7d0;">
                       <tr>
                         <td style="padding:20px 24px;">
-                          <p style="margin:0 0 8px;color:#15803d;font-size:14px;"><strong>Period:</strong> ${escapeHtml(periodLabel)}</p>
-                          <p style="margin:0;color:#15803d;font-size:20px;font-weight:800;"><strong>Net Pay:</strong> ${formattedNetPay}</p>
+                          <p style="margin:0 0 8px;color:#15803d;font-size:14px;"><strong>${t("email.label.period")}:</strong> ${escapeHtml(periodLabel)}</p>
+                          <p style="margin:0;color:#15803d;font-size:20px;font-weight:800;"><strong>${t("email.label.netPay")}:</strong> ${formattedNetPay}</p>
                         </td>
                       </tr>
                     </table>
@@ -1519,7 +2070,7 @@ export const emailService = {
                 </tr>
                 <tr>
                   <td style="background:#f9fafb;padding:16px 36px;border-top:1px solid #e5e7eb;">
-                    <p style="margin:0;color:#9ca3af;font-size:12px;text-align:center;">© ${new Date().getFullYear()} SalonOx. Automated notification.</p>
+                    <p style="margin:0;color:#9ca3af;font-size:12px;text-align:center;">${t("email.common.footerAuto", { year: new Date().getFullYear() })}</p>
                   </td>
                 </tr>
               </table>
@@ -1543,10 +2094,18 @@ export const emailService = {
     invoiceNo: string;
     planLabel: string;
     amount: number;
+    currency?: string;
     pdfBuffer: Buffer;
     pdfFilename: string;
   }) {
-    const { to, salonName, invoiceNo, planLabel, pdfBuffer, pdfFilename } = params;
+    const { to, salonName, invoiceNo, planLabel, amount, currency, pdfBuffer, pdfFilename } = params;
+    const loginUrl = `${config.frontend.url}/login`;
+    const amountLabel = `${currency ?? "INR"} ${Number(amount).toFixed(2)}`;
+    const summaryRow = (label: string, value: string, last = false) => `
+      <tr>
+        <td style="padding:8px 0;${last ? "" : "border-bottom:1px solid #e5e7eb;"}color:#6b7280;font-size:13px;">${label}</td>
+        <td style="padding:8px 0;${last ? "" : "border-bottom:1px solid #e5e7eb;"}color:#111827;font-size:13px;font-weight:600;text-align:right;">${value}</td>
+      </tr>`;
 
     await transporter.sendMail({
       from: config.smtp.from,
@@ -1560,15 +2119,45 @@ export const emailService = {
               <table width="560" cellpadding="0" cellspacing="0"
                 style="background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 4px 20px rgba(0,0,0,0.07);max-width:560px;width:100%;">
                 <tr>
-                  <td style="background:#0f172a;padding:28px 36px;">
+                  <td style="background:#6366f1;background-image:linear-gradient(135deg,#6366f1 0%,#8b5cf6 100%);padding:28px 36px;">
                     <p style="margin:0;color:#fff;font-size:12px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;opacity:0.8;">SalonoX Billing</p>
-                    <h1 style="margin:6px 0 0;color:#fff;font-size:22px;font-weight:800;">Subscription Invoice</h1>
+                    <h1 style="margin:6px 0 0;color:#fff;font-size:22px;font-weight:800;">Your subscription is active ✓</h1>
                   </td>
                 </tr>
                 <tr>
                   <td style="padding:32px 36px;">
+                    <p style="margin:0 0 16px;color:#374151;font-size:15px;line-height:1.6;">
+                      Hi <strong>${escapeHtml(salonName)}</strong> team, thank you for your payment. Your SalonoX ${escapeHtml(planLabel)} subscription is now active, and you can continue managing your salon.
+                    </p>
                     <p style="margin:0 0 20px;color:#374151;font-size:15px;line-height:1.6;">
-                      Hi <strong>${escapeHtml(salonName)}</strong> team, thank you for your payment. Your invoice for the SalonoX ${escapeHtml(planLabel)} subscription is attached as a PDF.
+                      Your payment invoice is attached to this email as a PDF (<strong>${escapeHtml(pdfFilename)}</strong>) for your records.
+                    </p>
+
+                    <div style="background:#f9fafb;border-radius:10px;padding:12px 22px;margin-bottom:24px;">
+                      <table cellpadding="0" cellspacing="0" width="100%">
+                        ${summaryRow("Invoice No.", escapeHtml(invoiceNo))}
+                        ${summaryRow("Plan", escapeHtml(planLabel))}
+                        ${summaryRow("Amount Paid", escapeHtml(amountLabel))}
+                        ${summaryRow("Payment Status", `<span style="color:#16a34a;">Successful</span>`, true)}
+                      </table>
+                    </div>
+
+                    <table cellpadding="0" cellspacing="0" width="100%" style="margin-bottom:24px;">
+                      <tr>
+                        <td align="center">
+                          <a href="${loginUrl}"
+                             style="display:inline-block;background:#6366f1;background-image:linear-gradient(135deg,#6366f1 0%,#8b5cf6 100%);
+                                    color:#ffffff;font-size:15px;font-weight:700;text-decoration:none;
+                                    padding:14px 36px;border-radius:8px;">
+                            Login to SalonOx
+                          </a>
+                        </td>
+                      </tr>
+                    </table>
+
+                    <p style="margin:0;color:#6b7280;font-size:13px;line-height:1.6;">
+                      Need help? Email us at
+                      <a href="mailto:support@salonox.com" style="color:#6366f1;text-decoration:underline;">support@salonox.com</a>.
                     </p>
                   </td>
                 </tr>
@@ -1585,6 +2174,164 @@ export const emailService = {
     });
   },
 
+  // Sent the moment a Razorpay payment lands for an account whose salon isn't set up yet, so there is no invoice PDF to attach
+  // (it is emailed separately once the salon exists). Best-effort: callers never await it.
+  async sendSubscriptionPaymentReceivedEmail(params: {
+    to: string;
+    name: string;
+    planLabel: string;
+    amount: number;
+    currency?: string;
+    transactionId: string;
+  }) {
+    const { to, name, planLabel, amount, currency, transactionId } = params;
+    const loginUrl = `${config.frontend.url}/login`;
+    const amountLabel = `${currency ?? "INR"} ${Number(amount).toFixed(2)}`;
+    const row = (label: string, value: string, last = false) => `
+      <tr>
+        <td style="padding:8px 0;${last ? "" : "border-bottom:1px solid #e5e7eb;"}color:#6b7280;font-size:13px;">${label}</td>
+        <td style="padding:8px 0;${last ? "" : "border-bottom:1px solid #e5e7eb;"}color:#111827;font-size:13px;font-weight:600;text-align:right;">${value}</td>
+      </tr>`;
+
+    await transporter.sendMail({
+      from: config.smtp.from,
+      to,
+      subject: "Payment received - your SalonoX subscription is active",
+      html: `
+        <!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"/></head>
+        <body style="margin:0;padding:0;background:#f4f4f7;font-family:'Segoe UI',Arial,sans-serif;">
+          <table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f7;padding:36px 0;">
+            <tr><td align="center">
+              <table width="560" cellpadding="0" cellspacing="0"
+                style="background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 4px 20px rgba(0,0,0,0.07);max-width:560px;width:100%;">
+                <tr>
+                  <td style="background:#6366f1;background-image:linear-gradient(135deg,#6366f1 0%,#8b5cf6 100%);padding:28px 36px;">
+                    <p style="margin:0;color:#fff;font-size:12px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;opacity:0.8;">SalonoX Billing</p>
+                    <h1 style="margin:6px 0 0;color:#fff;font-size:22px;font-weight:800;">Payment received ✓</h1>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="padding:32px 36px;">
+                    <p style="margin:0 0 16px;color:#374151;font-size:15px;line-height:1.6;">
+                      Hi <strong>${escapeHtml(name)}</strong>, thank you for your payment. Your SalonoX ${escapeHtml(planLabel)} subscription is now active.
+                    </p>
+                    <p style="margin:0 0 20px;color:#374151;font-size:15px;line-height:1.6;">
+                      Your invoice PDF will be emailed to you as soon as your salon setup is complete.
+                    </p>
+                    <div style="background:#f9fafb;border-radius:10px;padding:12px 22px;margin-bottom:24px;">
+                      <table cellpadding="0" cellspacing="0" width="100%">
+                        ${row("Plan", escapeHtml(planLabel))}
+                        ${row("Amount Paid", escapeHtml(amountLabel))}
+                        ${row("Transaction ID", escapeHtml(transactionId))}
+                        ${row("Payment Status", `<span style="color:#16a34a;">Successful</span>`, true)}
+                      </table>
+                    </div>
+                    <table cellpadding="0" cellspacing="0" width="100%" style="margin-bottom:24px;">
+                      <tr>
+                        <td align="center">
+                          <a href="${loginUrl}"
+                             style="display:inline-block;background:#6366f1;background-image:linear-gradient(135deg,#6366f1 0%,#8b5cf6 100%);
+                                    color:#ffffff;font-size:15px;font-weight:700;text-decoration:none;
+                                    padding:14px 36px;border-radius:8px;">
+                            Login to SalonOx
+                          </a>
+                        </td>
+                      </tr>
+                    </table>
+                    <p style="margin:0;color:#6b7280;font-size:13px;line-height:1.6;">
+                      Need help? Email us at
+                      <a href="mailto:support@salonox.com" style="color:#6366f1;text-decoration:underline;">support@salonox.com</a>.
+                    </p>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="background:#f9fafb;padding:16px 36px;border-top:1px solid #e5e7eb;">
+                    <p style="margin:0;color:#9ca3af;font-size:12px;text-align:center;">© ${new Date().getFullYear()} SalonOx. Automated notification.</p>
+                  </td>
+                </tr>
+              </table>
+            </td></tr>
+          </table>
+        </body></html>`,
+    });
+  },
+
+  // Sent when a Super Admin gives a salon a plan ("Give plan"). No payment is involved, so nothing is attached.
+  async sendPlanGrantedEmail(params: {
+    to: string;
+    salonName: string;
+    planLabel: string;
+    start: Date;
+    end: Date;
+  }) {
+    const { to, salonName, planLabel, start, end } = params;
+    const loginUrl = `${config.frontend.url}/login`;
+    const fmt = (d: Date) => d.toLocaleDateString(dateLocale(), { day: "2-digit", month: "short", year: "numeric" });
+    const row = (label: string, value: string, last = false) => `
+      <tr>
+        <td style="padding:8px 0;${last ? "" : "border-bottom:1px solid #e5e7eb;"}color:#6b7280;font-size:13px;">${label}</td>
+        <td style="padding:8px 0;${last ? "" : "border-bottom:1px solid #e5e7eb;"}color:#111827;font-size:13px;font-weight:600;text-align:right;">${value}</td>
+      </tr>`;
+
+    await transporter.sendMail({
+      from: config.smtp.from,
+      to,
+      subject: "Your SalonoX subscription is active",
+      html: `
+        <!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"/></head>
+        <body style="margin:0;padding:0;background:#f4f4f7;font-family:'Segoe UI',Arial,sans-serif;">
+          <table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f7;padding:36px 0;">
+            <tr><td align="center">
+              <table width="560" cellpadding="0" cellspacing="0"
+                style="background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 4px 20px rgba(0,0,0,0.07);max-width:560px;width:100%;">
+                <tr>
+                  <td style="background:#6366f1;background-image:linear-gradient(135deg,#6366f1 0%,#8b5cf6 100%);padding:28px 36px;">
+                    <p style="margin:0;color:#fff;font-size:12px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;opacity:0.8;">SalonoX Billing</p>
+                    <h1 style="margin:6px 0 0;color:#fff;font-size:22px;font-weight:800;">Your subscription is active ✓</h1>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="padding:32px 36px;">
+                    <p style="margin:0 0 20px;color:#374151;font-size:15px;line-height:1.6;">
+                      Hi <strong>${escapeHtml(salonName)}</strong> team, the SalonoX ${escapeHtml(planLabel)} plan has been activated for your salon. You can continue managing your salon as usual.
+                    </p>
+                    <div style="background:#f9fafb;border-radius:10px;padding:12px 22px;margin-bottom:24px;">
+                      <table cellpadding="0" cellspacing="0" width="100%">
+                        ${row("Plan", escapeHtml(planLabel))}
+                        ${row("Starts", escapeHtml(fmt(start)))}
+                        ${row("Valid Until", escapeHtml(fmt(end)), true)}
+                      </table>
+                    </div>
+                    <table cellpadding="0" cellspacing="0" width="100%" style="margin-bottom:24px;">
+                      <tr>
+                        <td align="center">
+                          <a href="${loginUrl}"
+                             style="display:inline-block;background:#6366f1;background-image:linear-gradient(135deg,#6366f1 0%,#8b5cf6 100%);
+                                    color:#ffffff;font-size:15px;font-weight:700;text-decoration:none;
+                                    padding:14px 36px;border-radius:8px;">
+                            Login to SalonOx
+                          </a>
+                        </td>
+                      </tr>
+                    </table>
+                    <p style="margin:0;color:#6b7280;font-size:13px;line-height:1.6;">
+                      Need help? Email us at
+                      <a href="mailto:support@salonox.com" style="color:#6366f1;text-decoration:underline;">support@salonox.com</a>.
+                    </p>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="background:#f9fafb;padding:16px 36px;border-top:1px solid #e5e7eb;">
+                    <p style="margin:0;color:#9ca3af;font-size:12px;text-align:center;">© ${new Date().getFullYear()} SalonOx. Automated notification.</p>
+                  </td>
+                </tr>
+              </table>
+            </td></tr>
+          </table>
+        </body></html>`,
+    });
+  },
+
   async sendRequirementAssignedEmail(params: {
     to: string;
     developerName: string;
@@ -1596,7 +2343,7 @@ export const emailService = {
   }) {
     const { to, developerName, reqNumber, title, salonName, priority, targetDate } = params;
     const targetDateLabel = targetDate
-      ? new Date(targetDate).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })
+      ? new Date(targetDate).toLocaleDateString(dateLocale(), { day: "2-digit", month: "short", year: "numeric" })
       : null;
 
     const infoRows: [string, string][] = [

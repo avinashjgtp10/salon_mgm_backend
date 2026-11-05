@@ -1,6 +1,8 @@
 import type { PoolClient } from "pg";
 import pool from "../../config/database";
 import { CreateSalonBody, UpdateSalonBody, Salon } from "./salons.types";
+import { invalidateSalonCurrency } from "../../config/currency";
+import { invalidateSalonLanguage } from "../../config/language";
 
 // The batched delete scripts below inline the salon id (a multi-statement
 // query can't take bind parameters), so it must be a real UUID first.
@@ -380,7 +382,9 @@ const SALON_SELECT_WITH_OWNER_CONTACT = `
            s.logo_url, s.banner_url, s.email, s.phone, s.additional_phones, s.website_url, s.google_review_url,
            s.gst_number, s.pan_number, s.is_verified, s.is_active, s.onboarding_completed,
            s.address, s.address_line2, s.city, s.state, s.country, s.pincode, s.timezone,
-           s.currency, s.business_category, s.gst_registration_type, s.created_at, s.updated_at
+           s.currency, s.business_category, s.gst_registration_type, s.created_at, s.updated_at,
+           -- Read tolerantly: until Migration/add_salon_language.sql runs there is no column, and that must not break salons.
+           COALESCE(to_jsonb(s) ->> 'language', 'en') AS language
     FROM salons s
 `;
 
@@ -496,6 +500,28 @@ export const salonsRepository = {
             values
         );
 
+        // Messages, documents and bill rounding read the salon's currency through a short-lived cache — drop it so a
+        // change takes effect immediately.
+        if (patch.currency !== undefined) invalidateSalonCurrency(id);
+        if (patch.language !== undefined) invalidateSalonLanguage(id);
+
         return rows[0];
+    },
+
+    // The plan the salon is on right now and when it is valid until (a free trial reports its trial end), for the onboarding-complete
+    // email. A paid active plan wins over a trial; null when the salon has neither.
+    async currentPlanSummary(salonId: string): Promise<{ plan_name: string | null; valid_until: string | null; is_trial: boolean } | null> {
+        const { rows } = await pool.query(
+            `SELECT sp.name AS plan_name, s.status, COALESCE(s.is_trial, FALSE) AS is_trial,
+                    CASE WHEN s.status = 'trialing' THEN s.trial_ends_at ELSE s.current_period_end END AS valid_until
+             FROM subscriptions s
+             LEFT JOIN subscription_plans sp ON sp.id = s.plan_id
+             WHERE s.salon_id = $1 AND s.status IN ('active', 'trialing')
+             ORDER BY (s.status = 'active') DESC, s.current_period_end DESC NULLS LAST
+             LIMIT 1`,
+            [salonId]
+        );
+        const r = rows[0];
+        return r ? { plan_name: r.plan_name ?? null, valid_until: r.valid_until ?? null, is_trial: Boolean(r.is_trial) || r.status === "trialing" } : null;
     },
 };

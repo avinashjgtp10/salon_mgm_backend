@@ -13,6 +13,10 @@ import {
 import logger from "../../config/logger";
 import { googleStartQuerySchema } from "./auth.validator";
 
+/** The language the caller's screen is showing (optional `language` in the body). Only used to write the e-mail in it; unknown values mean English. */
+const readLanguage = (req: Request): string | undefined =>
+  typeof req.body?.language === "string" ? req.body.language : undefined;
+
 function redirectToFrontend(
   res: Response,
   accessToken: string,
@@ -210,7 +214,7 @@ export const authController = {
   async sendEmailOtp(req: Request, res: Response, next: NextFunction) {
     try {
       const email = String(req.body?.email || "").trim().toLowerCase();
-      const data = await authService.sendEmailOtp(email);
+      const data = await authService.sendEmailOtp(email, readLanguage(req));
       return sendSuccess(res, 200, data, "OTP sent");
     } catch (e) {
       return next(e);
@@ -232,7 +236,7 @@ export const authController = {
   async sendPasswordResetOtp(req: Request, res: Response, next: NextFunction) {
     try {
       const email = String(req.body?.email || "").trim().toLowerCase();
-      const data = await authService.forgotPasswordSendOtp(email);
+      const data = await authService.forgotPasswordSendOtp(email, readLanguage(req));
       return sendSuccess(res, 200, data, "Password reset request processed");
     } catch (e) {
       return next(e);
@@ -255,7 +259,7 @@ export const authController = {
       const email = String(req.body?.email || "").trim().toLowerCase();
       const otp = String(req.body?.otp || "").trim();
       const newPassword = String(req.body?.newPassword || "");
-      const data = await authService.resetPassword(email, otp, newPassword);
+      const data = await authService.resetPassword(email, otp, newPassword, readLanguage(req));
       return sendSuccess(res, 200, data, "Password reset successfully");
     } catch (e) {
       return next(e);

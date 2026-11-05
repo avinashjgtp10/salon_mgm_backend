@@ -1,0 +1,344 @@
+{
+  "receipt": {
+    "salonFallback": "Salon",
+    "notBilled": "Not billed yet",
+    "walkIn": "Walk-In",
+    "phoneAbbr": "Ph: {{phone}}",
+    "status": {
+      "paid": "Paid",
+      "partial": "Partial",
+      "unpaid": "Unpaid",
+      "cancelled": "Cancelled"
+    },
+    "type": {
+      "service": "Service",
+      "product": "Product",
+      "membership": "Membership",
+      "package": "Package",
+      "giftCard": "Gift Card",
+      "quick": "Quick Sale"
+    },
+    "method": {
+      "cash": "Cash",
+      "card": "Card",
+      "upi": "UPI",
+      "ewallet": "E-Wallet",
+      "giftCard": "Gift Card",
+      "package": "Package",
+      "membership": "Membership",
+      "posMachine": "Payment Machine",
+      "other": "Other"
+    },
+    "tax": "Tax",
+    "incl": "(incl.)",
+    "totalTax": "Total Tax",
+    "itemsTotal": "Items Total",
+    "itemDiscount": "Item Discount",
+    "subtotal": "Subtotal",
+    "coupon": "Coupon",
+    "couponWith": "Coupon ({{code}})",
+    "packageCovered": "Package Covered",
+    "membershipDiscount": "Membership Discount",
+    "extraCharges": "Extra Charges",
+    "billDiscount": "Bill Discount",
+    "referralDiscount": "Referral Discount",
+    "rewardPointsUsed": "Reward Points Used",
+    "membershipWalletUsed": "Membership Wallet Used",
+    "ewalletUsed": "eWallet Used",
+    "referralCreditUsed": "Referral Credit Used",
+    "roundOff": "Round Off",
+    "grandTotal": "Grand Total",
+    "amountToPay": "Amount to Pay",
+    "staffTipIncluded": "Staff Tip (included above)",
+    "staffTipIncl": "Staff Tip (incl.)",
+    "paidVia": "Paid via {{method}}",
+    "totalAmountPaid": "Total Amount Paid",
+    "amountPaid": "Amount Paid",
+    "totalPaid": "Total Paid",
+    "paid": "Paid",
+    "balanceDue": "Balance Due",
+    "invoice": "Invoice",
+    "taxInvoice": "Tax Invoice",
+    "invoiceNo": "Invoice No",
+    "bookingNo": "Booking #",
+    "date": "Date",
+    "time": "Time",
+    "billTo": "Bill To",
+    "name": "Name",
+    "client": "Client",
+    "phone": "Phone",
+    "email": "Email",
+    "membership": "Membership",
+    "yourReferralCode": "Your Referral Code",
+    "referralEarnings": "Referral Earnings",
+    "apptDetails": "Appointment Details",
+    "staff": "Staff",
+    "staffName": "Staff: {{name}}",
+    "paymentMethod": "Payment Method",
+    "bookingStatus": "Booking Status",
+    "paymentStatus": "Payment Status",
+    "servicesItems": "Services & Items",
+    "col": {
+      "itemName": "Item Name",
+      "type": "Type",
+      "staff": "Staff",
+      "time": "Time",
+      "qty": "Qty",
+      "rate": "Rate",
+      "disc": "Disc.",
+      "tax": "Tax",
+      "amount": "Amount",
+      "item": "Item"
+    },
+    "noItems": "No items",
+    "notes": "Notes",
+    "activePackages": "Active Packages",
+    "sessionsLeft": "{{name}} — {{remaining}}/{{total}} sessions left",
+    "activeMemberships": "Active Memberships",
+    "expires": "Expires: {{date}}",
+    "paymentSummary": "Payment Summary",
+    "thankYouFor": "Thank you for choosing {{name}}!",
+    "lookForward": "We look forward to seeing you again.",
+    "computerGenerated": "This is a computer-generated receipt.",
+    "noSignature": "No signature required.",
+    "poweredBy": "Powered by Salonox",
+    "total": "TOTAL",
+    "thanks": "Thank You!",
+    "titleInvoice": "Invoice {{no}} — {{name}}",
+    "titleReceipt": "Receipt {{no}} — {{name}}",
+    "membershipLoyalty": "Membership Loyalty",
+    "invoiceDate": "Invoice Date",
+    "staffAlert": "Staff Alert",
+    "tipIncl": "Tip (incl.)"
+  },
+  "email": {
+    "automatedNotification": "Automated notification.",
+    "common": {
+      "hiName": "Hi {{name}},",
+      "hiPlain": "Hi,",
+      "hiBold": "Hi <strong>{{name}}</strong>,",
+      "rights": "© {{year}} SalonOx. All rights reserved.",
+      "footerAuto": "© {{year}} SalonOx. Automated notification.",
+      "ref": "Ref: {{ref}}"
+    },
+    "label": {
+      "client": "Client",
+      "service": "Service",
+      "date": "Date",
+      "time": "Time",
+      "name": "Name",
+      "email": "Email",
+      "phone": "Phone",
+      "method": "Method",
+      "salon": "Salon",
+      "period": "Period",
+      "netPay": "Net Pay"
+    },
+    "otp": {
+      "subject": "Your Email OTP Verification",
+      "title": "Email Verification",
+      "intro": "Your OTP code is:",
+      "expiry": "This OTP expires in {{minutes}} minutes."
+    },
+    "resetOtp": {
+      "subject": "Password Reset Request",
+      "title": "Password Reset Verification",
+      "intro": "We received a request to reset your password. Here is your verification code:",
+      "expiry": "This code expires in {{minutes}} minutes. If you did not request a password reset, please ignore this email."
+    },
+    "resetDone": {
+      "subject": "Your SalonOx Password Has Been Reset Successfully",
+      "title": "Password Reset Confirmation",
+      "body": "Your <strong>SalonOx</strong> account password has been successfully reset.",
+      "details": "Reset Details",
+      "loginNote": "You can now log in to your SalonOx account using your new password.",
+      "loginButton": "Login Now",
+      "securityTitle": "Security Notice",
+      "securityBody": "If you did not request this password reset, please contact our support team immediately — your account may be at risk.",
+      "support": "Support:",
+      "footerAuto": "This is an automated security notification. Please do not reply to this email."
+    },
+    "welcome": {
+      "subject": "Welcome to SalonOx, {{name}}! 🎉",
+      "pageTitle": "Welcome to SalonOx",
+      "tagline": "Salon Management Platform",
+      "banner": "Welcome aboard, {{name}}!",
+      "bannerSub": "Your salon account is ready.",
+      "intro": "Congratulations! Your SalonOx account for <strong>{{salon}}</strong> has been successfully created. We're thrilled to have you on board.",
+      "about": "SalonOx helps you manage appointments, staff, clients, and grow your salon business — all from one place.",
+      "stepsTitle": "Get started in 3 easy steps:",
+      "step1": "Complete your salon profile",
+      "step1Body": "Add your salon details, logo, and working hours.",
+      "step2": "Add your services &amp; staff",
+      "step2Body": "Set up your service menu and invite your team members.",
+      "step3": "Start accepting bookings",
+      "step3Body": "Share your booking link and watch appointments roll in.",
+      "footer": "You received this email because you created an account on SalonOx."
+    },
+    "newAppointment": {
+      "subject": "New Appointment Booked — {{name}}",
+      "title": "New Appointment Booked",
+      "intro": "A new appointment has been booked. Here are the details:",
+      "details": "Appointment Details"
+    },
+    "cancelledOwner": {
+      "subject": "Appointment Cancelled — {{name}}",
+      "title": "Appointment Cancelled",
+      "intro": "An appointment has been cancelled. Here are the details:"
+    },
+    "newPayment": {
+      "subject": "Payment Received — {{amount}}",
+      "title": "Payment Received",
+      "intro": "A payment has been recorded for <strong>{{client}}</strong>.",
+      "invoice": "Invoice: {{id}}"
+    },
+    "newClient": {
+      "subject": "New Client Added — {{name}}",
+      "title": "New Client Added",
+      "intro": "A new client has been added to <strong>{{salon}}</strong>."
+    },
+    "staffLogin": {
+      "subject": "Staff Login Alert — {{name}} signed in",
+      "title": "Staff Login Alert",
+      "intro": "A team member has signed in to <strong>{{salon}}</strong>.",
+      "note": "If this login was not expected, please review your team's access permissions."
+    },
+    "deactivated": {
+      "subject": "Your SalonOx account has been deactivated",
+      "title": "Account Deactivated",
+      "body": "{{greeting}} your account is deactivated. Kindly contact the Salonox team.",
+      "note": "You won't be able to sign in until your account is reactivated. Please reach out to the Salonox team for assistance."
+    },
+    "staffInvite": {
+      "subject": "You've been invited to join {{salon}}",
+      "title": "Staff Invitation",
+      "body": "You have been invited to join <strong>{{salon}}</strong> as a staff member on our platform. Click the button below to set up your account and get started.",
+      "expiry": "This invitation link will expire in <strong>72 hours</strong>.",
+      "button": "Accept Invitation",
+      "fallback": "If the button doesn't work, copy and paste this link into your browser:",
+      "ignore": "If you did not expect this invitation, you can safely ignore this email."
+    },
+    "dailySummary": {
+      "subject": "Daily Salon Cash Summary - {{date}}",
+      "pageTitle": "Daily Summary Report",
+      "title": "Daily Counter Summary Report",
+      "intro": "Here is the financial summary for today's cash counter session:",
+      "opening": "Opening Balance",
+      "cashRevenue": "Cash Revenue",
+      "cashExpense": "Cash Expense",
+      "closing": "Closing Balance",
+      "inStore": "In Store Cash",
+      "reconciliation": "Reconciliation Amount",
+      "upi": "UPI Payments",
+      "card": "Card Payments",
+      "remarks": "Closing Remarks",
+      "footer": "© {{year}} SalonOx. Automated Daily Summary Report."
+    },
+    "salary": {
+      "subject": "Your Salary Receipt — {{salon}}",
+      "title": "Salary Payment Processed",
+      "body": "Hi <strong>{{name}}</strong>, your salary for the period below has been processed. The itemized receipt is attached as a PDF.",
+      "periodRange": "{{from}} to {{to}}"
+    }
+  },
+  "notify": {
+    "walkIn": "Walk-in",
+    "service": "Service",
+    "invoiceNotGenerated": "Invoice not generated",
+    "status": {
+      "booked": "booked",
+      "paid": "paid",
+      "partial": "partial",
+      "cancelled": "cancelled",
+      "no-show": "no-show",
+      "deleted": "deleted",
+      "pending": "pending",
+      "completed": "completed",
+      "in_progress": "in_progress"
+    },
+    "yourTurn": {
+      "title": "It's your turn",
+      "body": "{{client}} is ready for {{services}}"
+    },
+    "newAppointment": {
+      "title": "New Appointment Booked"
+    },
+    "appointmentUpdated": {
+      "title": "Appointment Updated"
+    },
+    "appointmentCancelled": {
+      "title": "Appointment Cancelled"
+    },
+    "appointmentLine": "{{client}} — {{date}} at {{time}}",
+    "paymentComplete": {
+      "title": "Payment Complete"
+    },
+    "newSale": {
+      "title": "New Sale Created"
+    },
+    "newClient": {
+      "title": "New Client Added"
+    },
+    "attendance": {
+      "staffFallback": "A staff member",
+      "checkedIn": {
+        "title": "Staff Checked In",
+        "body": "{{name}} checked in at {{clock}} on {{day}}."
+      },
+      "checkedOut": {
+        "title": "Staff Checked Out",
+        "body": "{{name}} checked out at {{clock}} on {{day}}."
+      },
+      "breakStart": {
+        "title": "Staff On Break",
+        "body": "{{name}} started a break at {{clock}} on {{day}} (until {{until}}).{{note}}"
+      },
+      "breakEnd": {
+        "title": "Staff Back From Break",
+        "body": "{{name}} returned from break at {{clock}} on {{day}}."
+      },
+      "breakNote": " Note: {{note}}",
+      "reminder": {
+        "title": "You haven't checked in ({{date}})",
+        "body": "Your shift started at {{time}}. Open SalonOX and check in."
+      }
+    },
+    "inventory": {
+      "outOfStock": {
+        "title": "Product out of stock",
+        "body": "{{name}} is out of stock (0 remaining)."
+      },
+      "low": {
+        "title": "Low stock alert",
+        "body": "{{name}} is low on stock — {{remaining}}; alert level is {{threshold}}."
+      },
+      "left": "{{amount}} left",
+      "leftBottle": "{{amount}} left (about 1 bottle)",
+      "leftBottles": "{{amount}} left (about {{n}} bottles)",
+      "expired": {
+        "title": "Product expired",
+        "body": "{{name}} has expired (expiry date: {{date}})."
+      },
+      "expiring": {
+        "title": "Product expiring soon"
+      },
+      "expiringOne": "{{name}} expires on {{date}} (1 day left).",
+      "expiringMany": "{{name}} expires on {{date}} ({{days}} days left)."
+    },
+    "whatsapp": {
+      "formNotSent": {
+        "title": "Booking form not sent",
+        "body": "Could not auto-send the booking form to {{phone}}. Open the chat and send it manually."
+      },
+      "bookingRequest": {
+        "title": "Booking request: {{name}}"
+      },
+      "message": {
+        "title": "WhatsApp: {{sender}}"
+      }
+    },
+    "spotlight": {
+      "title": "New Feature Added"
+    }
+  }
+}

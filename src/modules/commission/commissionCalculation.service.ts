@@ -3,6 +3,7 @@ import logger from "../../config/logger";
 import { AppError } from "../../middleware/error.middleware";
 import { staffCommissionsRepository, commissionSlabsRepository, commissionHistoryRepository } from "../staff/staffSettings.repository";
 import { commissionRulesRepository } from "../commissionRules/commissionRules.repository";
+import { getSalonTimezone } from "../../config/salonTimezone";
 import { clientMembershipsRepository } from "../client-memberships/client-memberships.repository";
 import { SaleItem } from "../sales/sales.types";
 
@@ -441,20 +442,20 @@ async function tryNewEngineRule(params: {
     }
 
     // ── Milestone ladder ─────────────────────────────────────────────────────────
-    // Cumulative monthly revenue (IST month) unlocks one-time flat bonuses that STACK:
+    // Cumulative monthly revenue (salon-local month) unlocks one-time flat bonuses that STACK:
     // crossing ₹500 pays ₹50, then ₹1,000 adds ₹100, and so on. Owed = sum of rewards
     // for every step now reached; what to pay now = owed − already earned on this rule
     // this month. Using the SUM of commission_amount (not a row count) keeps this
     // correct even after a partial settlement splits a row in two.
     if (rule.type === "milestone_ladder") {
         const tiers = (rule.tiers ?? []) as { target: number; reward: number }[];
-        const IST = "Asia/Kolkata";
+        const salonTz = await getSalonTimezone(salonId);
         const { rows } = await pool.query(
             `SELECT COALESCE(SUM(revenue_amount),0)::float    AS revenue,
                     COALESCE(SUM(commission_amount),0)::float AS earned
              FROM commission_earned
              WHERE staff_id=$1 AND rule_id=$2
-               AND date_trunc('month', earned_at AT TIME ZONE '${IST}') = date_trunc('month', NOW() AT TIME ZONE '${IST}')`,
+               AND date_trunc('month', earned_at AT TIME ZONE '${salonTz}') = date_trunc('month', NOW() AT TIME ZONE '${salonTz}')`,
             [staff_id, rule.id]
         );
         const periodRevenue = parseFloat(rows[0]?.revenue ?? "0") + revenue;
@@ -489,12 +490,12 @@ async function tryNewEngineRule(params: {
     // "They receive [rate] when they generate [condition_target] based on [condition_metric]"
     let periodMetric: number | null = null;
     if (rule.condition_target && rule.condition_metric) {
-        const IST = "Asia/Kolkata";
+        const salonTz = await getSalonTimezone(salonId);
         // The threshold window follows the rule's Payout Frequency: a Daily rule's
-        // condition is a DAILY target (resets each IST day); anything else resets
+        // condition is a DAILY target (resets each salon-local day); anything else resets
         // monthly. It used to be monthly regardless, so a rule set to Daily with a
         // ₹5,000 condition was really asking for ₹5,000 over the whole month.
-        const dateClause = `AND date_trunc('${periodUnit}', earned_at AT TIME ZONE '${IST}') = date_trunc('${periodUnit}', NOW() AT TIME ZONE '${IST}')`;
+        const dateClause = `AND date_trunc('${periodUnit}', earned_at AT TIME ZONE '${salonTz}') = date_trunc('${periodUnit}', NOW() AT TIME ZONE '${salonTz}')`;
 
         const { rows: metricRows } = await pool.query(
             rule.condition_metric === "count"
@@ -562,8 +563,8 @@ async function tryNewEngineRule(params: {
         // already been paid out this period before awarding again. Only rows that
         // actually paid (commission_amount > 0) count — the ₹0 "remember this sale"
         // rows written below the threshold must not be mistaken for an award.
-        const IST = "Asia/Kolkata";
-        const dateClause = `AND date_trunc('${periodUnit}', earned_at AT TIME ZONE '${IST}') = date_trunc('${periodUnit}', NOW() AT TIME ZONE '${IST}')`;
+        const salonTz = await getSalonTimezone(salonId);
+        const dateClause = `AND date_trunc('${periodUnit}', earned_at AT TIME ZONE '${salonTz}') = date_trunc('${periodUnit}', NOW() AT TIME ZONE '${salonTz}')`;
         const { rows: alreadyPaidRows } = await pool.query(
             `SELECT 1 FROM commission_earned WHERE staff_id=$1 AND rule_id=$2 AND commission_amount > 0 ${dateClause} LIMIT 1`,
             [staff_id, rule.id]
@@ -918,10 +919,10 @@ export const commissionCalculationService = {
                     // Used for threshold checks; commission amount is always on current sale revenue.
                     let periodRevenue = revenue;
                     try {
-                        const IST = "Asia/Kolkata";
+                        const salonTz = await getSalonTimezone(salonId);
                         const dateClause = period === "daily"
-                            ? `AND date_trunc('day', earned_at AT TIME ZONE '${IST}') = date_trunc('day', NOW() AT TIME ZONE '${IST}')`
-                            : `AND date_trunc('month', earned_at AT TIME ZONE '${IST}') = date_trunc('month', NOW() AT TIME ZONE '${IST}')`;
+                            ? `AND date_trunc('day', earned_at AT TIME ZONE '${salonTz}') = date_trunc('day', NOW() AT TIME ZONE '${salonTz}')`
+                            : `AND date_trunc('month', earned_at AT TIME ZONE '${salonTz}') = date_trunc('month', NOW() AT TIME ZONE '${salonTz}')`;
 
                         const { rows: prevRows } = await pool.query(
                             `SELECT COALESCE(SUM(revenue_amount), 0)::float AS total

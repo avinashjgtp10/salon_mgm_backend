@@ -5,6 +5,7 @@ import { createRazorpayPlan, getRazorpay, razorpayBilling } from "../../config/r
 import { billingSchemaReady } from "./billing-schema";
 import { getActiveRazorpayAccount } from "./razorpay-account";
 import type { BasePlan } from "./pricing.service";
+import { PLATFORM_BILLING_CURRENCY } from "../../config/currency";
 
 // Finds or creates the Razorpay plan a checkout needs, so the subscription is created against a plan that exists on the Razorpay
 // ACCOUNT THE SERVER IS USING NOW and that charges exactly the amount and currency that were quoted.
@@ -71,7 +72,7 @@ export async function resolveRazorpayPlan(base: BasePlan, currency: string, amou
     if (!(await billingSchemaReady())) {
         // The registry migration has not been applied yet: INR keeps working exactly as before through the original column (nothing is
         // written); a non-INR plan needs the registry and is refused.
-        if (currency === "INR" && base.razorpay_plan_id) return base.razorpay_plan_id;
+        if (currency === PLATFORM_BILLING_CURRENCY && base.razorpay_plan_id) return base.razorpay_plan_id;
         throw new AppError(503, "Plan registry is not available on this server yet (database migration missing).", "BILLING_SCHEMA_MISSING");
     }
     const account = await getActiveRazorpayAccount();
@@ -84,9 +85,9 @@ export async function resolveRazorpayPlan(base: BasePlan, currency: string, amou
     const row = existing.rows[0];
     if (row?.razorpay_plan_id && (await fetchPlanOrNull(row.razorpay_plan_id))) return row.razorpay_plan_id;
 
-    if (currency === "INR" && base.razorpay_plan_id) {
+    if (currency === PLATFORM_BILLING_CURRENCY && base.razorpay_plan_id) {
         const candidate = await fetchPlanOrNull(base.razorpay_plan_id);
-        if (candidate && candidate.currency === "INR" && candidate.amountMinor === toMinor(amount)
+        if (candidate && candidate.currency === PLATFORM_BILLING_CURRENCY && candidate.amountMinor === toMinor(amount)
             && candidate.period === billing.period && candidate.interval === billing.interval) {
             await register(base, currency, amount, fxRate, candidate.id);
             return candidate.id;
@@ -96,14 +97,14 @@ export async function resolveRazorpayPlan(base: BasePlan, currency: string, amou
     let created: string;
     try {
         created = await createRazorpayPlan({
-            name: `${base.name} (${CYCLE_LABEL[base.cycle]}${currency === "INR" ? "" : `, ${currency}`})`,
-            description: currency === "INR" ? `${base.name}. Includes GST.` : `${base.name} billed in ${currency}.`,
+            name: `${base.name} (${CYCLE_LABEL[base.cycle]}${currency === PLATFORM_BILLING_CURRENCY ? "" : `, ${currency}`})`,
+            description: currency === PLATFORM_BILLING_CURRENCY ? `${base.name}. Includes GST.` : `${base.name} billed in ${currency}.`,
             ...billing,
             amountRupees: amount,
             currency,
         });
     } catch (err: any) {
-        if (currency === "INR") throw err;
+        if (currency === PLATFORM_BILLING_CURRENCY) throw err;
         logger.error("Razorpay refused a non-INR subscription plan", { slug: base.slug, currency, amount, account: account.mode, error: err?.message });
         throw new AppError(
             409,

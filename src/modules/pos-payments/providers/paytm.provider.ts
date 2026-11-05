@@ -14,7 +14,7 @@ import {
   NormalizedWebhookEvent,
 } from './provider.types';
 import { ProviderCredentials } from './provider.types';
-import { formatPaytmDateTime, fromPaise, toPaise, toPaytmMerchantTxnId } from './paytm.helpers';
+import { formatPaytmDateTime, fromPaise, toPaise, toPaytmMerchantTxnId, PAYTM_CURRENCY } from './paytm.helpers';
 import { PosPaymentMode } from '../pos-payments.types';
 
 export type PaytmCredentials = {
@@ -23,15 +23,13 @@ export type PaytmCredentials = {
 };
 
 // Paytm EDC ECR API (Sale, Status Enquiry, Abort). URLs exactly as provided
-// by Paytm for this integration. The hosts are not uniform — confirm with
-// Paytm that this is intended:
-//   - Status/Abort staging use securegw-stage.paytm.in, Sale staging uses
-//     securegw-stage.paytmpayments.in;
-//   - Abort production uses securegw-edc.paytm.com, Sale/Status production
-//     use securegw-edc.paytmpayments.in.
+// by Paytm for this integration. Staging is securegw-stage.paytm.in for all
+// three (Sale per Paytm's C# staging sample). Production hosts are not
+// uniform — Abort uses securegw-edc.paytm.com, Sale/Status use
+// securegw-edc.paytmpayments.in; confirm with Paytm that this is intended.
 const ECR_ENDPOINTS = {
   sale: {
-    sandbox: 'https://securegw-stage.paytmpayments.in/ecr/payment/request',
+    sandbox: 'https://securegw-stage.paytm.in/ecr/payment/request',
     production: 'https://securegw-edc.paytmpayments.in/ecr/payment/request',
   },
   status: {
@@ -201,14 +199,50 @@ function interpretAbortResponse(data: any, merchantTransactionId: string): Provi
 }
 
 /**
- * Sale body extension asking the machine for one payment mode. Paytm's Sale
- * API lists merchantExtendedInfo.paymentMode = ALL / CARD / QR; its sample
- * request sends merchantExtendedInfo as a JSON object, so that shape is used.
- * UNVERIFIED on a live terminal — confirm Card mode and QR mode each open the
- * right screen before go-live.
+ * Customer mobile → the 10-digit number Paytm expects, or null when it isn't
+ * a recognisable Indian mobile (sent as-is it could fail the whole Sale).
  */
-export function buildMerchantExtendedInfo(paymentMode: PosPaymentMode | null | undefined): { paymentMode: PosPaymentMode } | undefined {
-  return paymentMode ? { paymentMode } : undefined;
+export function toPaytmPhoneNumber(phone: string | null | undefined): string | null {
+  let digits = String(phone ?? '').replace(/\D/g, '');
+  if (digits.length === 12 && digits.startsWith('91')) digits = digits.slice(2);
+  if (digits.length === 11 && digits.startsWith('0')) digits = digits.slice(1);
+  return /^[6-9]\d{9}$/.test(digits) ? digits : null;
+}
+
+/**
+ * Sale body, built the way Paytm's C# staging sample builds it: the checksum
+ * is generated over the flat body fields (paytmchecksum sorts the keys and
+ * joins the values with "|", same as Paytm's Java TreeMap / C# utilities),
+ * and the optional fields are then repeated inside merchantExtendedInfo,
+ * which is itself not part of the signed string.
+ *   paymentMode: CARD (tap/insert/swipe) or QR (customer scans); omitted =
+ *                the machine's default screen.
+ *   autoAccept:  "True" — the machine starts the payment without staff
+ *                having to accept the pushed request first.
+ */
+export function buildSaleParams(input: {
+  mid: string;
+  tid: string;
+  transactionDateTime: string;
+  merchantTransactionId: string;
+  transactionAmount: string;
+  paymentMode?: PosPaymentMode | null;
+  phoneNumber?: string | null;
+}): { signed: Record<string, string>; body: Record<string, unknown> } {
+  const extended: Record<string, string> = {
+    ...(input.phoneNumber ? { phoneNumber: input.phoneNumber } : {}),
+    ...(input.paymentMode ? { paymentMode: input.paymentMode } : {}),
+    autoAccept: 'True',
+  };
+  const signed: Record<string, string> = {
+    paytmMid: input.mid,
+    paytmTid: input.tid,
+    transactionDateTime: input.transactionDateTime,
+    merchantTransactionId: input.merchantTransactionId,
+    transactionAmount: input.transactionAmount,
+    ...extended,
+  };
+  return { signed, body: { ...signed, merchantExtendedInfo: extended } };
 }
 
 /**
@@ -267,6 +301,10 @@ export class PaytmProvider implements PaymentProvider {
   private async signedEcrPayload(body: Record<string, unknown>): Promise<string> {
     const bodyJson = JSON.stringify(body);
     const checksum = await PaytmChecksum.generateSignature(bodyJson, this.creds.merchantKey);
+    return this.ecrPayload(bodyJson, checksum);
+  }
+
+  private ecrPayload(bodyJson: string, checksum: string): string {
     const head = {
       requestTimeStamp: formatPaytmDateTime(new Date()),
       channelId: ECR_CHANNEL_ID,
@@ -308,22 +346,21 @@ export class PaytmProvider implements PaymentProvider {
     // which device picks it up. It's the TID printed on the machine's own
     // info screen (Settings → POS / Payment Machine → terminal's TID).
     const paytmTid = this.requireTid(params.terminalProviderId, 'payment request');
-    if (params.currency && params.currency.toUpperCase() !== 'INR') {
-      throw new Error(`Paytm EDC only supports INR (got ${params.currency})`);
+    if (params.currency && params.currency.toUpperCase() !== PAYTM_CURRENCY) {
+      throw new Error(`Paytm EDC only supports ${PAYTM_CURRENCY} (got ${params.currency})`);
     }
     const merchantTransactionId = toPaytmMerchantTxnId(params.reference);
-    const merchantExtendedInfo = buildMerchantExtendedInfo(params.paymentMode);
-    const body = {
-      paytmMid: this.creds.mid,
-      paytmTid,
+    const { signed, body } = buildSaleParams({
+      mid: this.creds.mid,
+      tid: paytmTid,
       transactionDateTime: formatPaytmDateTime(params.requestedAt),
       merchantTransactionId,
-      merchantReferenceNo: merchantTransactionId,
       transactionAmount: toPaise(params.amount),
-      // Card → CARD (tap/insert/swipe), UPI → QR (customer scans).
-      ...(merchantExtendedInfo ? { merchantExtendedInfo } : {}),
-    };
-    const payload = await this.signedEcrPayload(body);
+      paymentMode: params.paymentMode,
+      phoneNumber: toPaytmPhoneNumber(params.customerPhone),
+    });
+    const checksum = await PaytmChecksum.generateSignature(signed, this.creds.merchantKey);
+    const payload = this.ecrPayload(JSON.stringify(body), checksum);
 
     try {
       const { data } = await this.postEcr(this.ecrUrls.sale, payload);
@@ -501,7 +538,7 @@ export class PaytmProvider implements PaymentProvider {
     return {
       ok,
       message: ok
-        ? `${mode}: ${summary} This doesn't check that the machine is switched on — do a ₹1 test payment to confirm.`
+        ? `${mode}: ${summary} This doesn't check that the machine is switched on — do a minimal test payment to confirm.`
         : `${mode}: ${summary}`,
     };
   }

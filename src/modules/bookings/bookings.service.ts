@@ -1,7 +1,8 @@
 import crypto from "crypto";
 import { AppError } from "../../middleware/error.middleware";
 import { isModuleLocked } from "../../middleware/moduleLock.middleware";
-import { bookingsRepository, SALON_TIMEZONE } from "./bookings.repository";
+import { bookingsRepository } from "./bookings.repository";
+import { getSalonTimezone } from "../../config/salonTimezone";
 import { clientsRepository } from "../clients/clients.repository";
 import { generateUniqueReferralCode } from "../clients/clients.service";
 import { notificationsService } from "../notifications/notifications.service";
@@ -14,6 +15,8 @@ import { PublicBookingRequest } from "./bookings.types";
 import { bookingEmailOtpService } from "./booking-email-otp.service";
 import { loadStaffPresence } from "../attendance/attendance.presence";
 import logger from "../../config/logger";
+import { formatMoney, getSalonDateLocale } from "../../config/currency";
+import { salonTranslator } from "../../config/i18n";
 
 // Attaches booking policy, brand kit, the marketplace gallery, and (only when
 // About Us is enabled) its Facilities/Specialities — everything the public
@@ -77,10 +80,10 @@ const toMinutes = (hhmm: string): number => {
 // compares the two, so every instant gets converted to the salon's local date
 // and minutes-from-midnight here first. Doing this with getUTCHours() instead
 // (what this used to do) silently shifted every time by the UTC offset.
-function salonLocalParts(instant: string | Date): { dateStr: string; minutes: number } {
+function salonLocalParts(instant: string | Date, timeZone: string): { dateStr: string; minutes: number } {
     const d = instant instanceof Date ? instant : new Date(instant);
     const parts = new Intl.DateTimeFormat("en-CA", {
-        timeZone: SALON_TIMEZONE,
+        timeZone,
         year: "numeric", month: "2-digit", day: "2-digit",
         hour: "2-digit", minute: "2-digit", hour12: false,
     }).formatToParts(d).reduce<Record<string, string>>((acc, p) => {
@@ -117,8 +120,8 @@ type DateWindow =
 // how far ahead is too far — so the offered slot list and the submit-time
 // check can never drift apart. Everything here is calendar-day arithmetic in
 // the salon's own timezone, never the server's.
-function resolveDateWindow(dateStr: string, policy: BookingPolicyInput): DateWindow {
-    const today = salonLocalParts(new Date());
+function resolveDateWindow(dateStr: string, policy: BookingPolicyInput, timeZone: string): DateWindow {
+    const today = salonLocalParts(new Date(), timeZone);
     const daysOut = dayDiff(today.dateStr, dateStr);
 
     if (daysOut < 0) return { bookable: false, reason: "PAST" };
@@ -264,7 +267,7 @@ async function getStaffWindowsForDate(
     // here means the slot list and createBooking's submit-time re-check (both
     // call this) can't disagree. Fails open: an attendance lookup error must
     // not take public booking down.
-    if (dateStr === salonLocalParts(new Date()).dateStr && windowByStaff.size > 0) {
+    if (dateStr === salonLocalParts(new Date(), await getSalonTimezone(salonId)).dateStr && windowByStaff.size > 0) {
         try {
             const presence = await loadStaffPresence(salonId, dateStr);
             if (presence) {
@@ -293,7 +296,7 @@ async function loadDayAvailabilityContext(salonId: string, dateStr: string, staf
         bookingsRepository.findBookingPolicy(salonId),
     ]);
 
-    const window = resolveDateWindow(dateStr, policy);
+    const window = resolveDateWindow(dateStr, policy, await getSalonTimezone(salonId));
     const { windowByStaff, stepMin } = await getStaffWindowsForDate(salonId, staffIds, dateStr);
 
     // Per-staff busy [start, end) ranges in minutes from salon-local midnight —
@@ -443,32 +446,16 @@ async function computeAvailableSlotsMultiStaff(params: {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function formatDate(dateStr: string): string {
-    return new Date(dateStr).toLocaleDateString("en-IN", {
-        timeZone: "Asia/Kolkata",
+function formatDate(dateStr: string, timeZone: string, locale: string): string {
+    return new Date(dateStr).toLocaleDateString(locale, {
+        timeZone,
         day: "2-digit", month: "short", year: "numeric",
     });
 }
 
-// Money for message templates. Uses the salon's own currency where it has one
-// so an email doesn't quote rupees to a salon billing in dirhams.
-function formatMoney(amount: number, currency?: string | null): string {
-    const value = Number.isFinite(amount) ? amount : 0;
-    try {
-        return new Intl.NumberFormat("en-IN", {
-            style: "currency",
-            currency: (currency || "INR").toUpperCase(),
-            maximumFractionDigits: 2,
-        }).format(value);
-    } catch {
-        // Unknown/garbage currency code — never let formatting break a send.
-        return value.toFixed(2);
-    }
-}
-
-function formatTime(dateStr: string): string {
-    return new Date(dateStr).toLocaleTimeString("en-IN", {
-        timeZone: "Asia/Kolkata",
+function formatTime(dateStr: string, timeZone: string, locale: string): string {
+    return new Date(dateStr).toLocaleTimeString(locale, {
+        timeZone,
         hour: "2-digit", minute: "2-digit", hour12: true,
     });
 }
@@ -618,9 +605,11 @@ export const bookingsService = {
         // Same-day switch / minimum notice / past-date, checked before anything
         // is written. The offered slot list already excludes these, but a tab
         // left open across midnight or a direct API call would sail past it.
-        const requested = salonLocalParts(body.scheduled_at);
+        const salonTz = await getSalonTimezone(body.salon_id);
+        const salonLocale = await getSalonDateLocale(body.salon_id);
+        const requested = salonLocalParts(body.scheduled_at, salonTz);
         const policy = await bookingsRepository.findBookingPolicy(body.salon_id);
-        const window = resolveDateWindow(requested.dateStr, policy);
+        const window = resolveDateWindow(requested.dateStr, policy, salonTz);
         if (!window.bookable) {
             const days = Number(policy.max_advance_days) || 0;
             const message =
@@ -847,12 +836,13 @@ export const bookingsService = {
         // `event_key` makes this obey the owner's own notification preferences,
         // the way every staff-created appointment already does; without it this
         // one push ignored a preference the owner had explicitly set.
+        const nt = await salonTranslator(body.salon_id);
         notificationsService.create({
             salon_id: body.salon_id,
             type: "appointment",
             reference_id: appointment.id,
-            title: "New Appointment Booked",
-            body: `${body.client_name} — ${formatDate(body.scheduled_at)} at ${formatTime(body.scheduled_at)}`,
+            title: nt("notify.newAppointment.title"),
+            body: nt("notify.appointmentLine", { client: body.client_name, date: formatDate(body.scheduled_at, salonTz, salonLocale), time: formatTime(body.scheduled_at, salonTz, salonLocale) }),
             event_key: "newAppointment",
             scheduled_at: body.scheduled_at,
         }).catch((err: any) => {
@@ -943,8 +933,8 @@ export const bookingsService = {
                     variables: {
                         "1": full.client_name                 ?? "Valued Customer",
                         "2": (full as any).salon_name         ?? "our salon",
-                        "3": formatDate(full.scheduled_at),
-                        "4": formatTime(full.scheduled_at),
+                        "3": formatDate(full.scheduled_at, salonTz, salonLocale),
+                        "4": formatTime(full.scheduled_at, salonTz, salonLocale),
                         "5": full.services?.[0]?.name ?? full.title ?? "your service",
                         "6": staffNameForMessages,
                     },

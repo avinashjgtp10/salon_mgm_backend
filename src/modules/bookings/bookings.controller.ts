@@ -8,7 +8,7 @@ import { PublicBookingRequest } from "./bookings.types";
 export const bookingsController = {
     async sendEmailOtp(req: Request, res: Response, next: NextFunction) {
         try {
-            const result = await bookingEmailOtpService.sendOtp(req.body?.email);
+            const result = await bookingEmailOtpService.sendOtp(req.body?.email, typeof req.body?.language === "string" ? req.body.language : undefined);
             return sendSuccess(res, 200, result, result.message);
         } catch (err) {
             return next(err);

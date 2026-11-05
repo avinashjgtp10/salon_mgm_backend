@@ -5,6 +5,7 @@
 
 import logger from '../../config/logger'
 import { waScheduledMessagesService } from './wa-scheduled-messages.service'
+import { dateLocale } from "../../config/currency";
 
 let schedulerInterval: NodeJS.Timeout | null = null
 let dueTickInterval: NodeJS.Timeout | null = null
@@ -15,7 +16,7 @@ const lastRunDate: Record<string, string> = {}
 // Get current hour in IST — safe with NaN fallback
 function getISTHour(): number {
   try {
-    const parts = new Intl.DateTimeFormat('en-IN', {
+    const parts = new Intl.DateTimeFormat(dateLocale(), {
       timeZone: 'Asia/Kolkata',
       hour: '2-digit',
       hour12: false,
@@ -32,7 +33,7 @@ function getISTHour(): number {
 // Get current minute in IST — safe with NaN fallback
 function getISTMinute(): number {
   try {
-    const parts = new Intl.DateTimeFormat('en-IN', {
+    const parts = new Intl.DateTimeFormat(dateLocale(), {
       timeZone: 'Asia/Kolkata',
       minute: '2-digit',
     }).formatToParts(new Date())

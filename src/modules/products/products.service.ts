@@ -14,6 +14,7 @@ import {
     ProductPhoto, ReorderPhotosBody,
     Brand, CreateBrandBody, UpdateBrandBody,
 } from "./products.types";
+import { getSalonCurrency, formatMoneyAscii } from "../../config/currency";
 
 // GST display label for exports — mirrors the frontend's TAX_TYPE_OPTIONS.
 const gstLabel = (p: any): string => {
@@ -22,6 +23,7 @@ const gstLabel = (p: any): string => {
         case "gst_12": return "GST 12%";
         case "gst_18": return "GST 18%";
         case "gst_28": return "GST 28%";
+        case "vat_5": return "VAT 5%";
         case "custom": return p.custom_tax_rate != null ? `Custom ${p.custom_tax_rate}%` : "Custom";
         default: return "No tax";
     }
@@ -299,9 +301,10 @@ export const productsService = {
             colX += colWidth(key);
         });
 
-        // "₹" isn't in pdfkit's standard-font (WinAnsi) encoding and renders as
-        // a mangled glyph — spell the currency out instead of using the symbol.
-        const money = (n: number) => `Rs. ${n.toFixed(2)}`;
+        // "₹" isn't in pdfkit's standard-font (WinAnsi) encoding and renders as a mangled glyph, so the
+        // salon's currency is spelled out ("Rs." / "AED") by the currency entry point instead.
+        const salonCurrency = await getSalonCurrency(params.salonId);
+        const money = (n: number) => formatMoneyAscii(n, salonCurrency);
 
         let y = doc.y;
         const drawHeader = () => {

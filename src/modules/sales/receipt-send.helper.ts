@@ -13,6 +13,7 @@ import { sendBillReceiptTemplateMessage } from "../whatsapp-automation/wa-bill-r
 import { generateFeedbackToken } from "../reviews/feedback-token.util";
 import { notificationChannelsService } from "../notification-channels/notification-channels.service";
 import logger from "../../config/logger";
+import { getSalonMoneyFormatter } from "../../config/currency";
 
 // Dedicated production domain for the public feedback form (points at the
 // same frontend deployment/route, just its own subdomain) — no longer tied
@@ -31,10 +32,10 @@ function buildFeedbackLink(appointmentId: string): string {
 // value (error 132018, "issue with the parameters in your template") — this
 // has to render as one flat line, unlike a freeform caption which allows
 // multi-line text freely.
-function buildItemsBlock(items: SaleItem[], paidAmount: number, dueAmount: number): string {
-    const lines = items.map((i) => `${i.name} — ₹${Number(i.total_price).toFixed(0)}`);
-    lines.push(`Total Paid: ₹${paidAmount.toFixed(0)}`);
-    if (dueAmount > 0) lines.push(`Due: ₹${dueAmount.toFixed(0)}`);
+function buildItemsBlock(items: SaleItem[], paidAmount: number, dueAmount: number, fmt: (n: number) => string): string {
+    const lines = items.map((i) => `${i.name} — ${fmt(Number(i.total_price))}`);
+    lines.push(`Total Paid: ${fmt(paidAmount)}`);
+    if (dueAmount > 0) lines.push(`Due: ${fmt(dueAmount)}`);
     return lines.join(", ");
 }
 
@@ -146,6 +147,9 @@ async function gatherReceiptContext(params: ReceiptContextParams) {
             additional_phones: (salonRecord as any)?.additional_phones ?? null,
             website_url: salonRecord?.website_url ?? null,
             gst_number: salonRecord?.gst_number ?? null,
+            timezone: (salonRecord as any)?.timezone ?? null,
+            currency: (salonRecord as any)?.currency ?? null,
+            country: (salonRecord as any)?.country ?? null,
         },
         salonAddress,
         client: {
@@ -191,7 +195,7 @@ export async function sendPurchaseReceipt(params: ReceiptContextParams): Promise
             ? `We'd love to hear your feedback: ${buildFeedbackLink(appointmentId)}`
             : "We'd love to hear your feedback — just reply to this message!";
         const invoiceLabel = ctx.sale.invoice_number ?? ctx.sale.id.slice(0, 8).toUpperCase();
-        const itemsBlock = buildItemsBlock(params.items, params.paidAmount, params.dueAmount ?? 0);
+        const itemsBlock = buildItemsBlock(params.items, params.paidAmount, params.dueAmount ?? 0, await getSalonMoneyFormatter(params.salonId, { decimals: 0 }));
 
         let result: { sent: boolean; reason?: string };
 

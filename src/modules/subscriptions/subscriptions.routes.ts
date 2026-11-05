@@ -16,6 +16,18 @@ import { subscriptionUpgradeService } from "../subscription-upgrade/subscription
 
 const router = Router()
 
+// A missed or misconfigured Razorpay webhook must not leave a paid account inactive: before answering a "do I have a plan?" question,
+// ask Razorpay about the caller's own unfinished checkouts. Uses the caller's own user and salon (never the URL's), and never throws.
+const reconcileCaller = async (req: any) => {
+    const userId = req.user?.userId
+    if (!userId) return
+    let salonId: string | null = null
+    try {
+        salonId = await getSalonId(req)
+    } catch { /* no salon yet (still onboarding): the user's own checkouts are still reconciled */ }
+    await subscriptionCheckoutService.reconcilePending(userId, salonId)
+}
+
 // ─── Plans ────────────────────────────────────────────────────
 router.get("/plans", subscriptionsController.listPlans)
 router.get("/plans/:id", subscriptionsController.getPlan)
@@ -74,6 +86,7 @@ router.get("/my-status", authMiddleware, async (req, res, next) => {
     try {
         const user = (req as any).user as { userId: string } | undefined
         if (!user?.userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED")
+        await reconcileCaller(req)
         res.json({ success: true, data: await subscriptionCheckoutService.paymentStatus(user.userId) })
     } catch (err) { next(err) }
 })
@@ -107,7 +120,10 @@ const billingRoute = (fn: (salonId: string, req: any) => Promise<unknown>) => as
         res.json({ success: true, data: await fn(await getSalonId(req), req) })
     } catch (err) { next(err) }
 }
-router.get("/current", authMiddleware, requireModule("billing_plans"), billingRoute((salonId) => subscriptionBillingService.getCurrent(salonId)))
+router.get("/current", authMiddleware, requireModule("billing_plans"), billingRoute(async (salonId, req) => {
+    await subscriptionCheckoutService.reconcilePending(req.user.userId, salonId)
+    return subscriptionBillingService.getCurrent(salonId)
+}))
 router.get("/billing-history", authMiddleware, requireModule("billing_history"), billingRoute((salonId) => subscriptionBillingService.getHistory(salonId)))
 router.post("/upgrade/quote", authMiddleware, billingRoute((salonId, req) => subscriptionUpgradeService.quote(salonId, req.user.userId, req.body?.tier, req.body?.cycle, req.body?.country)))
 router.post("/upgrade/initiate", authMiddleware, billingRoute((salonId, req) => subscriptionUpgradeService.initiate(salonId, req.user.userId, req.body?.tier, req.body?.cycle, req.body?.country, req.body?.expected_currency)))
@@ -141,7 +157,10 @@ router.post("/trial", authMiddleware, validateStartTrial, subscriptionsControlle
 router.get("/trial/:salonId", authMiddleware, subscriptionsController.getTrialStatus)
 
 // ─── Subscriptions (read-only) ────────────────────────────────
-router.get("/salon/:salonId", authMiddleware, subscriptionsController.getSubscriptionsBySalon)
+router.get("/salon/:salonId", authMiddleware, async (req, res, next) => {
+    await reconcileCaller(req)   // this is the call the app's subscription wall is decided on
+    return subscriptionsController.getSubscriptionsBySalon(req, res, next)
+})
 router.get("/:id", authMiddleware, subscriptionsController.getSubscription)
 router.get("/:id/payments", authMiddleware, subscriptionsController.getPayments)
 

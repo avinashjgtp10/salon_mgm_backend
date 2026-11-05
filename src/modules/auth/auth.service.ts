@@ -10,12 +10,14 @@ import { generateOtp, hashOtp, compareOtp, otpExpiry } from "../utils/otp.util";
 import { emailService } from "../utils/email.service";
 import { salonsRepository } from "../salons/salons.repository";
 import { canSendEmail } from "../utils/notif-prefs";
+import { getSalonTimezone } from "../../config/salonTimezone";
 import { exotelSendSmsOtp, exotelVerifySmsOtp } from "../utils/exotel.service";
 import logger from "../../config/logger";
 import crypto from "crypto";
 import axios from "axios";
 import redis from "../../config/redis";
 import type { GoogleOAuthProfile, GoogleStatePayload } from "./auth.types";
+import { getSalonDateLocale } from "../../config/currency";
 
 
 const ACCESS_SECRET: Secret = process.env.JWT_ACCESS_SECRET || "";
@@ -106,6 +108,20 @@ export const authService = {
       country_code: body.countryCode?.trim() ? body.countryCode.trim() : null,
     } as any);
 
+    // A salon owner gets their salon row now (name/address/country from the registration), so a plan paid for right after
+    // sign-up is already tied to a salon: the tax invoice is created and emailed the moment Razorpay confirms the payment.
+    // Onboarding later fills this salon in (salonsService.create updates an unfinished one). Best effort: if it fails here,
+    // it is created when the payment arrives or when onboarding finishes, as before.
+    if (role === "salon_owner") {
+      try {
+        // Loaded here, not at the top, so auth.service and the salons/subscriptions modules can't import each other in a loop.
+        const { salonsService } = require("../salons/salons.service") as typeof import("../salons/salons.service");
+        await salonsService.ensureForOwner(user.id);
+      } catch (err: any) {
+        logger.error("[authService.register] Could not create the salon at registration", { userId: user.id, error: err?.message });
+      }
+    }
+
     const salonId = await authRepository.findSalonIdByUserId(user.id);
     const { accessToken, refreshToken } = await issueSessionTokens({
       userId: user.id, role: user.role, salonId, kickOthers: true,
@@ -115,7 +131,7 @@ export const authService = {
 
     const fullName = [user.first_name, user.last_name].filter(Boolean).join(" ");
     const salonName = body.businessName?.trim() || fullName;
-    emailService.sendWelcomeEmail({ to: email, fullName, salonName })
+    emailService.sendWelcomeEmail({ to: email, fullName, salonName, language: body.language, salonId })
       .then(() => logger.info("[authService.register] Welcome email sent successfully", { email }))
       .catch((err: any) => {
         logger.error("[authService.register] Failed to send welcome email", { email, error: err?.message, stack: err?.stack });
@@ -200,9 +216,10 @@ export const authService = {
           if (!allowed) { return; }
           const salon = await salonsRepository.findById(salonId);
           const staffName = [user.first_name, user.last_name].filter(Boolean).join(" ") || email;
-          const loginTime = new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata", dateStyle: "medium", timeStyle: "short" });
+          const loginTime = new Date().toLocaleString(await getSalonDateLocale(salonId), { timeZone: await getSalonTimezone(salonId), dateStyle: "medium", timeStyle: "short" });
           await emailService.sendStaffLoginEmail({
             to:         ownerEmail,
+            salonId,
             salonName:  salon?.business_name ?? "your salon",
             staffName,
             staffEmail: email,
@@ -318,7 +335,7 @@ export const authService = {
     return `otp:email:${email}`;
   },
 
-  async sendEmailOtp(emailRaw: string) {
+  async sendEmailOtp(emailRaw: string, language?: string | null) {
     const email = String(emailRaw || "").trim().toLowerCase();
     logger.info("[authService.sendEmailOtp] Start", { email });
 
@@ -346,7 +363,7 @@ export const authService = {
 
     logger.info("[authService.sendEmailOtp] Sending OTP email", { email });
     try {
-      await emailService.sendOtpEmail(email, otp);
+      await emailService.sendOtpEmail(email, otp, { language, salonId: user ? await authRepository.findSalonIdByUserId(user.id) : null });
       logger.info("[authService.sendEmailOtp] Email sent successfully", { email });
     } catch (emailErr: any) {
       logger.error("[authService.sendEmailOtp] Failed to send email", {
@@ -428,7 +445,7 @@ export const authService = {
   },
 
   // ================= FORGOT PASSWORD =================
-  async forgotPasswordSendOtp(emailRaw: string) {
+  async forgotPasswordSendOtp(emailRaw: string, language?: string | null) {
     const email = String(emailRaw || "").trim().toLowerCase();
     logger.info("[authService.forgotPasswordSendOtp] Start", { email });
 
@@ -452,7 +469,7 @@ export const authService = {
 
     logger.info("[authService.forgotPasswordSendOtp] Sending password reset OTP", { email });
     try {
-      await emailService.sendPasswordResetOtpEmail(email, otp);
+      await emailService.sendPasswordResetOtpEmail(email, otp, { language, salonId: await authRepository.findSalonIdByUserId(user.id) });
       logger.info("[authService.forgotPasswordSendOtp] Email sent successfully", { email });
     } catch (emailErr: any) {
       logger.error("[authService.forgotPasswordSendOtp] Failed to send email", {
@@ -498,7 +515,7 @@ export const authService = {
     return { message: "OTP is valid", success: true };
   },
 
-  async resetPassword(emailRaw: string, otpRaw: string, newPasswordRaw: string) {
+  async resetPassword(emailRaw: string, otpRaw: string, newPasswordRaw: string, language?: string | null) {
     const email = String(emailRaw || "").trim().toLowerCase();
     const otp = String(otpRaw || "").trim();
     const newPassword = String(newPasswordRaw || "");
@@ -538,10 +555,13 @@ export const authService = {
 
     // Send confirmation email (non-blocking — failure must not break the reset)
     const fullName = [user.first_name, user.last_name].filter(Boolean).join(" ") || email;
+    const resetSalonId = await authRepository.findSalonIdByUserId(user.id).catch(() => null);
     emailService.sendPasswordResetConfirmationEmail({
       to: email,
       fullName,
       resetAt: new Date(),
+      language,
+      salonId: resetSalonId,
     }).catch((err: any) => {
       logger.error("[authService.resetPassword] Failed to send confirmation email", {
         email,

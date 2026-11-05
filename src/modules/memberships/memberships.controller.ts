@@ -3,6 +3,8 @@ import ExcelJS from "exceljs";
 import { membershipsService } from "./memberships.service";
 import { sendSuccess } from "../utils/response.util";
 import { AppError } from "../../middleware/error.middleware";
+import { getSalonCurrency, formatMoneyAscii } from "../../config/currency";
+import { dateLocale } from "../../config/currency";
 
 type AuthRequest = Request & {
   user?: { userId: string; role?: string; salonId?: string };
@@ -133,6 +135,7 @@ export const membershipsController = {
     try {
       const salonId = await getSalonId(req);
       const items = await membershipsService.listAll(req.query, salonId);
+      const salonCurrency = await getSalonCurrency(salonId);
 
       // Build HTML → PDF using pdfkit (already in your backend deps)
       const PDFDocument = require("pdfkit");
@@ -146,7 +149,7 @@ export const membershipsController = {
       doc.fontSize(18).font("Helvetica-Bold").text("Memberships Report", { align: "center" });
       doc.moveDown(0.5);
       doc.fontSize(10).font("Helvetica").fillColor("#666")
-        .text(`Generated: ${new Date().toLocaleString("en-IN")}`, { align: "center" });
+        .text(`Generated: ${new Date().toLocaleString(dateLocale(salonCurrency))}`, { align: "center" });
       doc.moveDown(1);
 
       // Table header
@@ -169,7 +172,7 @@ export const membershipsController = {
           m.name,
           m.validFor,
           m.sessionType === "unlimited" ? "Unlimited" : `${m.numberOfSessions ?? "–"} sessions`,
-          `Rs.${Number(m.price).toLocaleString("en-IN")}`,
+          formatMoneyAscii(m.price, salonCurrency),
           m.taxRate ? `${m.taxRate}%` : "No tax",
           m.enableOnlineSales ? "Yes" : "No",
         ];

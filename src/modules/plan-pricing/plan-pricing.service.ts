@@ -4,6 +4,7 @@ import { createRazorpayPlan, razorpayBilling } from "../../config/razorpay";
 import { billingSchemaReady } from "../subscription-pricing/billing-schema";
 import { getActiveRazorpayAccount } from "../subscription-pricing/razorpay-account";
 import { registerPlanId } from "../subscription-pricing/razorpay-plans";
+import { PLATFORM_BILLING_CURRENCY } from "../../config/currency";
 
 // The three fixed tiers (same slugs as module_plans, which holds each tier's features) and the billing
 // cycles a super admin can price each at.
@@ -189,7 +190,7 @@ export const planPricingService = {
             const rzpId = razorpayIds.get(cycle);
             if (amount === null || !rzpId) continue;
             const { rows: planRow } = await pool.query(`SELECT id FROM subscription_plans WHERE slug = $1`, [planSlug(tier, cycle)]);
-            if (planRow[0]) await registerPlanId(planRow[0].id, cycle, "INR", withGst(amount), amount, 1, rzpId);
+            if (planRow[0]) await registerPlanId(planRow[0].id, cycle, PLATFORM_BILLING_CURRENCY, withGst(amount), amount, 1, rzpId);
         }
         return (await this.list()).find((p) => p.slug === tier);
     },

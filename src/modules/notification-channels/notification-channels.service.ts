@@ -3,6 +3,7 @@
 // ============================================================
 
 import logger from "../../config/logger"
+import { getSalonLanguage } from "../../config/language"
 import config from "../../config/env"
 import { transporter } from "../utils/email.service"
 import { AutomationTriggerPayload } from "../whatsapp-automation/whatsapp-automation.types"
@@ -67,7 +68,7 @@ const TEST_SAMPLE_VALUES: Record<string, string> = {
   referred_customer_name: "Rahul Verma", reward: "100", points_used: "50", remaining_points: "270",
   referral_code: "SAMPLE10", opening_date: "25 Sep 2026", opening_time: "9:00 AM", opening_amount: "500",
   closing_date: "25 Sep 2026", closing_time: "9:00 PM",
-  collection_breakdown: "Cash: ₹500.00 | Card: ₹300.00 | UPI: ₹200.00",
+  collection_breakdown: "Cash: 500.00 | Card: 300.00 | UPI: 200.00",
   total_collection: "1,000", expenses: "100", in_store_cash: "400",
 }
 
@@ -323,7 +324,7 @@ export const notificationChannelsService = {
 
       const subject = renderTemplate(tpl.subject ?? "", namedVars, true)
       const bodyHtml = renderTemplate(tpl.body, namedVars, true)
-      const html = renderChannelEmailHtml({ subject, bodyText: bodyHtml, salonName: namedVars.salon_name ?? "" })
+      const html = renderChannelEmailHtml({ subject, bodyText: bodyHtml, salonName: namedVars.salon_name ?? "", language: await getSalonLanguage(payload.salonId) })
 
       // Recorded as PENDING before the handoff to SMTP, then resolved in place.
       // A send that hangs or dies mid-flight then still leaves a row, instead

@@ -4,6 +4,7 @@ import { computeAppointmentTotals } from '../appointments/appointment-totals';
 import { paymentsRepository } from '../payments/payments.repository';
 import { getActiveTaxes } from '../settings/tax.util';
 import { POS_PAYMENT_MODES, PosPaymentMode } from './pos-payments.types';
+import { getBillRoundingUnit, getSalonMoneyFormatter } from "../../config/currency";
 
 const AMOUNT_TOLERANCE = 0.5; // rupees — same rounding allowance as finalizeSuccess
 
@@ -42,7 +43,7 @@ export async function getAppointmentOutstanding(appointmentId: string, salonId: 
       throw new AppError(503, 'Could not verify the outstanding balance — try again', 'BALANCE_UNAVAILABLE');
     }
   }
-  const billTotal = round2(computeAppointmentTotals(appt as any, taxes).grandTotal);
+  const billTotal = round2(computeAppointmentTotals(appt as any, taxes, await getBillRoundingUnit(salonId)).grandTotal);
   const alreadyPaid = round2(await paymentsRepository.getTotalPaidForAppointment(appointmentId));
   const outstanding = appt.status === 'paid' ? 0 : Math.max(0, round2(billTotal - alreadyPaid));
   return { billTotal, alreadyPaid, outstanding, appointmentStatus: appt.status };
@@ -99,7 +100,7 @@ export function resolvePosPaymentMode(payload: MachinePayload, requestedMode?: s
  * Without this the customer could be charged the eWallet portion a second
  * time on the card, or an amount the replay never records.
  */
-export function assertPosAmountMatchesPayload(amount: number, payload: MachinePayload): void {
+export function assertPosAmountMatchesPayload(amount: number, payload: MachinePayload, fmt: (n: number) => string = String): void {
   const method = String(payload?.payment_method ?? '');
   const legs = Object.entries(payload?.split_details ?? {})
     .filter(([key, value]) => key.toLowerCase() !== 'ewallet' && Number(value) > 0);
@@ -116,8 +117,8 @@ export function assertPosAmountMatchesPayload(amount: number, payload: MachinePa
     || (leg != null && Math.abs(amount - Number(leg)) > PAYLOAD_TOLERANCE)) {
     throw new AppError(
       400,
-      `The Payment Machine amount (₹${amount}) doesn't match this bill's card/UPI portion` +
-        `${Number.isFinite(expected) ? ` (₹${expected})` : ''} — refresh the page and try again.`,
+      `The Payment Machine amount (${fmt(amount)}) doesn't match this bill's card/UPI portion` +
+        `${Number.isFinite(expected) ? ` (${fmt(expected)})` : ''} — refresh the page and try again.`,
       'AMOUNT_PAYLOAD_MISMATCH',
       details,
     );
@@ -139,6 +140,7 @@ export async function assertPosAmountWithinOutstanding(
   payload: { ewallet_used?: number | string | null } | null | undefined,
 ): Promise<AppointmentOutstanding> {
   const balance = await getAppointmentOutstanding(appointmentId, salonId);
+  const fmt = await getSalonMoneyFormatter(salonId);
   const ewalletUsed = Math.max(0, Number(payload?.ewallet_used) || 0);
   const details = { ...balance, requestedAmount: amount, ewalletUsed };
 
@@ -148,7 +150,7 @@ export async function assertPosAmountWithinOutstanding(
   if (amount + ewalletUsed > balance.outstanding + AMOUNT_TOLERANCE) {
     throw new AppError(
       409,
-      `Requested ₹${amount}${ewalletUsed > 0 ? ` (+ ₹${ewalletUsed} eWallet)` : ''} exceeds the outstanding balance of ₹${balance.outstanding}.`,
+      `Requested ${fmt(amount)}${ewalletUsed > 0 ? ` (+ ${fmt(ewalletUsed)} eWallet)` : ''} exceeds the outstanding balance of ${fmt(balance.outstanding)}.`,
       'AMOUNT_EXCEEDS_OUTSTANDING',
       details,
     );

@@ -5,6 +5,7 @@ import { staffService } from "../../staff/staff.service";
 import { salonsRepository } from "../../salons/salons.repository";
 import { AssistantUser, Tool } from "../ai-assistant.types";
 import { recommendProductsForService } from "../recommendations.service";
+import { getSalonDateLocale } from "../../../config/currency";
 
 // Every tool is read-only and salon-scoped: salonId always comes from the
 // signed-in user, never from model output. `permission` is enforced by the
@@ -85,6 +86,7 @@ const getTodaysAppointmentsTool: Tool = {
     async execute(_args, user: AssistantUser) {
         const salon = await salonsRepository.findById(user.salonId);
         const tz = salon?.timezone || "Asia/Kolkata";
+        const locale = await getSalonDateLocale(user.salonId);
         const { rows } = await pool.query(
             `SELECT a.id, a.scheduled_at, a.status, a.duration_minutes,
                     c.first_name AS client_first, c.last_name AS client_last,
@@ -104,7 +106,7 @@ const getTodaysAppointmentsTool: Tool = {
             count: rows.length,
             appointments: rows.map((r) => ({
                 id: r.id,
-                time: new Date(r.scheduled_at).toLocaleTimeString("en-IN", { timeZone: tz, hour: "2-digit", minute: "2-digit", hour12: true }),
+                time: new Date(r.scheduled_at).toLocaleTimeString(locale, { timeZone: tz, hour: "2-digit", minute: "2-digit", hour12: true }),
                 status: r.status,
                 duration_minutes: r.duration_minutes,
                 client: [r.client_first, r.client_last].filter(Boolean).join(" ") || null,
