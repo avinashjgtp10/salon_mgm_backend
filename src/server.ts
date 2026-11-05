@@ -17,6 +17,7 @@ import { startExpiryWriteOffScheduler, stopExpiryWriteOffScheduler } from './mod
 import { startInventoryAlertsScheduler, stopInventoryAlertsScheduler } from './modules/inventory/inventory-alerts.scheduler'
 import { startPosPaymentsScheduler, stopPosPaymentsScheduler } from './modules/pos-payments/pos-payments.scheduler'
 import { startSalonDeactivationReminderScheduler, stopSalonDeactivationReminderScheduler } from './modules/super-admin/salon-deactivation-reminder.scheduler'
+import { startSubscriptionExpiryReminderScheduler, stopSubscriptionExpiryReminderScheduler } from './modules/subscriptions/subscription-expiry-reminder.service'
 
 const PORT = config.port
 
@@ -73,6 +74,9 @@ httpServer.listen(PORT, () => {
 
   // Daily 8am IST reminder email for every currently-deactivated salon
   startSalonDeactivationReminderScheduler()
+
+  // Daily 8am IST reminder (5, 4, 3, 2, 1 days before and on the day) to owners whose subscription is about to end
+  startSubscriptionExpiryReminderScheduler()
 })
 
 // Crash logging. Node already exits on these; the handlers only make sure the
@@ -100,6 +104,7 @@ process.on('SIGTERM', () => {
   stopInventoryAlertsScheduler()
   stopPosPaymentsScheduler()
   stopSalonDeactivationReminderScheduler()
+  stopSubscriptionExpiryReminderScheduler()
   httpServer.close(() => {
     logger.info('HTTP server closed')
     db.end()

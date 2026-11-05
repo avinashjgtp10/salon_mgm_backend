@@ -7,6 +7,45 @@ import { authRepository } from "../auth/auth.repository";
 import { issueSessionTokens } from "../auth/session.util";
 import { regionalDefaultsForCountry, normalizeCountryCode } from "../../config/salonTimezone";
 import { seedUaeVatDefaults } from "../settings/tax.util";
+import { emailService } from "../utils/email.service";
+
+// The mandatory onboarding answers the backend keeps: the business name (entered at sign-up, confirmed on the first step) and the
+// service category chosen on the second. (The team size and location choices are not stored on the salon.)
+const hasMandatoryOnboardingData = (salon: Salon) =>
+    Boolean(salon.business_name?.trim()) && Boolean(salon.business_type?.trim());
+
+const fmtValidUntil = (v: unknown) =>
+    v ? new Date(v as string).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric", timeZone: "Asia/Kolkata" }) : null;
+
+// Marks the owner's onboarding complete (stamping users.onboarding_completed_at) and sends the "onboarding complete" welcome email —
+// but only when this call is the one that actually completed it (the flip is one atomic update, so a repeated call to the
+// completion API, a retry or a double click can never send a second email), only to the salon's owner, and only once the
+// mandatory onboarding data is in. Registering or buying a plan never gets here. Best effort: a mail problem never fails onboarding.
+export async function completeOnboarding(userId: string, salon: Salon): Promise<void> {
+    const firstTime = await authRepository.markOnboardingComplete(userId);
+    if (!firstTime) return;
+    if (salon.owner_id !== userId || !hasMandatoryOnboardingData(salon)) {
+        logger.info("Onboarding marked complete; welcome email skipped (not the owner, or mandatory onboarding data missing)", { userId, salonId: salon.id });
+        return;
+    }
+    void (async () => {
+        try {
+            const user: any = await authRepository.findUserById(userId);
+            if (!user?.email) return;
+            const plan = await salonsRepository.currentPlanSummary(salon.id).catch(() => null);
+            await emailService.sendOnboardingCompleteEmail({
+                to: user.email,
+                ownerName: user.first_name,
+                salonName: salon.business_name,
+                planName: plan?.plan_name ?? (plan?.is_trial ? "Free Trial" : null),
+                validUntil: fmtValidUntil(plan?.valid_until),
+            });
+            logger.info("Onboarding-complete email sent", { userId, salonId: salon.id });
+        } catch (err: any) {
+            logger.error("Onboarding-complete email failed", { userId, error: err?.message });
+        }
+    })();
+}
 
 const slugify = (text: string) =>
     text
@@ -164,7 +203,7 @@ export const salonsService = {
             });
 
             // Mark onboarding complete
-            await authRepository.markOnboardingComplete(ownerId);
+            await completeOnboarding(ownerId, salon);
 
             logger.info("salonsService.create success", {
                 ownerId,
@@ -260,7 +299,7 @@ export const salonsService = {
             const updated = await salonsRepository.update(salonId, patch);
 
             if (patch.onboarding_completed === true) {
-                await authRepository.markOnboardingComplete(requesterUserId);
+                await completeOnboarding(requesterUserId, updated);
             }
 
             logger.info("salonsService.updateByOwnerOrAdmin success", {

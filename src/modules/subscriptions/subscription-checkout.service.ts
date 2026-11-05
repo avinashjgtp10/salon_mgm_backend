@@ -371,7 +371,12 @@ export const subscriptionCheckoutService = {
                 );
                 if (type === "subscription.charged") {
                     const pay = event?.payload?.payment?.entity;
-                    if (pay?.id) {
+                    // Only a captured payment is money received: a failed / pending / merely authorised one gets no payment row,
+                    // so no invoice and no "Payment Successful" email. (The status is Razorpay's own: from the signed webhook, or
+                    // fetched from its API by the reconcile.)
+                    if (pay?.id && pay.status && pay.status !== "captured") {
+                        logger.warn("Ignoring a subscription charge that is not captured", { paymentId: pay.id, status: pay.status });
+                    } else if (pay?.id) {
                         const dup = await client.query(`SELECT 1 FROM subscription_payments WHERE transaction_id = $1`, [pay.id]);
                         if (dup.rowCount === 0) {
                             // The payment's own currency and amount, as Razorpay reports them (never assumed to be INR).
