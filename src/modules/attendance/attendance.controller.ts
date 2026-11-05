@@ -65,7 +65,14 @@ export const attendanceController = {
                 ? (await staffSelfCheckIn(req.user!.userId, salonId)).record
                 : await attendanceService.checkIn(salonId, req.body as CheckInBody);
             return sendSuccess(res, 200, record, "Checked in successfully");
-        } catch (err) { return next(err); }
+        } catch (err) {
+            // The admin web screen resolves an unfinished earlier day in a dialog, so this is an answer, not a failure: 200 with the
+            // pending record and nothing checked in. (Biometric / QR pushes and the staff app keep getting the 409 error.)
+            if (err instanceof AppError && err.code === "PREVIOUS_CHECKOUT_PENDING" && !isMobileStaffRequest(req)) {
+                return sendSuccess(res, 200, { checked_in: false, requires_previous_checkout: true, pending: err.details }, err.message);
+            }
+            return next(err);
+        }
     },
 
     async checkOut(req: AuthRequest, res: Response, next: NextFunction) {
@@ -77,6 +84,22 @@ export const attendanceController = {
                 ? (await staffSelfCheckOut(req.user!.userId, salonId)).record
                 : await attendanceService.checkOut(salonId, req.body as CheckOutBody);
             return sendSuccess(res, 200, record, "Checked out successfully");
+        } catch (err) { return next(err); }
+    },
+
+    // Completes a forgotten check-out on an earlier day (see attendanceService.completeMissedCheckOut).
+    async completeMissedCheckOut(req: AuthRequest, res: Response, next: NextFunction) {
+        try {
+            const salonId = req.user?.salonId;
+            if (!salonId) throw new AppError(403, "Salon context required", "NO_SALON_CONTEXT");
+            const id = String(req.params.id || "").trim();
+            const checkOut = String(req.body?.check_out || "").trim();
+            if (!id || !checkOut) throw new AppError(400, "id and check_out are required", "VALIDATION_ERROR");
+            const existing = await attendanceRepository.findById(id);
+            if (!existing) throw new AppError(404, "Attendance not found", "NOT_FOUND");
+            await assertStaffScope(req, existing.staff_id);
+            const record = await attendanceService.completeMissedCheckOut(salonId, id, checkOut, typeof req.body?.note === "string" ? req.body.note : undefined);
+            return sendSuccess(res, 200, record, "Previous check-out completed");
         } catch (err) { return next(err); }
     },
 

@@ -201,6 +201,23 @@ function fmtDuration(hours: number): string {
     return parts.join(" ");
 }
 
+const fmtDayLong = (ymd: string) =>
+    new Date(`${ymd}T00:00:00Z`).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric", timeZone: "UTC" });
+
+// A staff member can't start a new attendance day while an earlier one still has a check-in and no check-out. Used by every way
+// of checking in (manual, biometric / QR / GPS push, the staff app), so the rule is the same everywhere. Nothing is changed here:
+// the caller gets a PREVIOUS_CHECKOUT_PENDING error carrying the open record so the admin can complete that check-out first.
+export async function assertNoOpenPreviousSession(staffId: string, date: string): Promise<void> {
+    const open = await attendanceRepository.findOpenSessionBefore(staffId, date);
+    if (!open) return;
+    throw new AppError(
+        409,
+        `You have an incomplete attendance record from ${fmtDayLong(open.date)}. Please complete the previous day's check-out before marking today's attendance.`,
+        "PREVIOUS_CHECKOUT_PENDING",
+        { attendance_id: open.id, staff_id: open.staff_id, staff_name: open.staff_name ?? "", date: open.date, check_in: open.check_in },
+    );
+}
+
 export const attendanceService = {
 
     // ── Settings ──────────────────────────────────────────────────────────────
@@ -256,6 +273,7 @@ export const attendanceService = {
         const date = new Date(checkInTs).toLocaleDateString("en-CA", { timeZone: await getSalonTimezone(salonId) });
         const existing = await attendanceRepository.findByStaffAndDate(staff_id, date);
         if (existing?.check_in) throw new AppError(409, "Attendance already has a check-in. Staff on break must check in through their own app.", "ALREADY_CHECKED_IN");
+        await assertNoOpenPreviousSession(staff_id, date);
 
         const onLeave = await attendanceRepository.hasApprovedLeave(staff_id, date);
         if (onLeave) throw new AppError(400, "Staff member is on approved leave today", "ON_LEAVE");
@@ -316,6 +334,42 @@ export const attendanceService = {
         return record;
     },
 
+    // ── Complete a forgotten check-out ────────────────────────────────────────
+
+    // Closes an earlier day that was left open (check-in, no check-out) with the check-out time the admin enters. It only fills
+    // in the missing check-out: the check-in and the day's date are untouched, hours are recomputed from the real check-in /
+    // check-out / breaks, and the status follows the same rule as a normal check-out. Never closes a day by itself.
+    async completeMissedCheckOut(salonId: string, id: string, checkOutTs: string, note?: string): Promise<Attendance> {
+        const existing = await attendanceRepository.findById(id);
+        if (!existing || existing.salon_id !== salonId) throw new AppError(404, "Attendance record not found", "NOT_FOUND");
+        if (!existing.check_in) throw new AppError(400, "This day has no check-in to close.", "NOT_CHECKED_IN");
+        if (existing.check_out) throw new AppError(409, "This day already has a check-out.", "ALREADY_CHECKED_OUT");
+        if (existing.active_break) throw new AppError(409, "Finish the break before checkout", "ON_BREAK");
+
+        const out = Date.parse(checkOutTs);
+        if (!Number.isFinite(out)) throw new AppError(400, "check_out must be a valid date and time", "VALIDATION_ERROR");
+        if (out <= Date.parse(existing.check_in)) throw new AppError(400, "You cannot check out before the check-in time. Select a time after check-in.", "INVALID_CHECKOUT");
+        if (out > Date.now() + 60_000) throw new AppError(400, "The check-out time cannot be in the future.", "INVALID_CHECKOUT");
+        // Overlap: the closed session must end before this staff member's next recorded check-in.
+        const nextIn = await attendanceRepository.findNextCheckInAfter(existing.staff_id, String(existing.date).slice(0, 10));
+        if (nextIn && out > Date.parse(nextIn)) {
+            throw new AppError(409, "That check-out is later than this staff member's next check-in. Choose an earlier time.", "OVERLAPPING_SESSION");
+        }
+
+        const hours = attendanceActivity(existing, existing.breaks, new Date(checkOutTs)).total_worked_seconds / 3600;
+        let status: AttendanceStatus = existing.status;
+        if (status !== "half_day") {
+            const settings = await attendanceService.getSettings(salonId);
+            status = calcStatus(existing.check_in, checkOutTs, settings, hours);
+        }
+        const record = await attendanceRepository.upsertCheckOut({
+            salonId, staffId: existing.staff_id, date: String(existing.date).slice(0, 10), checkOut: checkOutTs, status, hoursWorked: hours, note,
+        });
+        logger.info("attendance.completeMissedCheckOut", { salonId, staffId: existing.staff_id, attendanceId: id, status, hours });
+        emitAttendanceUpdated(salonId);
+        return record;
+    },
+
     // ── Device / Biometric Push ───────────────────────────────────────────────
 
     async push(salonId: string, body: PushAttendanceBody): Promise<Attendance> {
@@ -324,6 +378,7 @@ export const attendanceService = {
         const date = new Date(ts).toLocaleDateString("en-CA", { timeZone: await getSalonTimezone(salonId) });
 
         if (check_type === "in") {
+            await assertNoOpenPreviousSession(staff_id, date);
             const onLeave = await attendanceRepository.hasApprovedLeave(staff_id, date);
             if (onLeave) {
                 const record = await attendanceRepository.upsert({
