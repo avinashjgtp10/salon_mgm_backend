@@ -74,7 +74,9 @@ export const authController = {
 
   // ================= LOGIN =================
   async login(req: Request, res: Response, next: NextFunction) {
-    const email = String(req.body?.email || "")
+    // `identifier` is an email OR a connected-branch username (no "@"); `email` is still accepted for older clients.
+    // Kept in a variable called `email` because every limiter/log below keys on it.
+    const email = String(req.body?.identifier || req.body?.email || "")
       .toLowerCase()
       .trim();
     const password = String(req.body?.password || "");
@@ -87,7 +89,7 @@ export const authController = {
         logger.warn("Login validation failed", { email });
         throw new AppError(
           400,
-          "Email and password required",
+          "Email or username and password required",
           "VALIDATION_ERROR"
         );
       }

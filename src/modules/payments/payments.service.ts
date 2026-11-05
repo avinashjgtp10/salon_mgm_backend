@@ -26,6 +26,7 @@ import { getActiveTaxes, arePackageTaxesInclusive } from '../settings/tax.util';
 import { computeBillTotals, allocateMembershipDiscount } from '../pricing/pricing.engine';
 import pool from '../../config/database';
 import { AppError } from '../../middleware/error.middleware';
+import { commissionCalculationService } from '../commission/commissionCalculation.service';
 import { assertNoBlockingPosPayment } from '../pos-payments/pos-payments.guard';
 import { posPaymentsRepository } from '../pos-payments/pos-payments.repository';
 import { getBillRoundingUnit, formatSalonMoney } from "../../config/currency";
@@ -180,9 +181,13 @@ export const paymentsService = {
     }
     const body: CreatePaymentBody = posPaymentRequestId ? { ...clean, pos_payment_request_id: posPaymentRequestId } : clean;
 
-    // A custom payment method that has been deactivated can't take new money
-    // (history keeps its name; this only guards the new payment).
-    await paymentMethodsService.assertNotInactive(body.salon_id, body.payment_method, body.split_details);
+    // A payment method that has been switched off can't take new money (history
+    // keeps its name; this only guards the new payment). Built-ins are checked
+    // only when real money moves and it isn't a machine payment, which is
+    // recorded after the client has already paid on the terminal.
+    await paymentMethodsService.assertNotInactive(body.salon_id, body.payment_method, body.split_details, {
+      includeBuiltIns: !posPaymentRequestId && Number(body.paid_amount ?? 0) > 0,
+    });
 
     if (!body.appointment_id) return paymentsService.recordPayment(body, requesterUserId, async () => {});
     const lock = await posPaymentsRepository.acquireAppointmentPaymentLock(body.appointment_id);
@@ -1431,6 +1436,30 @@ export const paymentsService = {
         });
         checkoutSaleId = sale.id;
         checkoutInvoiceNumber = sale.invoice_number ? String(sale.invoice_number) : undefined;
+
+        // ── Staff commission on a part-payment ─────────────────────────────────────
+        // A fully paid bill reaches commission through the checkout step (which fires only once nothing is
+        // due). A part-payment never does, so staff earned nothing until the balance came in. Fire it here for
+        // 'partial': the commission follows the share of the bill received so far (read from this payment's
+        // due_amount), and the checkout that runs on the final payment replaces these rows with the full
+        // amount. reverseForSale clears the sale's pending rows first, so repeated part-payments (or a retry)
+        // never stack duplicates.
+        if (data.status === 'partial') {
+          try {
+            await commissionCalculationService.reverseForSale(sale.id);
+            await commissionCalculationService.calculateForSale({
+              salonId: data.salon_id,
+              saleId: sale.id,
+              appointmentId: data.appointment_id,
+              fallbackStaffId: appt.staff_id ?? null,
+              items: saleItemsForEvents,
+              packageItemIds: new Set((appt.package_items ?? []).map((p) => p.package_id)),
+            });
+          } catch (commissionErr) {
+            // Never fail the payment over commission bookkeeping.
+            logger.warn('payments.service: part-payment commission failed', { saleId: sale.id, commissionErr });
+          }
+        }
 
         // Note: appointment.status is managed by the checkout flow
         // (POST /api/v1/appointments/:id/checkout) to avoid double-completion
