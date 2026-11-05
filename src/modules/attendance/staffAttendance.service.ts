@@ -7,7 +7,7 @@ import type { Attendance } from "./attendance.types";
 import { AppError } from "../../middleware/error.middleware";
 import { ownStaffId } from "../notifications/staffNotificationScope";
 import { attendanceRepository } from "./attendance.repository";
-import { notifyAttendanceBreak, notifyAttendancePunch } from "./attendance.service";
+import { assertNoOpenPreviousSession, notifyAttendanceBreak, notifyAttendancePunch } from "./attendance.service";
 import { salonDate, shiftWindow, type Shift } from "./staffAttendance.rules";
 
 export async function staffAttendanceState(userId: string, salonId: string, now = new Date()) {
@@ -81,6 +81,7 @@ export async function staffSelfCheckIn(userId: string, salonId: string, now = ne
       resumed = { record: record!, brk: { ...active, actual_end: now.toISOString() } };
     } else {
       if (record?.check_in) throw new AppError(409, "You are already working.", "ALREADY_CHECKED_IN");
+      await assertNoOpenPreviousSession(state.staff_id, state.date);
       await client.query(`INSERT INTO attendance (salon_id, staff_id, date, check_in, status, source, check_in_location, scheduled_start, scheduled_end)
         VALUES ($1,$2,$3::date,$4,'present','manual',$5,$6,$7)
         ON CONFLICT (salon_id,staff_id,date) DO UPDATE SET check_in = EXCLUDED.check_in,

@@ -124,6 +124,31 @@ export const attendanceRepository = {
         return rows[0] ? (await withActivity(rows))[0] : null;
     },
 
+    // The staff member's oldest attendance day before `beforeDate` that has a check-in but never got a check-out (a forgotten
+    // check-out). Rows are never touched here: this only reads.
+    async findOpenSessionBefore(staffId: string, beforeDate: string): Promise<Attendance | null> {
+        const { rows } = await pool.query(
+            `SELECT a.*, a.date::text AS date,
+                    TRIM(CONCAT(st.first_name, ' ', COALESCE(st.last_name, ''))) AS staff_name,
+                    COALESCE(st.designation, '') AS staff_role
+             FROM attendance a
+             JOIN staff st ON st.id = a.staff_id
+             WHERE a.staff_id = $1 AND a.date < $2::date AND a.check_in IS NOT NULL AND a.check_out IS NULL
+             ORDER BY a.date ASC LIMIT 1`,
+            [staffId, beforeDate]
+        );
+        return rows[0] ? (await withActivity(rows))[0] : null;
+    },
+
+    // The staff member's next check-in after `afterDate`, so a late check-out can't run into it (overlapping sessions).
+    async findNextCheckInAfter(staffId: string, afterDate: string): Promise<string | null> {
+        const { rows } = await pool.query(
+            `SELECT check_in FROM attendance WHERE staff_id = $1 AND date > $2::date AND check_in IS NOT NULL ORDER BY date ASC LIMIT 1`,
+            [staffId, afterDate]
+        );
+        return rows[0]?.check_in ?? null;
+    },
+
     // ── Single staff, date range (for Staff History Attendance tab / Timeline) ──
     async findByStaffAndDateRange(staffId: string, filters: {
         startDate?: string; endDate?: string; status?: string; page?: number; limit?: number;

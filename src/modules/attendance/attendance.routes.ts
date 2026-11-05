@@ -44,6 +44,8 @@ router.get("/staff/:staffId", authMiddleware, ownerAdminStaff, viewAttendanceLis
 // left role-gated only, unchanged.
 router.post("/check-in",   authMiddleware, ownerAdminStaff, attendanceController.checkIn);
 router.post("/check-out",  authMiddleware, ownerAdminStaff, attendanceController.checkOut);
+// Owner/admin completes a check-out that was forgotten on an earlier day, so the next check-in can go ahead.
+router.post("/:id/complete-checkout", authMiddleware, ownerAdmin, attendanceController.completeMissedCheckOut);
 
 // Biometric/QR/GPS device push (device must be configured with an auth token)
 router.post("/push",       authMiddleware, ownerAdminStaff, attendanceController.push);
