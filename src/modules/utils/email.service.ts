@@ -1,6 +1,8 @@
 import nodemailer from "nodemailer";
 import config from "../../config/env";
 import { formatMoney, dateLocale } from "../../config/currency";
+import { translator } from "../../config/i18n";
+import { DEFAULT_LANGUAGE, getSalonLanguage, languageDateLocale, languageDir, normalizeLanguage } from "../../config/language";
 
 export const transporter = nodemailer.createTransport({
   host: config.smtp.host,
@@ -12,6 +14,20 @@ export const transporter = nodemailer.createTransport({
   },
   requireTLS: true,
 });
+
+/**
+ * The language an email is written in: an explicit one (what the person's screen shows when nothing is known about a salon yet —
+ * registration, forgotten password), else the salon's own (salons.language), else English. English output is unchanged.
+ */
+async function emailLanguage(p: { language?: string | null; salonId?: string | null }): Promise<string> {
+  if (p.language) return normalizeLanguage(p.language);
+  return p.salonId ? getSalonLanguage(p.salonId) : DEFAULT_LANGUAGE;
+}
+
+/** lang/dir for the <html> tag. Only right-to-left languages get a dir, so English output stays as it was. */
+const htmlAttrs = (lang: string) => `lang="${lang}"${languageDir(lang) === "rtl" ? ' dir="rtl"' : ""}`;
+/** dir for <body> or a root <div> (some mail clients ignore the one on <html>). */
+const bodyDir = (lang: string) => (languageDir(lang) === "rtl" ? ' dir="rtl"' : "");
 
 const escapeHtml = (value: string | null | undefined) =>
   String(value ?? "")
@@ -118,17 +134,19 @@ export const emailService = {
     await transporter.verify();
   },
 
-  async sendOtpEmail(email: string, otp: string) {
+  async sendOtpEmail(email: string, otp: string, options: { language?: string | null; salonId?: string | null } = {}) {
+    const lang = await emailLanguage(options);
+    const t = translator(lang);
     await transporter.sendMail({
       from: config.smtp.from,
       to: email,
-      subject: "Your Email OTP Verification",
+      subject: t("email.otp.subject"),
       html: `
-        <div style="font-family: Arial, sans-serif">
-          <h2>Email Verification</h2>
-          <p>Your OTP code is:</p>
+        <div${bodyDir(lang)} style="font-family: Arial, sans-serif">
+          <h2>${t("email.otp.title")}</h2>
+          <p>${t("email.otp.intro")}</p>
           <h1 style="letter-spacing: 4px;">${otp}</h1>
-          <p>This OTP expires in ${config.otp.expMinutes} minutes.</p>
+          <p>${t("email.otp.expiry", { minutes: config.otp.expMinutes })}</p>
         </div>
       `,
     });
@@ -154,19 +172,21 @@ export const emailService = {
     });
   },
 
-  async sendPasswordResetOtpEmail(email: string, otp: string) {
+  async sendPasswordResetOtpEmail(email: string, otp: string, options: { language?: string | null; salonId?: string | null } = {}) {
+    const lang = await emailLanguage(options);
+    const t = translator(lang);
     await transporter.sendMail({
       from: config.smtp.from,
       to: email,
-      subject: "Password Reset Request",
+      subject: t("email.resetOtp.subject"),
       html: `
-        <div style="font-family: Arial, sans-serif, max-width: 600px; margin: 0 auto; padding: 20px;">
-          <h2 style="color: #333;">Password Reset Verification</h2>
-          <p style="color: #666; font-size: 16px;">We received a request to reset your password. Here is your verification code:</p>
+        <div${bodyDir(lang)} style="font-family: Arial, sans-serif, max-width: 600px; margin: 0 auto; padding: 20px;">
+          <h2 style="color: #333;">${t("email.resetOtp.title")}</h2>
+          <p style="color: #666; font-size: 16px;">${t("email.resetOtp.intro")}</p>
           <div style="background-color: #f4f4f7; padding: 20px; border-radius: 8px; text-align: center; margin: 20px 0;">
             <h1 style="letter-spacing: 6px; color: #6366f1; margin: 0; font-size: 32px;">${otp}</h1>
           </div>
-          <p style="color: #666; font-size: 14px;">This code expires in ${config.otp.expMinutes} minutes. If you did not request a password reset, please ignore this email.</p>
+          <p style="color: #666; font-size: 14px;">${t("email.resetOtp.expiry", { minutes: config.otp.expMinutes })}</p>
         </div>
       `,
     });
@@ -174,18 +194,25 @@ export const emailService = {
 
   async sendPasswordResetConfirmationEmail(params: {
     to: string;
+    /** Recipient's salon — its language (salons.language) is used. */
+    salonId?: string | null;
+    /** Explicit language; wins over the salon's. */
+    language?: string | null;
     fullName: string;
     resetAt: Date;
   }) {
+    const lang = await emailLanguage(params);
+    const t = translator(lang);
     const { to, fullName, resetAt } = params;
     const loginUrl = `${config.frontend.url}/login`;
-    const formattedDate = resetAt.toLocaleDateString("en-US", {
+    const dateLoc = languageDateLocale(lang) ?? "en-US";
+    const formattedDate = resetAt.toLocaleDateString(dateLoc, {
       weekday: "long",
       year: "numeric",
       month: "long",
       day: "numeric",
     });
-    const formattedTime = resetAt.toLocaleTimeString("en-US", {
+    const formattedTime = resetAt.toLocaleTimeString(dateLoc, {
       hour: "2-digit",
       minute: "2-digit",
       timeZoneName: "short",
@@ -194,16 +221,16 @@ export const emailService = {
     await transporter.sendMail({
       from: config.smtp.from,
       to,
-      subject: "Your SalonOx Password Has Been Reset Successfully",
+      subject: t("email.resetDone.subject"),
       html: `
         <!DOCTYPE html>
-        <html lang="en">
+        <html ${htmlAttrs(lang)}>
         <head>
           <meta charset="UTF-8" />
           <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-          <title>Password Reset Confirmation</title>
+          <title>${t("email.resetDone.title")}</title>
         </head>
-        <body style="margin:0;padding:0;background:#f4f4f7;font-family:'Segoe UI',Arial,sans-serif;">
+        <body${bodyDir(lang)} style="margin:0;padding:0;background:#f4f4f7;font-family:'Segoe UI',Arial,sans-serif;">
           <table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f7;padding:40px 0;">
             <tr>
               <td align="center">
@@ -219,7 +246,7 @@ export const emailService = {
                         SalonOx
                       </h1>
                       <p style="margin:8px 0 0;color:rgba(255,255,255,0.85);font-size:14px;">
-                        Password Reset Confirmation
+                        ${t("email.resetDone.title")}
                       </p>
                     </td>
                   </tr>
@@ -228,10 +255,10 @@ export const emailService = {
                   <tr>
                     <td style="padding:40px 40px 24px;">
                       <p style="margin:0 0 16px;color:#374151;font-size:16px;line-height:1.6;">
-                        Hi <strong>${fullName}</strong>,
+                        ${t("email.common.hiBold", { name: fullName })}
                       </p>
                       <p style="margin:0 0 16px;color:#374151;font-size:16px;line-height:1.6;">
-                        Your <strong>SalonOx</strong> account password has been successfully reset.
+                        ${t("email.resetDone.body")}
                       </p>
 
                       <!-- Reset Details Box -->
@@ -241,20 +268,20 @@ export const emailService = {
                           <td style="padding:20px 24px;">
                             <p style="margin:0 0 8px;color:#6b7280;font-size:13px;text-transform:uppercase;
                                       letter-spacing:0.05em;font-weight:600;">
-                              Reset Details
+                              ${t("email.resetDone.details")}
                             </p>
                             <p style="margin:0 0 4px;color:#374151;font-size:14px;">
-                              <strong>Date:</strong> ${formattedDate}
+                              <strong>${t("email.label.date")}:</strong> ${formattedDate}
                             </p>
                             <p style="margin:0;color:#374151;font-size:14px;">
-                              <strong>Time:</strong> ${formattedTime}
+                              <strong>${t("email.label.time")}:</strong> ${formattedTime}
                             </p>
                           </td>
                         </tr>
                       </table>
 
                       <p style="margin:0 0 32px;color:#374151;font-size:15px;line-height:1.6;">
-                        You can now log in to your SalonOx account using your new password.
+                        ${t("email.resetDone.loginNote")}
                       </p>
 
                       <!-- CTA Button -->
@@ -266,7 +293,7 @@ export const emailService = {
                                       color:#ffffff;text-decoration:none;font-size:16px;font-weight:600;
                                       padding:14px 48px;border-radius:8px;
                                       box-shadow:0 4px 12px rgba(99,102,241,0.4);">
-                              Login Now
+                              ${t("email.resetDone.loginButton")}
                             </a>
                           </td>
                         </tr>
@@ -282,13 +309,13 @@ export const emailService = {
                         <tr>
                           <td style="padding:16px 20px;">
                             <p style="margin:0 0 8px;color:#92400e;font-size:14px;font-weight:600;">
-                              Security Notice
+                              ${t("email.resetDone.securityTitle")}
                             </p>
                             <p style="margin:0 0 6px;color:#92400e;font-size:13px;line-height:1.6;">
-                              If you did not request this password reset, please contact our support team immediately — your account may be at risk.
+                              ${t("email.resetDone.securityBody")}
                             </p>
                             <p style="margin:0;color:#92400e;font-size:13px;">
-                              Support: <a href="mailto:support@salonox.com" style="color:#6366f1;">support@salonox.com</a>
+                              ${t("email.resetDone.support")} <a href="mailto:support@salonox.com" style="color:#6366f1;">support@salonox.com</a>
                             </p>
                           </td>
                         </tr>
@@ -300,10 +327,10 @@ export const emailService = {
                   <tr>
                     <td style="background:#f9fafb;padding:20px 40px;border-top:1px solid #e5e7eb;">
                       <p style="margin:0 0 6px;color:#9ca3af;font-size:12px;text-align:center;">
-                        © ${new Date().getFullYear()} SalonOx. All rights reserved.
+                        ${t("email.common.rights", { year: new Date().getFullYear() })}
                       </p>
                       <p style="margin:0;color:#9ca3af;font-size:12px;text-align:center;">
-                        This is an automated security notification. Please do not reply to this email.
+                        ${t("email.resetDone.footerAuto")}
                       </p>
                     </td>
                   </tr>
@@ -320,9 +347,15 @@ export const emailService = {
 
   async sendWelcomeEmail(params: {
     to: string;
+    /** Recipient's salon — its language (salons.language) is used. */
+    salonId?: string | null;
+    /** Explicit language; wins over the salon's. */
+    language?: string | null;
     fullName: string;
     salonName: string;
   }) {
+    const lang = await emailLanguage(params);
+    const t = translator(lang);
     const { to, fullName, salonName } = params;
     const frontendUrl = config.frontend.url;
     const loginUrl = `${frontendUrl}/login`;
@@ -330,16 +363,16 @@ export const emailService = {
     await transporter.sendMail({
       from: config.smtp.from,
       to,
-      subject: `Welcome to SalonOx, ${fullName}! 🎉`,
+      subject: t("email.welcome.subject", { name: fullName }),
       html: `
         <!DOCTYPE html>
-        <html lang="en">
+        <html ${htmlAttrs(lang)}>
         <head>
           <meta charset="UTF-8" />
           <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-          <title>Welcome to SalonOx</title>
+          <title>${t("email.welcome.pageTitle")}</title>
         </head>
-        <body style="margin:0;padding:0;background:#f4f4f7;font-family:'Segoe UI',Arial,sans-serif;">
+        <body${bodyDir(lang)} style="margin:0;padding:0;background:#f4f4f7;font-family:'Segoe UI',Arial,sans-serif;">
           <table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f7;padding:40px 0;">
             <tr>
               <td align="center">
@@ -357,7 +390,7 @@ export const emailService = {
                       </h1>
                       <p style="margin:0;color:rgba(255,255,255,0.80);font-size:13px;
                                 letter-spacing:2px;text-transform:uppercase;">
-                        Salon Management Platform
+                        ${t("email.welcome.tagline")}
                       </p>
                     </td>
                   </tr>
@@ -368,10 +401,10 @@ export const emailService = {
                                padding:0 40px 40px;text-align:center;">
                       <div style="background:rgba(255,255,255,0.15);border-radius:8px;padding:20px 24px;">
                         <p style="margin:0;color:#ffffff;font-size:22px;font-weight:700;">
-                          Welcome aboard, ${fullName}!
+                          ${t("email.welcome.banner", { name: fullName })}
                         </p>
                         <p style="margin:8px 0 0;color:rgba(255,255,255,0.85);font-size:15px;">
-                          Your salon account is ready.
+                          ${t("email.welcome.bannerSub")}
                         </p>
                       </div>
                     </td>
@@ -381,16 +414,13 @@ export const emailService = {
                   <tr>
                     <td style="padding:36px 40px 28px;">
                       <p style="margin:0 0 16px;color:#374151;font-size:16px;line-height:1.7;">
-                        Hi <strong>${fullName}</strong>,
+                        ${t("email.common.hiBold", { name: fullName })}
                       </p>
                       <p style="margin:0 0 16px;color:#374151;font-size:16px;line-height:1.7;">
-                        Congratulations! Your SalonOx account for
-                        <strong>${salonName}</strong> has been successfully created.
-                        We're thrilled to have you on board.
+                        ${t("email.welcome.intro", { salon: salonName })}
                       </p>
                       <p style="margin:0 0 24px;color:#6b7280;font-size:15px;line-height:1.7;">
-                        SalonOx helps you manage appointments, staff, clients, and
-                        grow your salon business — all from one place.
+                        ${t("email.welcome.about")}
                       </p>
 
                       <!-- Login Details -->
@@ -426,7 +456,7 @@ export const emailService = {
                       <!-- Getting Started Steps -->
                       <div style="background:#f9fafb;border-radius:10px;padding:24px 28px;margin-bottom:28px;">
                         <p style="margin:0 0 16px;color:#374151;font-size:15px;font-weight:700;">
-                          Get started in 3 easy steps:
+                          ${t("email.welcome.stepsTitle")}
                         </p>
                         <table cellpadding="0" cellspacing="0" width="100%">
                           <tr>
@@ -435,12 +465,12 @@ export const emailService = {
                                           border-radius:50%;text-align:center;line-height:24px;
                                           color:#fff;font-size:12px;font-weight:700;">1</div>
                             </td>
-                            <td style="padding-left:12px;padding-bottom:14px;">
+                            <td style="padding-${languageDir(lang) === "rtl" ? "right" : "left"}:12px;padding-bottom:14px;">
                               <p style="margin:0;color:#374151;font-size:14px;font-weight:600;">
-                                Complete your salon profile
+                                ${t("email.welcome.step1")}
                               </p>
                               <p style="margin:2px 0 0;color:#6b7280;font-size:13px;">
-                                Add your salon details, logo, and working hours.
+                                ${t("email.welcome.step1Body")}
                               </p>
                             </td>
                           </tr>
@@ -450,12 +480,12 @@ export const emailService = {
                                           border-radius:50%;text-align:center;line-height:24px;
                                           color:#fff;font-size:12px;font-weight:700;">2</div>
                             </td>
-                            <td style="padding-left:12px;padding-bottom:14px;">
+                            <td style="padding-${languageDir(lang) === "rtl" ? "right" : "left"}:12px;padding-bottom:14px;">
                               <p style="margin:0;color:#374151;font-size:14px;font-weight:600;">
-                                Add your services &amp; staff
+                                ${t("email.welcome.step2")}
                               </p>
                               <p style="margin:2px 0 0;color:#6b7280;font-size:13px;">
-                                Set up your service menu and invite your team members.
+                                ${t("email.welcome.step2Body")}
                               </p>
                             </td>
                           </tr>
@@ -465,12 +495,12 @@ export const emailService = {
                                           border-radius:50%;text-align:center;line-height:24px;
                                           color:#fff;font-size:12px;font-weight:700;">3</div>
                             </td>
-                            <td style="padding-left:12px;">
+                            <td style="padding-${languageDir(lang) === "rtl" ? "right" : "left"}:12px;">
                               <p style="margin:0;color:#374151;font-size:14px;font-weight:600;">
-                                Start accepting bookings
+                                ${t("email.welcome.step3")}
                               </p>
                               <p style="margin:2px 0 0;color:#6b7280;font-size:13px;">
-                                Share your booking link and watch appointments roll in.
+                                ${t("email.welcome.step3Body")}
                               </p>
                             </td>
                           </tr>
@@ -496,10 +526,10 @@ export const emailService = {
                   <tr>
                     <td style="background:#f9fafb;padding:20px 40px;border-top:1px solid #e5e7eb;">
                       <p style="margin:0 0 4px;color:#9ca3af;font-size:12px;text-align:center;">
-                        &copy; ${new Date().getFullYear()} SalonOx. All rights reserved.
+                        ${t("email.common.rights", { year: new Date().getFullYear() })}
                       </p>
                       <p style="margin:0;color:#d1d5db;font-size:11px;text-align:center;">
-                        You received this email because you created an account on SalonOx.
+                        ${t("email.welcome.footer")}
                       </p>
                     </td>
                   </tr>
@@ -762,6 +792,10 @@ export const emailService = {
 
   async sendNewAppointmentEmail(params: {
     to: string;
+    /** Recipient's salon — its language (salons.language) is used. */
+    salonId?: string | null;
+    /** Explicit language; wins over the salon's. */
+    language?: string | null;
     salonName: string;
     clientName: string;
     services: string;
@@ -769,14 +803,16 @@ export const emailService = {
     time: string;
     appointmentId: string;
   }) {
+    const lang = await emailLanguage(params);
+    const t = translator(lang);
     const { to, salonName, clientName, services, date, time, appointmentId } = params;
     await transporter.sendMail({
       from: config.smtp.from,
       to,
-      subject: `New Appointment Booked — ${clientName}`,
+      subject: t("email.newAppointment.subject", { name: clientName }),
       html: `
-        <!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"/></head>
-        <body style="margin:0;padding:0;background:#f4f4f7;font-family:'Segoe UI',Arial,sans-serif;">
+        <!DOCTYPE html><html ${htmlAttrs(lang)}><head><meta charset="UTF-8"/></head>
+        <body${bodyDir(lang)} style="margin:0;padding:0;background:#f4f4f7;font-family:'Segoe UI',Arial,sans-serif;">
           <table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f7;padding:36px 0;">
             <tr><td align="center">
               <table width="560" cellpadding="0" cellspacing="0"
@@ -784,24 +820,24 @@ export const emailService = {
                 <tr>
                   <td style="background:#111827;padding:28px 36px;">
                     <p style="margin:0;color:#fff;font-size:12px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;opacity:0.7;">${salonName}</p>
-                    <h1 style="margin:6px 0 0;color:#fff;font-size:22px;font-weight:800;">New Appointment Booked</h1>
+                    <h1 style="margin:6px 0 0;color:#fff;font-size:22px;font-weight:800;">${t("email.newAppointment.title")}</h1>
                   </td>
                 </tr>
                 <tr>
                   <td style="padding:32px 36px;">
                     <p style="margin:0 0 20px;color:#374151;font-size:15px;line-height:1.6;">
-                      A new appointment has been booked. Here are the details:
+                      ${t("email.newAppointment.intro")}
                     </p>
                     <table width="100%" cellpadding="0" cellspacing="0"
                       style="background:#f9fafb;border-radius:10px;border:1px solid #e5e7eb;">
                       <tr>
                         <td style="padding:20px 24px;">
-                          <p style="margin:0 0 12px;color:#6b7280;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;">Appointment Details</p>
-                          <p style="margin:0 0 8px;color:#111827;font-size:14px;"><strong>Client:</strong> ${escapeHtml(clientName)}</p>
-                          <p style="margin:0 0 8px;color:#111827;font-size:14px;"><strong>Service:</strong> ${escapeHtml(services)}</p>
-                          <p style="margin:0 0 8px;color:#111827;font-size:14px;"><strong>Date:</strong> ${escapeHtml(date)}</p>
-                          <p style="margin:0 0 8px;color:#111827;font-size:14px;"><strong>Time:</strong> ${escapeHtml(time)}</p>
-                          <p style="margin:0;color:#6b7280;font-size:12px;">Ref: ${escapeHtml(appointmentId.slice(0, 8).toUpperCase())}</p>
+                          <p style="margin:0 0 12px;color:#6b7280;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;">${t("email.newAppointment.details")}</p>
+                          <p style="margin:0 0 8px;color:#111827;font-size:14px;"><strong>${t("email.label.client")}:</strong> ${escapeHtml(clientName)}</p>
+                          <p style="margin:0 0 8px;color:#111827;font-size:14px;"><strong>${t("email.label.service")}:</strong> ${escapeHtml(services)}</p>
+                          <p style="margin:0 0 8px;color:#111827;font-size:14px;"><strong>${t("email.label.date")}:</strong> ${escapeHtml(date)}</p>
+                          <p style="margin:0 0 8px;color:#111827;font-size:14px;"><strong>${t("email.label.time")}:</strong> ${escapeHtml(time)}</p>
+                          <p style="margin:0;color:#6b7280;font-size:12px;">${t("email.common.ref", { ref: escapeHtml(appointmentId.slice(0, 8).toUpperCase()) })}</p>
                         </td>
                       </tr>
                     </table>
@@ -809,7 +845,7 @@ export const emailService = {
                 </tr>
                 <tr>
                   <td style="background:#f9fafb;padding:16px 36px;border-top:1px solid #e5e7eb;">
-                    <p style="margin:0;color:#9ca3af;font-size:12px;text-align:center;">© ${new Date().getFullYear()} SalonOx. Automated notification.</p>
+                    <p style="margin:0;color:#9ca3af;font-size:12px;text-align:center;">${t("email.common.footerAuto", { year: new Date().getFullYear() })}</p>
                   </td>
                 </tr>
               </table>
@@ -877,20 +913,26 @@ export const emailService = {
 
   async sendAppointmentCancelledOwnerEmail(params: {
     to: string;
+    /** Recipient's salon — its language (salons.language) is used. */
+    salonId?: string | null;
+    /** Explicit language; wins over the salon's. */
+    language?: string | null;
     salonName: string;
     clientName: string;
     date: string;
     time: string;
     appointmentId: string;
   }) {
+    const lang = await emailLanguage(params);
+    const t = translator(lang);
     const { to, salonName, clientName, date, time, appointmentId } = params;
     await transporter.sendMail({
       from: config.smtp.from,
       to,
-      subject: `Appointment Cancelled — ${clientName}`,
+      subject: t("email.cancelledOwner.subject", { name: clientName }),
       html: `
-        <!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"/></head>
-        <body style="margin:0;padding:0;background:#f4f4f7;font-family:'Segoe UI',Arial,sans-serif;">
+        <!DOCTYPE html><html ${htmlAttrs(lang)}><head><meta charset="UTF-8"/></head>
+        <body${bodyDir(lang)} style="margin:0;padding:0;background:#f4f4f7;font-family:'Segoe UI',Arial,sans-serif;">
           <table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f7;padding:36px 0;">
             <tr><td align="center">
               <table width="560" cellpadding="0" cellspacing="0"
@@ -898,22 +940,22 @@ export const emailService = {
                 <tr>
                   <td style="background:#dc2626;padding:28px 36px;">
                     <p style="margin:0;color:#fff;font-size:12px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;opacity:0.7;">${escapeHtml(salonName)}</p>
-                    <h1 style="margin:6px 0 0;color:#fff;font-size:22px;font-weight:800;">Appointment Cancelled</h1>
+                    <h1 style="margin:6px 0 0;color:#fff;font-size:22px;font-weight:800;">${t("email.cancelledOwner.title")}</h1>
                   </td>
                 </tr>
                 <tr>
                   <td style="padding:32px 36px;">
                     <p style="margin:0 0 20px;color:#374151;font-size:15px;line-height:1.6;">
-                      An appointment has been cancelled. Here are the details:
+                      ${t("email.cancelledOwner.intro")}
                     </p>
                     <table width="100%" cellpadding="0" cellspacing="0"
                       style="background:#fef2f2;border-radius:10px;border:1px solid #fecaca;">
                       <tr>
                         <td style="padding:20px 24px;">
-                          <p style="margin:0 0 8px;color:#991b1b;font-size:14px;"><strong>Client:</strong> ${escapeHtml(clientName)}</p>
-                          <p style="margin:0 0 8px;color:#991b1b;font-size:14px;"><strong>Date:</strong> ${escapeHtml(date)}</p>
-                          <p style="margin:0 0 8px;color:#991b1b;font-size:14px;"><strong>Time:</strong> ${escapeHtml(time)}</p>
-                          <p style="margin:0;color:#991b1b;font-size:12px;">Ref: ${escapeHtml(appointmentId.slice(0, 8).toUpperCase())}</p>
+                          <p style="margin:0 0 8px;color:#991b1b;font-size:14px;"><strong>${t("email.label.client")}:</strong> ${escapeHtml(clientName)}</p>
+                          <p style="margin:0 0 8px;color:#991b1b;font-size:14px;"><strong>${t("email.label.date")}:</strong> ${escapeHtml(date)}</p>
+                          <p style="margin:0 0 8px;color:#991b1b;font-size:14px;"><strong>${t("email.label.time")}:</strong> ${escapeHtml(time)}</p>
+                          <p style="margin:0;color:#991b1b;font-size:12px;">${t("email.common.ref", { ref: escapeHtml(appointmentId.slice(0, 8).toUpperCase()) })}</p>
                         </td>
                       </tr>
                     </table>
@@ -921,7 +963,7 @@ export const emailService = {
                 </tr>
                 <tr>
                   <td style="background:#f9fafb;padding:16px 36px;border-top:1px solid #e5e7eb;">
-                    <p style="margin:0;color:#9ca3af;font-size:12px;text-align:center;">© ${new Date().getFullYear()} SalonOx. Automated notification.</p>
+                    <p style="margin:0;color:#9ca3af;font-size:12px;text-align:center;">${t("email.common.footerAuto", { year: new Date().getFullYear() })}</p>
                   </td>
                 </tr>
               </table>
@@ -991,6 +1033,10 @@ export const emailService = {
 
   async sendNewPaymentEmail(params: {
     to: string;
+    /** Recipient's salon — its language (salons.language) is used. */
+    salonId?: string | null;
+    /** Explicit language; wins over the salon's. */
+    language?: string | null;
     salonName: string;
     clientName: string;
     amount: string;
@@ -999,14 +1045,16 @@ export const emailService = {
     paymentMethod: string;
     invoiceId: string;
   }) {
+    const lang = await emailLanguage(params);
+    const t = translator(lang);
     const { to, salonName, clientName, amount, currency, paymentMethod, invoiceId } = params;
     await transporter.sendMail({
       from: config.smtp.from,
       to,
-      subject: `Payment Received — ${formatMoney(amount, currency)}`,
+      subject: t("email.newPayment.subject", { amount: formatMoney(amount, currency) }),
       html: `
-        <!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"/></head>
-        <body style="margin:0;padding:0;background:#f4f4f7;font-family:'Segoe UI',Arial,sans-serif;">
+        <!DOCTYPE html><html ${htmlAttrs(lang)}><head><meta charset="UTF-8"/></head>
+        <body${bodyDir(lang)} style="margin:0;padding:0;background:#f4f4f7;font-family:'Segoe UI',Arial,sans-serif;">
           <table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f7;padding:36px 0;">
             <tr><td align="center">
               <table width="560" cellpadding="0" cellspacing="0"
@@ -1014,22 +1062,22 @@ export const emailService = {
                 <tr>
                   <td style="background:#111827;padding:28px 36px;">
                     <p style="margin:0;color:#fff;font-size:12px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;opacity:0.7;">${escapeHtml(salonName)}</p>
-                    <h1 style="margin:6px 0 0;color:#fff;font-size:22px;font-weight:800;">Payment Received</h1>
+                    <h1 style="margin:6px 0 0;color:#fff;font-size:22px;font-weight:800;">${t("email.newPayment.title")}</h1>
                   </td>
                 </tr>
                 <tr>
                   <td style="padding:32px 36px;">
                     <p style="margin:0 0 20px;color:#374151;font-size:15px;line-height:1.6;">
-                      A payment has been recorded for <strong>${escapeHtml(clientName)}</strong>.
+                      ${t("email.newPayment.intro", { client: escapeHtml(clientName) })}
                     </p>
                     <table width="100%" cellpadding="0" cellspacing="0"
                       style="background:#f9fafb;border-radius:10px;border:1px solid #e5e7eb;">
                       <tr>
                         <td style="padding:20px 24px;">
-                          <p style="margin:0 0 8px;color:#111827;font-size:14px;"><strong>Client:</strong> ${escapeHtml(clientName)}</p>
+                          <p style="margin:0 0 8px;color:#111827;font-size:14px;"><strong>${t("email.label.client")}:</strong> ${escapeHtml(clientName)}</p>
                           <p style="margin:0 0 8px;color:#111827;font-size:20px;font-weight:800;color:#16a34a;">${escapeHtml(formatMoney(amount, currency))}</p>
-                          <p style="margin:0 0 8px;color:#111827;font-size:14px;"><strong>Method:</strong> ${escapeHtml(paymentMethod)}</p>
-                          <p style="margin:0;color:#6b7280;font-size:12px;">Invoice: ${escapeHtml(invoiceId)}</p>
+                          <p style="margin:0 0 8px;color:#111827;font-size:14px;"><strong>${t("email.label.method")}:</strong> ${escapeHtml(paymentMethod)}</p>
+                          <p style="margin:0;color:#6b7280;font-size:12px;">${t("email.newPayment.invoice", { id: escapeHtml(invoiceId) })}</p>
                         </td>
                       </tr>
                     </table>
@@ -1037,7 +1085,7 @@ export const emailService = {
                 </tr>
                 <tr>
                   <td style="background:#f9fafb;padding:16px 36px;border-top:1px solid #e5e7eb;">
-                    <p style="margin:0;color:#9ca3af;font-size:12px;text-align:center;">© ${new Date().getFullYear()} SalonOx. Automated notification.</p>
+                    <p style="margin:0;color:#9ca3af;font-size:12px;text-align:center;">${t("email.common.footerAuto", { year: new Date().getFullYear() })}</p>
                   </td>
                 </tr>
               </table>
@@ -1049,19 +1097,25 @@ export const emailService = {
 
   async sendNewClientEmail(params: {
     to: string;
+    /** Recipient's salon — its language (salons.language) is used. */
+    salonId?: string | null;
+    /** Explicit language; wins over the salon's. */
+    language?: string | null;
     salonName: string;
     clientName: string;
     clientEmail?: string;
     clientPhone?: string;
   }) {
+    const lang = await emailLanguage(params);
+    const t = translator(lang);
     const { to, salonName, clientName, clientEmail, clientPhone } = params;
     await transporter.sendMail({
       from: config.smtp.from,
       to,
-      subject: `New Client Added — ${clientName}`,
+      subject: t("email.newClient.subject", { name: clientName }),
       html: `
-        <!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"/></head>
-        <body style="margin:0;padding:0;background:#f4f4f7;font-family:'Segoe UI',Arial,sans-serif;">
+        <!DOCTYPE html><html ${htmlAttrs(lang)}><head><meta charset="UTF-8"/></head>
+        <body${bodyDir(lang)} style="margin:0;padding:0;background:#f4f4f7;font-family:'Segoe UI',Arial,sans-serif;">
           <table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f7;padding:36px 0;">
             <tr><td align="center">
               <table width="560" cellpadding="0" cellspacing="0"
@@ -1069,21 +1123,21 @@ export const emailService = {
                 <tr>
                   <td style="background:#111827;padding:28px 36px;">
                     <p style="margin:0;color:#fff;font-size:12px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;opacity:0.7;">${escapeHtml(salonName)}</p>
-                    <h1 style="margin:6px 0 0;color:#fff;font-size:22px;font-weight:800;">New Client Added</h1>
+                    <h1 style="margin:6px 0 0;color:#fff;font-size:22px;font-weight:800;">${t("email.newClient.title")}</h1>
                   </td>
                 </tr>
                 <tr>
                   <td style="padding:32px 36px;">
                     <p style="margin:0 0 20px;color:#374151;font-size:15px;line-height:1.6;">
-                      A new client has been added to <strong>${escapeHtml(salonName)}</strong>.
+                      ${t("email.newClient.intro", { salon: escapeHtml(salonName) })}
                     </p>
                     <table width="100%" cellpadding="0" cellspacing="0"
                       style="background:#f9fafb;border-radius:10px;border:1px solid #e5e7eb;">
                       <tr>
                         <td style="padding:20px 24px;">
-                          <p style="margin:0 0 8px;color:#111827;font-size:14px;"><strong>Name:</strong> ${escapeHtml(clientName)}</p>
-                          ${clientEmail ? `<p style="margin:0 0 8px;color:#111827;font-size:14px;"><strong>Email:</strong> ${escapeHtml(clientEmail)}</p>` : ""}
-                          ${clientPhone ? `<p style="margin:0;color:#111827;font-size:14px;"><strong>Phone:</strong> ${escapeHtml(clientPhone)}</p>` : ""}
+                          <p style="margin:0 0 8px;color:#111827;font-size:14px;"><strong>${t("email.label.name")}:</strong> ${escapeHtml(clientName)}</p>
+                          ${clientEmail ? `<p style="margin:0 0 8px;color:#111827;font-size:14px;"><strong>${t("email.label.email")}:</strong> ${escapeHtml(clientEmail)}</p>` : ""}
+                          ${clientPhone ? `<p style="margin:0;color:#111827;font-size:14px;"><strong>${t("email.label.phone")}:</strong> ${escapeHtml(clientPhone)}</p>` : ""}
                         </td>
                       </tr>
                     </table>
@@ -1091,7 +1145,7 @@ export const emailService = {
                 </tr>
                 <tr>
                   <td style="background:#f9fafb;padding:16px 36px;border-top:1px solid #e5e7eb;">
-                    <p style="margin:0;color:#9ca3af;font-size:12px;text-align:center;">© ${new Date().getFullYear()} SalonOx. Automated notification.</p>
+                    <p style="margin:0;color:#9ca3af;font-size:12px;text-align:center;">${t("email.common.footerAuto", { year: new Date().getFullYear() })}</p>
                   </td>
                 </tr>
               </table>
@@ -1103,19 +1157,25 @@ export const emailService = {
 
   async sendStaffLoginEmail(params: {
     to: string;
+    /** Recipient's salon — its language (salons.language) is used. */
+    salonId?: string | null;
+    /** Explicit language; wins over the salon's. */
+    language?: string | null;
     salonName: string;
     staffName: string;
     staffEmail: string;
     loginTime: string;
   }) {
+    const lang = await emailLanguage(params);
+    const t = translator(lang);
     const { to, salonName, staffName, staffEmail, loginTime } = params;
     await transporter.sendMail({
       from: config.smtp.from,
       to,
-      subject: `Staff Login Alert — ${staffName} signed in`,
+      subject: t("email.staffLogin.subject", { name: staffName }),
       html: `
-        <!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"/></head>
-        <body style="margin:0;padding:0;background:#f4f4f7;font-family:'Segoe UI',Arial,sans-serif;">
+        <!DOCTYPE html><html ${htmlAttrs(lang)}><head><meta charset="UTF-8"/></head>
+        <body${bodyDir(lang)} style="margin:0;padding:0;background:#f4f4f7;font-family:'Segoe UI',Arial,sans-serif;">
           <table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f7;padding:36px 0;">
             <tr><td align="center">
               <table width="560" cellpadding="0" cellspacing="0"
@@ -1123,32 +1183,32 @@ export const emailService = {
                 <tr>
                   <td style="background:#1e40af;padding:28px 36px;">
                     <p style="margin:0;color:#fff;font-size:12px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;opacity:0.7;">${escapeHtml(salonName)}</p>
-                    <h1 style="margin:6px 0 0;color:#fff;font-size:22px;font-weight:800;">Staff Login Alert</h1>
+                    <h1 style="margin:6px 0 0;color:#fff;font-size:22px;font-weight:800;">${t("email.staffLogin.title")}</h1>
                   </td>
                 </tr>
                 <tr>
                   <td style="padding:32px 36px;">
                     <p style="margin:0 0 20px;color:#374151;font-size:15px;line-height:1.6;">
-                      A team member has signed in to <strong>${escapeHtml(salonName)}</strong>.
+                      ${t("email.staffLogin.intro", { salon: escapeHtml(salonName) })}
                     </p>
                     <table width="100%" cellpadding="0" cellspacing="0"
                       style="background:#eff6ff;border-radius:10px;border:1px solid #bfdbfe;">
                       <tr>
                         <td style="padding:20px 24px;">
-                          <p style="margin:0 0 8px;color:#1e40af;font-size:14px;"><strong>Name:</strong> ${escapeHtml(staffName)}</p>
-                          <p style="margin:0 0 8px;color:#1e40af;font-size:14px;"><strong>Email:</strong> ${escapeHtml(staffEmail)}</p>
-                          <p style="margin:0;color:#1e40af;font-size:14px;"><strong>Time:</strong> ${escapeHtml(loginTime)}</p>
+                          <p style="margin:0 0 8px;color:#1e40af;font-size:14px;"><strong>${t("email.label.name")}:</strong> ${escapeHtml(staffName)}</p>
+                          <p style="margin:0 0 8px;color:#1e40af;font-size:14px;"><strong>${t("email.label.email")}:</strong> ${escapeHtml(staffEmail)}</p>
+                          <p style="margin:0;color:#1e40af;font-size:14px;"><strong>${t("email.label.time")}:</strong> ${escapeHtml(loginTime)}</p>
                         </td>
                       </tr>
                     </table>
                     <p style="margin:20px 0 0;color:#6b7280;font-size:13px;line-height:1.6;">
-                      If this login was not expected, please review your team's access permissions.
+                      ${t("email.staffLogin.note")}
                     </p>
                   </td>
                 </tr>
                 <tr>
                   <td style="background:#f9fafb;padding:16px 36px;border-top:1px solid #e5e7eb;">
-                    <p style="margin:0;color:#9ca3af;font-size:12px;text-align:center;">© ${new Date().getFullYear()} SalonOx. Automated notification.</p>
+                    <p style="margin:0;color:#9ca3af;font-size:12px;text-align:center;">${t("email.common.footerAuto", { year: new Date().getFullYear() })}</p>
                   </td>
                 </tr>
               </table>
@@ -1161,15 +1221,17 @@ export const emailService = {
   // Sent both the moment super admin deactivates a salon
   // (super-admin.service.ts::setSalonStatus) and daily at 8am IST as a
   // reminder for any salon still deactivated (salon-deactivation-reminder.scheduler.ts).
-  async sendSalonDeactivatedEmail(params: { to: string; salonName: string; ownerName?: string | null }) {
+  async sendSalonDeactivatedEmail(params: { to: string; salonName: string; ownerName?: string | null; /** Recipient's salon — its language is used. */ salonId?: string | null; language?: string | null }) {
     const { to, salonName, ownerName } = params;
+    const lang = await emailLanguage(params);
+    const t = translator(lang);
     await transporter.sendMail({
       from: config.smtp.from,
       to,
-      subject: `Your SalonOx account has been deactivated`,
+      subject: t("email.deactivated.subject"),
       html: `
-        <!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"/></head>
-        <body style="margin:0;padding:0;background:#f4f4f7;font-family:'Segoe UI',Arial,sans-serif;">
+        <!DOCTYPE html><html ${htmlAttrs(lang)}><head><meta charset="UTF-8"/></head>
+        <body${bodyDir(lang)} style="margin:0;padding:0;background:#f4f4f7;font-family:'Segoe UI',Arial,sans-serif;">
           <table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f7;padding:36px 0;">
             <tr><td align="center">
               <table width="560" cellpadding="0" cellspacing="0"
@@ -1177,30 +1239,30 @@ export const emailService = {
                 <tr>
                   <td style="background:#dc2626;padding:28px 36px;">
                     <p style="margin:0;color:#fff;font-size:12px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;opacity:0.8;">${escapeHtml(salonName)}</p>
-                    <h1 style="margin:6px 0 0;color:#fff;font-size:22px;font-weight:800;">Account Deactivated</h1>
+                    <h1 style="margin:6px 0 0;color:#fff;font-size:22px;font-weight:800;">${t("email.deactivated.title")}</h1>
                   </td>
                 </tr>
                 <tr>
                   <td style="padding:32px 36px;">
                     <p style="margin:0 0 20px;color:#374151;font-size:15px;line-height:1.6;">
-                      ${ownerName ? `Hi ${escapeHtml(ownerName)},` : "Hi,"} your account is deactivated. Kindly contact the Salonox team.
+                      ${t("email.deactivated.body", { greeting: ownerName ? t("email.common.hiName", { name: escapeHtml(ownerName) }) : t("email.common.hiPlain") })}
                     </p>
                     <table width="100%" cellpadding="0" cellspacing="0"
                       style="background:#fef2f2;border-radius:10px;border:1px solid #fecaca;">
                       <tr>
                         <td style="padding:20px 24px;">
-                          <p style="margin:0;color:#991b1b;font-size:14px;"><strong>Salon:</strong> ${escapeHtml(salonName)}</p>
+                          <p style="margin:0;color:#991b1b;font-size:14px;"><strong>${t("email.label.salon")}:</strong> ${escapeHtml(salonName)}</p>
                         </td>
                       </tr>
                     </table>
                     <p style="margin:20px 0 0;color:#6b7280;font-size:13px;line-height:1.6;">
-                      You won't be able to sign in until your account is reactivated. Please reach out to the Salonox team for assistance.
+                      ${t("email.deactivated.note")}
                     </p>
                   </td>
                 </tr>
                 <tr>
                   <td style="background:#f9fafb;padding:16px 36px;border-top:1px solid #e5e7eb;">
-                    <p style="margin:0;color:#9ca3af;font-size:12px;text-align:center;">© ${new Date().getFullYear()} SalonOx. Automated notification.</p>
+                    <p style="margin:0;color:#9ca3af;font-size:12px;text-align:center;">${t("email.common.footerAuto", { year: new Date().getFullYear() })}</p>
                   </td>
                 </tr>
               </table>
@@ -1212,26 +1274,32 @@ export const emailService = {
 
   async sendStaffInvitation(params: {
     to: string;
+    /** Recipient's salon — its language (salons.language) is used. */
+    salonId?: string | null;
+    /** Explicit language; wins over the salon's. */
+    language?: string | null;
     token: string;
     staffFirstName: string;
     salonName: string;
   }) {
+    const lang = await emailLanguage(params);
+    const t = translator(lang);
     const { to, token, staffFirstName, salonName } = params;
     const inviteLink = `${config.frontend.url}/accept-invite?token=${token}`;
 
     await transporter.sendMail({
       from: config.smtp.from,
       to,
-      subject: `You've been invited to join ${salonName}`,
+      subject: t("email.staffInvite.subject", { salon: salonName }),
       html: `
         <!DOCTYPE html>
-        <html lang="en">
+        <html ${htmlAttrs(lang)}>
         <head>
           <meta charset="UTF-8" />
           <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-          <title>Staff Invitation</title>
+          <title>${t("email.staffInvite.title")}</title>
         </head>
-        <body style="margin:0;padding:0;background:#f4f4f7;font-family:'Segoe UI',Arial,sans-serif;">
+        <body${bodyDir(lang)} style="margin:0;padding:0;background:#f4f4f7;font-family:'Segoe UI',Arial,sans-serif;">
           <table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f7;padding:40px 0;">
             <tr>
               <td align="center">
@@ -1248,7 +1316,7 @@ export const emailService = {
                         ${salonName}
                       </h1>
                       <p style="margin:8px 0 0;color:rgba(255,255,255,0.85);font-size:14px;">
-                        Staff Invitation
+                        ${t("email.staffInvite.title")}
                       </p>
                     </td>
                   </tr>
@@ -1257,14 +1325,13 @@ export const emailService = {
                   <tr>
                     <td style="padding:40px 40px 32px;">
                       <p style="margin:0 0 16px;color:#374151;font-size:16px;line-height:1.6;">
-                        Hi <strong>${staffFirstName}</strong>,
+                        ${t("email.common.hiBold", { name: staffFirstName })}
                       </p>
                       <p style="margin:0 0 16px;color:#374151;font-size:16px;line-height:1.6;">
-                        You have been invited to join <strong>${salonName}</strong> as a staff member
-                        on our platform. Click the button below to set up your account and get started.
+                        ${t("email.staffInvite.body", { salon: salonName })}
                       </p>
                       <p style="margin:0 0 32px;color:#6b7280;font-size:14px;line-height:1.6;">
-                        This invitation link will expire in <strong>72 hours</strong>.
+                        ${t("email.staffInvite.expiry")}
                       </p>
 
                       <!-- CTA Button -->
@@ -1276,7 +1343,7 @@ export const emailService = {
                                       color:#ffffff;text-decoration:none;font-size:16px;font-weight:600;
                                       padding:14px 40px;border-radius:8px;
                                       box-shadow:0 4px 12px rgba(99,102,241,0.4);">
-                              Accept Invitation
+                              ${t("email.staffInvite.button")}
                             </a>
                           </td>
                         </tr>
@@ -1288,7 +1355,7 @@ export const emailService = {
                   <tr>
                     <td style="padding:0 40px 24px;">
                       <p style="margin:0;color:#9ca3af;font-size:12px;line-height:1.6;">
-                        If the button doesn't work, copy and paste this link into your browser:
+                        ${t("email.staffInvite.fallback")}
                       </p>
                       <p style="margin:4px 0 0;word-break:break-all;">
                         <a href="${inviteLink}" style="color:#6366f1;font-size:12px;">${inviteLink}</a>
@@ -1300,7 +1367,7 @@ export const emailService = {
                   <tr>
                     <td style="background:#f9fafb;padding:20px 40px;border-top:1px solid #e5e7eb;">
                       <p style="margin:0;color:#9ca3af;font-size:12px;text-align:center;">
-                        If you did not expect this invitation, you can safely ignore this email.
+                        ${t("email.staffInvite.ignore")}
                       </p>
                     </td>
                   </tr>
@@ -1317,6 +1384,10 @@ export const emailService = {
 
   async sendDailySummaryEmail(params: {
     to: string;
+    /** Recipient's salon — its language (salons.language) is used. */
+    salonId?: string | null;
+    /** Explicit language; wins over the salon's. */
+    language?: string | null;
     /** The salon's currency (salons.currency) — every amount is printed in it. */
     currency?: string | null;
     summary?: {
@@ -1331,8 +1402,11 @@ export const emailService = {
       cardPaymentAmount?: number;
     };
   }) {
+    const lang = await emailLanguage(params);
+    const t = translator(lang);
     const { to, summary = {} } = params;
     const formatAmount = (val: number = 0) => formatMoney(val, params.currency);
+    const dayLocale = languageDateLocale(lang) ?? dateLocale(params.currency);
 
     const recAmt = summary.reconciliationAmount ?? 0;
     const reconciliationBg = recAmt === 0 ? "#f0fdf4" : recAmt > 0 ? "#f0f9ff" : "#fef2f2";
@@ -1344,16 +1418,16 @@ export const emailService = {
     await transporter.sendMail({
       from: config.smtp.from,
       to,
-      subject: `Daily Salon Cash Summary - ${new Date().toLocaleDateString(dateLocale(params.currency))}`,
+      subject: t("email.dailySummary.subject", { date: new Date().toLocaleDateString(dayLocale) }),
       html: `
         <!DOCTYPE html>
-        <html lang="en">
+        <html ${htmlAttrs(lang)}>
         <head>
           <meta charset="UTF-8"/>
           <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-          <title>Daily Summary Report</title>
+          <title>${t("email.dailySummary.pageTitle")}</title>
         </head>
-        <body style="margin:0;padding:0;background:#f4f4f7;font-family:'Segoe UI',Arial,sans-serif;">
+        <body${bodyDir(lang)} style="margin:0;padding:0;background:#f4f4f7;font-family:'Segoe UI',Arial,sans-serif;">
           <table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f7;padding:36px 0;">
             <tr><td align="center">
               <table width="600" cellpadding="0" cellspacing="0"
@@ -1363,10 +1437,10 @@ export const emailService = {
                 <tr>
                   <td style="background:linear-gradient(135deg,#4f46e5 0%,#7c3aed 100%);padding:32px 36px;">
                     <h1 style="margin:0;color:#ffffff;font-size:24px;font-weight:800;letter-spacing:-0.5px;">
-                      Daily Counter Summary Report
+                      ${t("email.dailySummary.title")}
                     </h1>
                     <p style="margin:6px 0 0;color:rgba(255,255,255,0.85);font-size:14px;">
-                      ${new Date().toLocaleDateString(dateLocale(params.currency), { weekday: "long", year: "numeric", month: "long", day: "numeric" })}
+                      ${new Date().toLocaleDateString(dayLocale, { weekday: "long", year: "numeric", month: "long", day: "numeric" })}
                     </p>
                   </td>
                 </tr>
@@ -1375,7 +1449,7 @@ export const emailService = {
                 <tr>
                   <td style="padding:32px 36px;">
                     <p style="margin:0 0 24px;color:#374151;font-size:15px;line-height:1.6;">
-                      Here is the financial summary for today's cash counter session:
+                      ${t("email.dailySummary.intro")}
                     </p>
 
                     <!-- Summary Cards Grid -->
@@ -1387,7 +1461,7 @@ export const emailService = {
                             style="background:#f8fafc;border:1px solid #e2e8f0;border-left:4px solid #3b82f6;border-radius:8px;padding:16px;">
                             <tr>
                               <td>
-                                <span style="font-size:11px;text-transform:uppercase;font-weight:700;color:#64748b;letter-spacing:0.5px;display:block;margin-bottom:6px;">Opening Balance</span>
+                                <span style="font-size:11px;text-transform:uppercase;font-weight:700;color:#64748b;letter-spacing:0.5px;display:block;margin-bottom:6px;">${t("email.dailySummary.opening")}</span>
                                 <div style="font-size:20px;font-weight:800;color:#1e293b;">${formatAmount(summary.openingBalance)}</div>
                               </td>
                             </tr>
@@ -1399,7 +1473,7 @@ export const emailService = {
                             style="background:#f0fdf4;border:1px solid #bbf7d0;border-left:4px solid #16a34a;border-radius:8px;padding:16px;">
                             <tr>
                               <td>
-                                <span style="font-size:11px;text-transform:uppercase;font-weight:700;color:#15803d;letter-spacing:0.5px;display:block;margin-bottom:6px;">Cash Revenue</span>
+                                <span style="font-size:11px;text-transform:uppercase;font-weight:700;color:#15803d;letter-spacing:0.5px;display:block;margin-bottom:6px;">${t("email.dailySummary.cashRevenue")}</span>
                                 <div style="font-size:20px;font-weight:800;color:#16a34a;">${formatAmount(summary.cashRevenue)}</div>
                               </td>
                             </tr>
@@ -1414,7 +1488,7 @@ export const emailService = {
                             style="background:#fffbeb;border:1px solid #fef3c7;border-left:4px solid #d97706;border-radius:8px;padding:16px;">
                             <tr>
                               <td>
-                                <span style="font-size:11px;text-transform:uppercase;font-weight:700;color:#b45309;letter-spacing:0.5px;display:block;margin-bottom:6px;">Cash Expense</span>
+                                <span style="font-size:11px;text-transform:uppercase;font-weight:700;color:#b45309;letter-spacing:0.5px;display:block;margin-bottom:6px;">${t("email.dailySummary.cashExpense")}</span>
                                 <div style="font-size:20px;font-weight:800;color:#d97706;">${formatAmount(summary.cashExpense)}</div>
                               </td>
                             </tr>
@@ -1426,7 +1500,7 @@ export const emailService = {
                             style="background:#f5f3ff;border:1px solid #ddd6fe;border-left:4px solid #6366f1;border-radius:8px;padding:16px;">
                             <tr>
                               <td>
-                                <span style="font-size:11px;text-transform:uppercase;font-weight:700;color:#4338ca;letter-spacing:0.5px;display:block;margin-bottom:6px;">Closing Balance</span>
+                                <span style="font-size:11px;text-transform:uppercase;font-weight:700;color:#4338ca;letter-spacing:0.5px;display:block;margin-bottom:6px;">${t("email.dailySummary.closing")}</span>
                                 <div style="font-size:20px;font-weight:800;color:#4f46e5;">${formatAmount(summary.closingBalance)}</div>
                               </td>
                             </tr>
@@ -1441,7 +1515,7 @@ export const emailService = {
                             style="background:#f0f9ff;border:1px solid #bae6fd;border-left:4px solid #0284c7;border-radius:8px;padding:16px;">
                             <tr>
                               <td>
-                                <span style="font-size:11px;text-transform:uppercase;font-weight:700;color:#0369a1;letter-spacing:0.5px;display:block;margin-bottom:6px;">In Store Cash</span>
+                                <span style="font-size:11px;text-transform:uppercase;font-weight:700;color:#0369a1;letter-spacing:0.5px;display:block;margin-bottom:6px;">${t("email.dailySummary.inStore")}</span>
                                 <div style="font-size:20px;font-weight:800;color:#0284c7;">${formatAmount(summary.inStoreCash)}</div>
                               </td>
                             </tr>
@@ -1453,7 +1527,7 @@ export const emailService = {
                             style="background:${reconciliationBg};border:1px solid ${reconciliationBorder};border-left:4px solid ${reconciliationColor};border-radius:8px;padding:16px;">
                             <tr>
                               <td>
-                                <span style="font-size:11px;text-transform:uppercase;font-weight:700;color:${reconciliationLabelColor};letter-spacing:0.5px;display:block;margin-bottom:6px;">Reconciliation Amount</span>
+                                <span style="font-size:11px;text-transform:uppercase;font-weight:700;color:${reconciliationLabelColor};letter-spacing:0.5px;display:block;margin-bottom:6px;">${t("email.dailySummary.reconciliation")}</span>
                                 <div style="font-size:20px;font-weight:800;color:${reconciliationColor};">${reconciliationPrefix}${formatAmount(summary.reconciliationAmount)}</div>
                               </td>
                             </tr>
@@ -1470,7 +1544,7 @@ export const emailService = {
                             style="background:#f5f3ff;border:1px solid #ddd6fe;border-left:4px solid #7c3aed;border-radius:8px;padding:16px;">
                             <tr>
                               <td>
-                                <span style="font-size:11px;text-transform:uppercase;font-weight:700;color:#5b21b6;letter-spacing:0.5px;display:block;margin-bottom:6px;">UPI Payments</span>
+                                <span style="font-size:11px;text-transform:uppercase;font-weight:700;color:#5b21b6;letter-spacing:0.5px;display:block;margin-bottom:6px;">${t("email.dailySummary.upi")}</span>
                                 <div style="font-size:20px;font-weight:800;color:#7c3aed;">${formatAmount(summary.upiPaymentAmount)}</div>
                               </td>
                             </tr>
@@ -1482,7 +1556,7 @@ export const emailService = {
                             style="background:#eff6ff;border:1px solid #bfdbfe;border-left:4px solid #2563eb;border-radius:8px;padding:16px;">
                             <tr>
                               <td>
-                                <span style="font-size:11px;text-transform:uppercase;font-weight:700;color:#1d4ed8;letter-spacing:0.5px;display:block;margin-bottom:6px;">Card Payments</span>
+                                <span style="font-size:11px;text-transform:uppercase;font-weight:700;color:#1d4ed8;letter-spacing:0.5px;display:block;margin-bottom:6px;">${t("email.dailySummary.card")}</span>
                                 <div style="font-size:20px;font-weight:800;color:#2563eb;">${formatAmount(summary.cardPaymentAmount)}</div>
                               </td>
                             </tr>
@@ -1493,7 +1567,7 @@ export const emailService = {
 
                     ${summary.remarks ? `
                       <div style="background:#f9fafb;border-radius:8px;padding:16px;border:1px solid #e5e7eb;margin-top:8px;">
-                        <span style="font-size:12px;font-weight:700;color:#4b5563;text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:4px;">Closing Remarks</span>
+                        <span style="font-size:12px;font-weight:700;color:#4b5563;text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:4px;">${t("email.dailySummary.remarks")}</span>
                         <p style="margin:0;color:#374151;font-size:14px;line-height:1.5;">${escapeHtml(summary.remarks)}</p>
                       </div>
                     ` : ''}
@@ -1504,7 +1578,7 @@ export const emailService = {
                 <tr>
                   <td style="background:#f9fafb;padding:20px 36px;border-top:1px solid #e5e7eb;">
                     <p style="margin:0 0 4px;color:#9ca3af;font-size:12px;text-align:center;">
-                      © ${new Date().getFullYear()} SalonOx. Automated Daily Summary Report.
+                      ${t("email.dailySummary.footer", { year: new Date().getFullYear() })}
                     </p>
                   </td>
                 </tr>
@@ -1525,6 +1599,10 @@ export const emailService = {
   // only email is needed here, no SMS/WhatsApp fan-out.
   async sendSalaryReceiptEmail(params: {
     to: string;
+    /** Recipient's salon — its language (salons.language) is used. */
+    salonId?: string | null;
+    /** Explicit language; wins over the salon's. */
+    language?: string | null;
     staffFirstName: string;
     salonName: string;
     periodLabel: string;
@@ -1534,16 +1612,18 @@ export const emailService = {
     pdfBuffer: Buffer;
     pdfFilename: string;
   }) {
+    const lang = await emailLanguage(params);
+    const t = translator(lang);
     const { to, staffFirstName, salonName, periodLabel, netPay, currency, pdfBuffer, pdfFilename } = params;
     const formattedNetPay = formatMoney(netPay, currency);
 
     await transporter.sendMail({
       from: config.smtp.from,
       to,
-      subject: `Your Salary Receipt — ${escapeHtml(salonName)}`,
+      subject: t("email.salary.subject", { salon: escapeHtml(salonName) }),
       html: `
-        <!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"/></head>
-        <body style="margin:0;padding:0;background:#f4f4f7;font-family:'Segoe UI',Arial,sans-serif;">
+        <!DOCTYPE html><html ${htmlAttrs(lang)}><head><meta charset="UTF-8"/></head>
+        <body${bodyDir(lang)} style="margin:0;padding:0;background:#f4f4f7;font-family:'Segoe UI',Arial,sans-serif;">
           <table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f7;padding:36px 0;">
             <tr><td align="center">
               <table width="560" cellpadding="0" cellspacing="0"
@@ -1551,20 +1631,20 @@ export const emailService = {
                 <tr>
                   <td style="background:#16a34a;padding:28px 36px;">
                     <p style="margin:0;color:#fff;font-size:12px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;opacity:0.8;">${escapeHtml(salonName)}</p>
-                    <h1 style="margin:6px 0 0;color:#fff;font-size:22px;font-weight:800;">Salary Payment Processed</h1>
+                    <h1 style="margin:6px 0 0;color:#fff;font-size:22px;font-weight:800;">${t("email.salary.title")}</h1>
                   </td>
                 </tr>
                 <tr>
                   <td style="padding:32px 36px;">
                     <p style="margin:0 0 20px;color:#374151;font-size:15px;line-height:1.6;">
-                      Hi <strong>${escapeHtml(staffFirstName)}</strong>, your salary for the period below has been processed. The itemized receipt is attached as a PDF.
+                      ${t("email.salary.body", { name: escapeHtml(staffFirstName) })}
                     </p>
                     <table width="100%" cellpadding="0" cellspacing="0"
                       style="background:#f0fdf4;border-radius:10px;border:1px solid #bbf7d0;">
                       <tr>
                         <td style="padding:20px 24px;">
-                          <p style="margin:0 0 8px;color:#15803d;font-size:14px;"><strong>Period:</strong> ${escapeHtml(periodLabel)}</p>
-                          <p style="margin:0;color:#15803d;font-size:20px;font-weight:800;"><strong>Net Pay:</strong> ${formattedNetPay}</p>
+                          <p style="margin:0 0 8px;color:#15803d;font-size:14px;"><strong>${t("email.label.period")}:</strong> ${escapeHtml(periodLabel)}</p>
+                          <p style="margin:0;color:#15803d;font-size:20px;font-weight:800;"><strong>${t("email.label.netPay")}:</strong> ${formattedNetPay}</p>
                         </td>
                       </tr>
                     </table>
@@ -1572,7 +1652,7 @@ export const emailService = {
                 </tr>
                 <tr>
                   <td style="background:#f9fafb;padding:16px 36px;border-top:1px solid #e5e7eb;">
-                    <p style="margin:0;color:#9ca3af;font-size:12px;text-align:center;">© ${new Date().getFullYear()} SalonOx. Automated notification.</p>
+                    <p style="margin:0;color:#9ca3af;font-size:12px;text-align:center;">${t("email.common.footerAuto", { year: new Date().getFullYear() })}</p>
                   </td>
                 </tr>
               </table>

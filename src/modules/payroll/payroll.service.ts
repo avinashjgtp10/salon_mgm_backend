@@ -8,6 +8,8 @@ import { emailService } from "../utils/email.service";
 import { renderPayrollReceiptPdf } from "./payroll-receipt-pdf.service";
 import { renderPayrollSlipPdf } from "./payroll-slip-pdf.service";
 import { buildSlipDocumentId, buildReceiptDocumentId } from "./payroll-document-id.util";
+import { translator } from "../../config/i18n";
+import { getSalonLanguage } from "../../config/language";
 import {
     payrollEntryRepository, payrollAdjustmentRepository, payrollPaymentRepository, salaryAdvanceRepository,
 } from "./payroll.repository";
@@ -317,6 +319,8 @@ export const payrollService = {
 
             const salon = await getSalonBranding(salonId);
             const periodLabel = `${period.period_start} to ${period.period_end}`;
+            // The PDF keeps the English wording; only the e-mail's own "from … to …" follows the salon's language.
+            const emailPeriodLabel = translator(await getSalonLanguage(salonId))("email.salary.periodRange", { from: period.period_start, to: period.period_end });
             const documentId = buildReceiptDocumentId(payment.id, period.period_start);
             const pdfBuffer = await renderPayrollReceiptPdf({
                 salon, staffName: staff.name, staffDesignation: staff.designation, periodLabel, documentId, payment, netSalary: summary.net_salary,
@@ -325,9 +329,10 @@ export const payrollService = {
 
             await emailService.sendSalaryReceiptEmail({
                 to: staff.email,
+                salonId,
                 staffFirstName: staff.firstName,
                 salonName: salon.business_name,
-                periodLabel,
+                periodLabel: emailPeriodLabel,
                 netPay: summary.net_salary,
                 currency: salon.currency,
                 pdfBuffer,

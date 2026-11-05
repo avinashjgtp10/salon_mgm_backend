@@ -21,6 +21,7 @@ import {
 import { loadStaffPresence } from "./attendance.presence";
 import { getIO, salonRoom, salonStaffRoom } from "../../config/socket";
 import { getSalonDateLocale } from "../../config/currency";
+import { salonTranslator } from "../../config/i18n";
 
 // Invalidation only (no staff data is sent): open Calendars / Quick Sale screens refetch staff-presence
 // when they hear this, instead of polling for it.
@@ -81,7 +82,7 @@ function salonClock(timestamp: string, timeZone: string) {
 async function attendanceStaffName(record: Attendance) {
     const details = await attendanceRepository.findById(record.id);
     if (!details || details.salon_id !== record.salon_id || details.staff_id !== record.staff_id) return null;
-    return details.staff_name?.trim() || "A staff member";
+    return details.staff_name?.trim() || "";
 }
 
 export async function notifyAttendancePunch(record: Attendance, action: "in" | "out"): Promise<void> {
@@ -89,15 +90,19 @@ export async function notifyAttendancePunch(record: Attendance, action: "in" | "
     try {
         const timestamp = action === "in" ? record.check_in : record.check_out;
         if (!timestamp) return;
-        const name = await attendanceStaffName(record);
-        if (!name) return;
+        // null = this attendance row does not belong to a staff member of the salon: send nothing (unchanged). A blank name falls back to a generic one.
+        const rawName = await attendanceStaffName(record);
+        if (rawName === null) return;
+        const nt = await salonTranslator(record.salon_id);
+        const name = rawName || nt("notify.attendance.staffFallback");
         const { clock, day } = salonClock(timestamp, await getSalonTimezone(record.salon_id));
+        const kind = action === "in" ? "checkedIn" : "checkedOut";
         await notificationsService.create({
             salon_id: record.salon_id,
             reference_id: record.id,
             type: "attendance",
-            title: action === "in" ? "Staff Checked In" : "Staff Checked Out",
-            body: `${name} checked ${action} at ${clock} on ${day}.`,
+            title: nt(`notify.attendance.${kind}.title`),
+            body: nt(`notify.attendance.${kind}.body`, { name, clock, day }),
             event_key: "otherUpdates",
         }, { deduplicate: true, persistWhenPushDisabled: true });
     } catch (error: any) {
@@ -119,19 +124,22 @@ export async function notifyAttendanceBreak(
     try {
         const timestamp = action === "start" ? brk.actual_start : brk.actual_end;
         if (!timestamp) return;
-        const name = await attendanceStaffName(record);
-        if (!name) return;
+        // null = this attendance row does not belong to a staff member of the salon: send nothing (unchanged). A blank name falls back to a generic one.
+        const rawName = await attendanceStaffName(record);
+        if (rawName === null) return;
+        const nt = await salonTranslator(record.salon_id);
+        const name = rawName || nt("notify.attendance.staffFallback");
         const tz = await getSalonTimezone(record.salon_id);
         const { clock, day } = salonClock(timestamp, tz);
-        const note = brk.note?.trim() ? ` Note: ${brk.note.trim()}` : "";
+        const note = brk.note?.trim() ? nt("notify.attendance.breakNote", { note: brk.note.trim() }) : "";
         await notificationsService.create({
             salon_id: record.salon_id,
             reference_id: brk.id,
             type: "attendance",
-            title: action === "start" ? "Staff On Break" : "Staff Back From Break",
+            title: nt(action === "start" ? "notify.attendance.breakStart.title" : "notify.attendance.breakEnd.title"),
             body: action === "start"
-                ? `${name} started a break at ${clock} on ${day} (until ${salonClock(brk.planned_end, tz).clock}).${note}`
-                : `${name} returned from break at ${clock} on ${day}.`,
+                ? nt("notify.attendance.breakStart.body", { name, clock, day, until: salonClock(brk.planned_end, tz).clock, note })
+                : nt("notify.attendance.breakEnd.body", { name, clock, day }),
             event_key: "otherUpdates",
         }, { deduplicate: true, persistWhenPushDisabled: true });
     } catch (error: any) {

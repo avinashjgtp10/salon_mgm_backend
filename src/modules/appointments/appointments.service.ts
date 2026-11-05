@@ -50,6 +50,7 @@ import {
     TipBreakdownEntry,
 } from "./appointments.types";
 import { getBillRoundingUnit, formatSalonMoney, getSalonCurrency, getSalonDateLocale } from "../../config/currency";
+import { salonTranslator } from "../../config/i18n";
 
 // A "Booked" (never paid) appointment has no persisted, tax-inclusive total
 // anywhere — `appointments` only stores the raw inputs (discount, ex_charges,
@@ -247,6 +248,7 @@ async function notifyNewlyReadyStaff(before: Appointment, after: Appointment, sa
         readyByStaff.set(row.staff_id, [...(readyByStaff.get(row.staff_id) ?? []), row.name]);
     });
 
+    const nt = await salonTranslator(salonId);
     for (const [staffId, serviceNames] of readyByStaff) {
         const staff = await staffService.getById(staffId, salonId).catch(() => null);
         if (!staff?.is_active || !staff.user_id) continue;
@@ -255,8 +257,8 @@ async function notifyNewlyReadyStaff(before: Appointment, after: Appointment, sa
             type: "appointment",
             reference_id: after.id,
             target_staff_user_id: staff.user_id,
-            title: "It's your turn",
-            body: `${after.client_name ?? "Walk-in"} is ready for ${serviceNames.join(", ")}`,
+            title: nt("notify.yourTurn.title"),
+            body: nt("notify.yourTurn.body", { client: after.client_name ?? nt("notify.walkIn"), services: serviceNames.join(", ") }),
         });
     }
 }
@@ -611,12 +613,13 @@ export const appointmentsService = {
         // and checks out in one step, so nothing was "booked" for later and the
         // checkout's "Payment Complete" notification is the only one wanted.
         if (body.source !== "quick_sale") {
+            const nt = await salonTranslator(appointment.salon_id);
             notificationsService.create({
                 salon_id: appointment.salon_id,
                 type:     "appointment",
                 reference_id: appointment.id,
-                title:    "New Appointment Booked",
-                body:     `${full?.client_name ?? "Walk-in"} — ${formatDate(appointment.scheduled_at, await getSalonTimezone(appointment.salon_id))} at ${await formatTime(appointment.scheduled_at, appointment.salon_id)}`,
+                title:    nt("notify.newAppointment.title"),
+                body:     nt("notify.appointmentLine", { client: full?.client_name ?? nt("notify.walkIn"), date: formatDate(appointment.scheduled_at, await getSalonTimezone(appointment.salon_id)), time: await formatTime(appointment.scheduled_at, appointment.salon_id) }),
                 event_key: "newAppointment",
                 scheduled_at: appointment.scheduled_at,
             }).catch((err: any) => {
@@ -701,6 +704,7 @@ export const appointmentsService = {
                 if (!allowed) return;
                 await emailService.sendNewAppointmentEmail({
                     to:            ownerEmail,
+                    salonId:       full.salon_id,
                     salonName:     (full as any).salon_name  ?? "your salon",
                     clientName:    full.client_name          ?? "Walk-in",
                     services:      full.services?.map((s: any) => s.name).join(", ") ?? "Service",
@@ -859,13 +863,14 @@ export const appointmentsService = {
 
         await appointmentsRepository.update(appointmentId, { [arrayKey]: items } as UpdateAppointmentBody);
 
+        const nt = await salonTranslator(salonId);
         notificationsService.create({
             salon_id: salonId,
             type: "appointment",
             reference_id: appointmentId,
             target_staff_user_id: toStaff.user_id,
-            title: "It's your turn",
-            body: `${existing.client_name ?? "Walk-in"} is ready for ${handedOffItem.name}`,
+            title: nt("notify.yourTurn.title"),
+            body: nt("notify.yourTurn.body", { client: existing.client_name ?? nt("notify.walkIn"), services: handedOffItem.name }),
         }).catch((err: any) => {
             logger.error("Handoff notification failed", {
                 appointmentId, itemId, toStaffId, message: err?.message, stack: err?.stack, error: err,
@@ -1302,12 +1307,13 @@ export const appointmentsService = {
             new Date(patch.scheduled_at).getTime() !== new Date(existing.scheduled_at).getTime();
         const staffChanged = !!patch.staff_id && patch.staff_id !== existing.staff_id;
         if (scheduledAtChanged || staffChanged) {
+            const nt = await salonTranslator(existing.salon_id);
             notificationsService.create({
                 salon_id: existing.salon_id,
                 type:     "appointment",
             reference_id: updated.id,
-                title:    "Appointment Updated",
-                body:     `${existing.client_name ?? "Walk-in"} — ${formatDate(updated.scheduled_at, await getSalonTimezone(updated.salon_id))} at ${await formatTime(updated.scheduled_at, updated.salon_id)}`,
+                title:    nt("notify.appointmentUpdated.title"),
+                body:     nt("notify.appointmentLine", { client: existing.client_name ?? nt("notify.walkIn"), date: formatDate(updated.scheduled_at, await getSalonTimezone(updated.salon_id)), time: await formatTime(updated.scheduled_at, updated.salon_id) }),
                 scheduled_at: updated.scheduled_at,
             }).catch((err: any) => {
                 logger.error("Appointment update notification failed", {
@@ -1426,12 +1432,13 @@ export const appointmentsService = {
         // nothing to give back.
 
         // ── Push Notification: Appointment Cancelled (to salon owner) ─────────
+        const nt = await salonTranslator(existing.salon_id);
         notificationsService.create({
             salon_id: existing.salon_id,
             type:     "appointment",
             reference_id: existing.id,
-            title:    "Appointment Cancelled",
-            body:     `${existing.client_name ?? "Walk-in"} — ${formatDate(existing.scheduled_at, await getSalonTimezone(existing.salon_id))} at ${await formatTime(existing.scheduled_at, existing.salon_id)}`,
+            title:    nt("notify.appointmentCancelled.title"),
+            body:     nt("notify.appointmentLine", { client: existing.client_name ?? nt("notify.walkIn"), date: formatDate(existing.scheduled_at, await getSalonTimezone(existing.salon_id)), time: await formatTime(existing.scheduled_at, existing.salon_id) }),
             event_key: "appointmentCancelled",
             scheduled_at: existing.scheduled_at,
         }).catch((err: any) => {
@@ -1475,6 +1482,7 @@ export const appointmentsService = {
                 if (!allowed) { logger.debug("[email] appointmentCancelled (owner): skipped (preference off)"); return; }
                 await emailService.sendAppointmentCancelledOwnerEmail({
                     to:            ownerEmail,
+                    salonId:       existing.salon_id,
                     salonName:     (existing as any).salon_name ?? "your salon",
                     clientName:    existing.client_name         ?? "Walk-in",
                     date:          formatDate(existing.scheduled_at, await getSalonTimezone(existing.salon_id)),
@@ -1729,6 +1737,7 @@ export const appointmentsService = {
                     if (!allowed) return;
                     await emailService.sendNewPaymentEmail({
                         to:            ownerEmail,
+                        salonId:       existing.salon_id,
                         salonName:     (existing as any).salon_name ?? "your salon",
                         clientName:    existing.client_name         ?? "Walk-in",
                         amount:        String(preExistingSale.total_amount ?? "0"),
@@ -1742,12 +1751,13 @@ export const appointmentsService = {
             // ── Push Notification: Payment Complete (to salon staff) ──────────
             // Same pattern as "New Appointment Booked" — a calendar-facing push
             // so staff know a bill was just settled without needing to refresh.
+            const nt = await salonTranslator(existing.salon_id);
             notificationsService.create({
                 salon_id: existing.salon_id,
                 type:     "payment",
                 appointment_id: existing.id,
-                title:    "Payment Complete",
-                body:     `${existing.client_name ?? "Walk-in"} — ${await formatSalonMoney(existing.salon_id, preExistingSale.total_amount ?? 0)}`,
+                title:    nt("notify.paymentComplete.title"),
+                body:     `${existing.client_name ?? nt("notify.walkIn")} — ${await formatSalonMoney(existing.salon_id, preExistingSale.total_amount ?? 0)}`,
                 event_key: "newPayment",
                 scheduled_at: existing.scheduled_at,
             }).catch((err: any) => {
@@ -1999,6 +2009,7 @@ export const appointmentsService = {
                 if (!allowed) { logger.debug("[email] newPayment: skipped (preference off)"); return; }
                 await emailService.sendNewPaymentEmail({
                     to:            ownerEmail,
+                    salonId:       existing.salon_id,
                     salonName:     (existing as any).salon_name ?? "your salon",
                     clientName:    existing.client_name         ?? "Walk-in",
                     amount:        String(sale.total_amount     ?? "0"),
@@ -2011,12 +2022,13 @@ export const appointmentsService = {
         })();
 
         // ── Push Notification: Payment Complete (to salon staff) ──────────────
+        const nt = await salonTranslator(existing.salon_id);
         notificationsService.create({
             salon_id: existing.salon_id,
             type:     "payment",
                 appointment_id: existing.id,
-            title:    "Payment Complete",
-            body:     `${existing.client_name ?? "Walk-in"} — ${await formatSalonMoney(existing.salon_id, sale.total_amount ?? 0)}`,
+            title:    nt("notify.paymentComplete.title"),
+            body:     `${existing.client_name ?? nt("notify.walkIn")} — ${await formatSalonMoney(existing.salon_id, sale.total_amount ?? 0)}`,
             event_key: "newPayment",
             scheduled_at: existing.scheduled_at,
         }).catch((err: any) => {

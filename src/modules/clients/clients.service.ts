@@ -28,6 +28,7 @@ import {
 import { isValidTaxRegistrationNumber } from "../salons/tax-id";
 import { getSalonCountry } from "../../config/salonTimezone";
 import { dialCodeFor, phoneRuleFor, normalizeNationalNumber, isValidNationalNumber } from "../../config/phoneRules";
+import { salonTranslator } from "../../config/i18n";
 
 const safeTrim = (v: any) => (v === null || v === undefined ? v : String(v).trim());
 
@@ -217,10 +218,11 @@ export const clientsService = {
         ]);
 
         // Fire notification (fire-and-forget)
+        const nt = await salonTranslator(salonId);
         notificationsService.create({
             salon_id: salonId,
             type:     "client",
-            title:    "New Client Added",
+            title:    nt("notify.newClient.title"),
             body:     `${created.first_name} ${created.last_name ?? ""}`.trim(),
             event_key: "newClient",
         }).catch((err: any) => {
@@ -312,6 +314,7 @@ export const clientsService = {
                 if (!allowed) { logger.info("[email] newClient: skipped (preference off)"); return; }
                 await emailService.sendNewClientEmail({
                     to:          ownerEmail,
+                    salonId,
                     salonName:   salon?.business_name ?? "your salon",
                     clientName:  `${created.first_name} ${created.last_name ?? ""}`.trim(),
                     clientEmail: created.email       ?? undefined,
