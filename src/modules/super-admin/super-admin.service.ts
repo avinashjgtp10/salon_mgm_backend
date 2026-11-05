@@ -145,6 +145,7 @@ export const superAdminService = {
           }
           await emailService.sendSalonDeactivatedEmail({
             to: contact.owner_email,
+            salonId: id,
             salonName: contact.name,
             ownerName: contact.owner_name,
           });

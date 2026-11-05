@@ -7,6 +7,7 @@ import { deviceTokensRepository } from "../notifications/deviceTokens.repository
 import { pushNotificationService } from "../notifications/pushNotification.service";
 import { staffAttendanceState } from "./staffAttendance.service";
 import { getSalonDateLocale } from "../../config/currency";
+import { salonTranslator } from "../../config/i18n";
 
 let timer: NodeJS.Timeout | null = null;
 let running = false;
@@ -40,13 +41,14 @@ export async function runAttendanceReminderSweep() {
         const state = await staffAttendanceState(candidate.user_id, candidate.salon_id);
         if (state.checked_in || !state.can_check_in || !state.reminder_at || Date.now() < new Date(state.reminder_at).getTime()) continue;
         // alert_status is constrained to inventory alerts; use a dated title for daily deduplication.
-        const title = `You haven't checked in (${state.date})`;
+        const nt = await salonTranslator(candidate.salon_id);
+        const title = nt("notify.attendance.reminder.title", { date: state.date });
         const existing = await client.query<{ id: string; resolved_at: string | null }>(
           "SELECT id, resolved_at FROM notifications WHERE salon_id = $1 AND type = 'attendance' AND reference_id::text = $2 AND title = $3 LIMIT 1",
           [candidate.salon_id, state.staff_id, title]);
         if (existing.rows[0]?.resolved_at) continue;
         const startLabel = new Date(state.shift_start!).toLocaleTimeString(await getSalonDateLocale(candidate.salon_id), { timeZone: await getSalonTimezone(candidate.salon_id), hour: "2-digit", minute: "2-digit" });
-        const body = `Your shift started at ${startLabel}. Open SalonOX and check in.`;
+        const body = nt("notify.attendance.reminder.body", { time: startLabel });
         const notification = existing.rows[0] ?? await notificationsRepository.create({
           salon_id: candidate.salon_id, reference_id: state.staff_id, type: "attendance", title, body,
           recipient_user_ids: [candidate.user_id],

@@ -22,6 +22,7 @@ import { alertUnitSizeSql, lowStockThreshold } from "./low-stock.sql";
 import { notificationsService } from "../notifications/notifications.service";
 import { notificationsRepository } from "../notifications/notifications.repository";
 import { numberLocale, getSalonCurrency } from "../../config/currency";
+import { salonTranslator, type Translator } from "../../config/i18n";
 
 export type InventoryAlertStatus = "low_stock" | "out_of_stock" | "expiring_soon" | "expired";
 
@@ -72,11 +73,13 @@ function fmtQty(n: number, currency?: string | null): string {
 // What is actually left, in the product's own unit, with the bottle count beside it for
 // bottle-sized consumables: "880 ml left (about 9 bottles)" - never just a bottle count,
 // since a part-used bottle (9 x 80 ml left in the last one) is still stock that has gone.
-function describeRemaining(row: AlertCandidateRow, currency: string): string {
+function describeRemaining(row: AlertCandidateRow, currency: string, t: Translator): string {
   const unit = (row.measure_unit ?? "").trim();
   const bottleSize = Number(row.bottle_size) || 0;
   const amount = `${fmtQty(row.amount, currency)}${unit ? ` ${unit}` : ""}`;
-  return bottleSize > 0 ? `${amount} left (about ${Math.ceil(row.amount / bottleSize)} bottle${Math.ceil(row.amount / bottleSize) === 1 ? "" : "s"})` : `${amount} left`;
+  if (bottleSize <= 0) return t("notify.inventory.left", { amount });
+  const bottles = Math.ceil(row.amount / bottleSize);
+  return t(bottles === 1 ? "notify.inventory.leftBottle" : "notify.inventory.leftBottles", { amount, n: bottles });
 }
 
 function describeThreshold(row: AlertCandidateRow, currency: string): string {
@@ -106,20 +109,20 @@ function deriveStatus(row: AlertCandidateRow): InventoryAlertStatus | null {
   return null;
 }
 
-function buildNotificationCopy(row: AlertCandidateRow, status: InventoryAlertStatus, currency: string): { title: string; body: string } {
+function buildNotificationCopy(row: AlertCandidateRow, status: InventoryAlertStatus, currency: string, t: Translator): { title: string; body: string } {
   switch (status) {
     case "out_of_stock":
       return {
-        title: "Product out of stock",
-        body: `${row.name} is out of stock (0 remaining).`,
+        title: t("notify.inventory.outOfStock.title"),
+        body: t("notify.inventory.outOfStock.body", { name: row.name }),
       };
     case "low_stock":
       return {
-        title: "Low stock alert",
-        body: `${row.name} is low on stock — ${describeRemaining(row, currency)}; alert level is ${describeThreshold(row, currency)}.`,
+        title: t("notify.inventory.low.title"),
+        body: t("notify.inventory.low.body", { name: row.name, remaining: describeRemaining(row, currency, t), threshold: describeThreshold(row, currency) }),
       };
     case "expired": {
-      return { title: "Product expired", body: `${row.name} has expired (expiry date: ${row.expiry_date}).` };
+      return { title: t("notify.inventory.expired.title"), body: t("notify.inventory.expired.body", { name: row.name, date: String(row.expiry_date) }) };
     }
     case "expiring_soon": {
       const expiry = new Date(row.expiry_date as string);
@@ -127,8 +130,8 @@ function buildNotificationCopy(row: AlertCandidateRow, status: InventoryAlertSta
       today.setHours(0, 0, 0, 0);
       const daysLeft = Math.max(0, Math.floor((expiry.getTime() - today.getTime()) / 86_400_000));
       return {
-        title: "Product expiring soon",
-        body: `${row.name} expires on ${row.expiry_date} (${daysLeft} day${daysLeft === 1 ? "" : "s"} left).`,
+        title: t("notify.inventory.expiring.title"),
+        body: t(daysLeft === 1 ? "notify.inventory.expiringOne" : "notify.inventory.expiringMany", { name: row.name, date: String(row.expiry_date), days: daysLeft }),
       };
     }
   }
@@ -146,7 +149,7 @@ async function checkOne(row: AlertCandidateRow): Promise<void> {
   if (!status) return;
 
   const existing = await notificationsRepository.findActiveAlert(row.id, status);
-  const { title, body } = buildNotificationCopy(row, status, await getSalonCurrency(row.salon_id));
+  const { title, body } = buildNotificationCopy(row, status, await getSalonCurrency(row.salon_id), await salonTranslator(row.salon_id));
 
   if (existing) {
     // Same ongoing alert — refresh copy (e.g. stock count changed but is

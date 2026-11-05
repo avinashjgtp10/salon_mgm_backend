@@ -1,4 +1,4 @@
-import { DEFAULT_LANGUAGE, normalizeLanguage } from "./language";
+import { DEFAULT_LANGUAGE, getSalonLanguage, normalizeLanguage } from "./language";
 import en from "../locales/en.json";
 import hi from "../locales/hi.json";
 import ar from "../locales/ar.json";
@@ -46,4 +46,12 @@ export function translator(code?: string | null): Translator {
     const lang = normalizeLanguage(code);
     return (key, vars) =>
         fill(lookup(DICTIONARIES[lang], key) ?? lookup(DICTIONARIES[DEFAULT_LANGUAGE], key) ?? key, vars);
+}
+
+/**
+ * A translator for a salon's own language (salons.language) — for text the backend writes on the salon's behalf: notifications and
+ * e-mails. Never throws: a salon whose language cannot be read gets English.
+ */
+export async function salonTranslator(salonId: string | null | undefined): Promise<Translator> {
+    return translator(await getSalonLanguage(salonId));
 }

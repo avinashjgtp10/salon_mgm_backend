@@ -30,7 +30,8 @@ const otpKey = (email: string) => `otp:email:${email}`;
 const verifiedKey = (email: string) => `otp:email:verified:${email}`;
 
 export const bookingEmailOtpService = {
-    async sendOtp(emailRaw: string) {
+    /** `language`: what the visitor's booking page is showing — the code e-mail is written in it. */
+    async sendOtp(emailRaw: string, language?: string | null) {
         const email = normalizeEmail(emailRaw);
         if (!email) throw new AppError(400, "Email is required", "VALIDATION_ERROR");
 
@@ -39,7 +40,7 @@ export const bookingEmailOtpService = {
         await redis.set(otpKey(email), otpHash, "EX", OTP_TTL_SECONDS);
 
         try {
-            await emailService.sendOtpEmail(email, otp);
+            await emailService.sendOtpEmail(email, otp, { language });
         } catch (err: any) {
             logger.error("[bookingEmailOtpService.sendOtp] Failed to send OTP email", {
                 email,

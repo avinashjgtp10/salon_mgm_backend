@@ -8,6 +8,7 @@ import { notificationsService } from '../../../notifications/notifications.servi
 import pool from '../../../../config/database'
 import logger from '../../../../config/logger'
 import { summarizeAccountUpdate } from './webhooks.log'
+import { salonTranslator } from '../../../../config/i18n'
 
 export const webhooksService = {
 
@@ -206,7 +207,7 @@ export const webhooksService = {
     notificationsService.create({
       salon_id: salonId,
       type:     'whatsapp',
-      title:    `WhatsApp: ${senderName}`,
+      title:    (await salonTranslator(salonId))('notify.whatsapp.message.title', { sender: senderName }),
       body:     messageBody.length > 80 ? messageBody.slice(0, 77) + '…' : messageBody,
       event_key: 'newMessage',
       contact_phone: msg.from,

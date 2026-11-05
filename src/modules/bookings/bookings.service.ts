@@ -16,6 +16,7 @@ import { bookingEmailOtpService } from "./booking-email-otp.service";
 import { loadStaffPresence } from "../attendance/attendance.presence";
 import logger from "../../config/logger";
 import { formatMoney, getSalonDateLocale } from "../../config/currency";
+import { salonTranslator } from "../../config/i18n";
 
 // Attaches booking policy, brand kit, the marketplace gallery, and (only when
 // About Us is enabled) its Facilities/Specialities — everything the public
@@ -835,12 +836,13 @@ export const bookingsService = {
         // `event_key` makes this obey the owner's own notification preferences,
         // the way every staff-created appointment already does; without it this
         // one push ignored a preference the owner had explicitly set.
+        const nt = await salonTranslator(body.salon_id);
         notificationsService.create({
             salon_id: body.salon_id,
             type: "appointment",
             reference_id: appointment.id,
-            title: "New Appointment Booked",
-            body: `${body.client_name} — ${formatDate(body.scheduled_at, salonTz, salonLocale)} at ${formatTime(body.scheduled_at, salonTz, salonLocale)}`,
+            title: nt("notify.newAppointment.title"),
+            body: nt("notify.appointmentLine", { client: body.client_name, date: formatDate(body.scheduled_at, salonTz, salonLocale), time: formatTime(body.scheduled_at, salonTz, salonLocale) }),
             event_key: "newAppointment",
             scheduled_at: body.scheduled_at,
         }).catch((err: any) => {

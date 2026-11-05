@@ -117,7 +117,7 @@ export const authService = {
 
     const fullName = [user.first_name, user.last_name].filter(Boolean).join(" ");
     const salonName = body.businessName?.trim() || fullName;
-    emailService.sendWelcomeEmail({ to: email, fullName, salonName })
+    emailService.sendWelcomeEmail({ to: email, fullName, salonName, language: body.language, salonId })
       .then(() => logger.info("[authService.register] Welcome email sent successfully", { email }))
       .catch((err: any) => {
         logger.error("[authService.register] Failed to send welcome email", { email, error: err?.message, stack: err?.stack });
@@ -205,6 +205,7 @@ export const authService = {
           const loginTime = new Date().toLocaleString(await getSalonDateLocale(salonId), { timeZone: await getSalonTimezone(salonId), dateStyle: "medium", timeStyle: "short" });
           await emailService.sendStaffLoginEmail({
             to:         ownerEmail,
+            salonId,
             salonName:  salon?.business_name ?? "your salon",
             staffName,
             staffEmail: email,
@@ -320,7 +321,7 @@ export const authService = {
     return `otp:email:${email}`;
   },
 
-  async sendEmailOtp(emailRaw: string) {
+  async sendEmailOtp(emailRaw: string, language?: string | null) {
     const email = String(emailRaw || "").trim().toLowerCase();
     logger.info("[authService.sendEmailOtp] Start", { email });
 
@@ -348,7 +349,7 @@ export const authService = {
 
     logger.info("[authService.sendEmailOtp] Sending OTP email", { email });
     try {
-      await emailService.sendOtpEmail(email, otp);
+      await emailService.sendOtpEmail(email, otp, { language, salonId: user ? await authRepository.findSalonIdByUserId(user.id) : null });
       logger.info("[authService.sendEmailOtp] Email sent successfully", { email });
     } catch (emailErr: any) {
       logger.error("[authService.sendEmailOtp] Failed to send email", {
@@ -430,7 +431,7 @@ export const authService = {
   },
 
   // ================= FORGOT PASSWORD =================
-  async forgotPasswordSendOtp(emailRaw: string) {
+  async forgotPasswordSendOtp(emailRaw: string, language?: string | null) {
     const email = String(emailRaw || "").trim().toLowerCase();
     logger.info("[authService.forgotPasswordSendOtp] Start", { email });
 
@@ -454,7 +455,7 @@ export const authService = {
 
     logger.info("[authService.forgotPasswordSendOtp] Sending password reset OTP", { email });
     try {
-      await emailService.sendPasswordResetOtpEmail(email, otp);
+      await emailService.sendPasswordResetOtpEmail(email, otp, { language, salonId: await authRepository.findSalonIdByUserId(user.id) });
       logger.info("[authService.forgotPasswordSendOtp] Email sent successfully", { email });
     } catch (emailErr: any) {
       logger.error("[authService.forgotPasswordSendOtp] Failed to send email", {
@@ -500,7 +501,7 @@ export const authService = {
     return { message: "OTP is valid", success: true };
   },
 
-  async resetPassword(emailRaw: string, otpRaw: string, newPasswordRaw: string) {
+  async resetPassword(emailRaw: string, otpRaw: string, newPasswordRaw: string, language?: string | null) {
     const email = String(emailRaw || "").trim().toLowerCase();
     const otp = String(otpRaw || "").trim();
     const newPassword = String(newPasswordRaw || "");
@@ -540,10 +541,13 @@ export const authService = {
 
     // Send confirmation email (non-blocking — failure must not break the reset)
     const fullName = [user.first_name, user.last_name].filter(Boolean).join(" ") || email;
+    const resetSalonId = await authRepository.findSalonIdByUserId(user.id).catch(() => null);
     emailService.sendPasswordResetConfirmationEmail({
       to: email,
       fullName,
       resetAt: new Date(),
+      language,
+      salonId: resetSalonId,
     }).catch((err: any) => {
       logger.error("[authService.resetPassword] Failed to send confirmation email", {
         email,
