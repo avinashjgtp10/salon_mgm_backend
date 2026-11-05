@@ -507,4 +507,21 @@ export const salonsRepository = {
 
         return rows[0];
     },
+
+    // The plan the salon is on right now and when it is valid until (a free trial reports its trial end), for the onboarding-complete
+    // email. A paid active plan wins over a trial; null when the salon has neither.
+    async currentPlanSummary(salonId: string): Promise<{ plan_name: string | null; valid_until: string | null; is_trial: boolean } | null> {
+        const { rows } = await pool.query(
+            `SELECT sp.name AS plan_name, s.status, COALESCE(s.is_trial, FALSE) AS is_trial,
+                    CASE WHEN s.status = 'trialing' THEN s.trial_ends_at ELSE s.current_period_end END AS valid_until
+             FROM subscriptions s
+             LEFT JOIN subscription_plans sp ON sp.id = s.plan_id
+             WHERE s.salon_id = $1 AND s.status IN ('active', 'trialing')
+             ORDER BY (s.status = 'active') DESC, s.current_period_end DESC NULLS LAST
+             LIMIT 1`,
+            [salonId]
+        );
+        const r = rows[0];
+        return r ? { plan_name: r.plan_name ?? null, valid_until: r.valid_until ?? null, is_trial: Boolean(r.is_trial) || r.status === "trialing" } : null;
+    },
 };

@@ -544,6 +544,424 @@ export const emailService = {
     });
   },
 
+  // Daily reminder in the last days of a subscription that will not renew by itself (subscription-expiry-reminder.service).
+  async sendSubscriptionExpiryReminderEmail(params: {
+    to: string;
+    ownerName?: string | null;
+    salonName: string;
+    planName: string;
+    expiryDate: string;
+    /** 0 = it expires today. */
+    daysRemaining: number;
+    subscriptionUrl: string;
+  }) {
+    const e = escapeHtml;
+    const days = Math.max(0, Math.floor(params.daysRemaining));
+    const when = days === 0 ? "today" : days === 1 ? "in 1 day" : `in ${days} days`;
+    const detail = (label: string, value: string) => `
+      <tr>
+        <td style="padding:7px 0;color:#6b7280;font-size:14px;width:46%;vertical-align:top;">${label}</td>
+        <td style="padding:7px 0;color:#111827;font-size:14px;font-weight:600;vertical-align:top;word-break:break-word;">${e(value)}</td>
+      </tr>`;
+
+    await transporter.sendMail({
+      from: config.smtp.from,
+      to: params.to,
+      subject: days === 0
+        ? `Your SalonOx ${params.planName} subscription expires today`
+        : `Your SalonOx ${params.planName} subscription expires ${when}`,
+      html: `
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+          <meta charset="UTF-8" />
+          <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+          <title>Subscription expiry reminder</title>
+        </head>
+        <body style="margin:0;padding:0;background:#f4f4f7;font-family:'Segoe UI',Arial,sans-serif;">
+          <table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f7;padding:24px 12px;">
+            <tr>
+              <td align="center">
+                <table width="580" cellpadding="0" cellspacing="0"
+                  style="background:#ffffff;border-radius:12px;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,0.08);max-width:580px;width:100%;">
+                  <tr>
+                    <td style="background:#f59e0b;background-image:linear-gradient(135deg,#f59e0b 0%,#f97316 100%);padding:30px 32px;text-align:center;">
+                      <p style="margin:0 0 6px;color:rgba(255,255,255,0.9);font-size:12px;font-weight:700;letter-spacing:2px;text-transform:uppercase;">SalonOx</p>
+                      <h1 style="margin:0;color:#ffffff;font-size:22px;font-weight:800;">Subscription expiry reminder</h1>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td style="padding:32px 32px 8px;">
+                      <p style="margin:0 0 14px;color:#374151;font-size:16px;line-height:1.7;">Hi ${e(params.ownerName?.trim() || "there")},</p>
+                      <p style="margin:0 0 22px;color:#374151;font-size:16px;line-height:1.7;">
+                        This is a friendly reminder that your SalonOx ${e(params.planName)} subscription is approaching its expiry date.
+                      </p>
+                      <p style="margin:0 0 8px;color:#111827;font-size:15px;font-weight:700;">Subscription Details:</p>
+                      <table cellpadding="0" cellspacing="0" width="100%" style="background:#f9fafb;border:1px solid #eef2f6;border-radius:10px;padding:8px 18px;margin-bottom:22px;">
+                        ${detail("Salon Name", params.salonName)}
+                        ${detail("Current Plan", params.planName)}
+                        ${detail("Expiry Date", params.expiryDate)}
+                        ${detail("Days Remaining", String(days))}
+                      </table>
+                      <p style="margin:0 0 16px;color:#111827;font-size:16px;font-weight:700;line-height:1.6;">Your subscription will expire ${when}.</p>
+                      <p style="margin:0 0 18px;color:#374151;font-size:15px;line-height:1.7;">
+                        To continue enjoying uninterrupted access to SalonOx features, please renew your subscription before the expiry date.
+                      </p>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td align="center" style="padding:4px 32px 12px;">
+                      <a href="${e(params.subscriptionUrl)}"
+                         style="display:inline-block;background:#6366f1;background-image:linear-gradient(135deg,#6366f1 0%,#8b5cf6 100%);
+                                color:#ffffff;font-size:15px;font-weight:700;text-decoration:none;padding:14px 36px;border-radius:8px;">
+                        Renew Your Subscription
+                      </a>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td style="padding:20px 32px 32px;">
+                      <p style="margin:0 0 14px;color:#374151;font-size:15px;line-height:1.7;">
+                        Avoid interruptions to your salon operations, appointments, billing, reports, and other essential features.
+                      </p>
+                      <p style="margin:0 0 14px;color:#374151;font-size:15px;line-height:1.7;">Thank you for choosing SalonOx!</p>
+                      <p style="margin:0;color:#374151;font-size:15px;line-height:1.6;">Regards,<br /><strong>Team SalonOx</strong><br />
+                        <a href="https://salonox.com" style="color:#6366f1;text-decoration:none;">https://salonox.com</a></p>
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+          </table>
+        </body>
+        </html>
+      `,
+    });
+  },
+
+  // Sent once per verified subscription payment (see subscription-invoices.service emailInvoice) to an owner who has finished
+  // onboarding: the payment details and the GST invoice PDF.
+  async sendPaymentSuccessEmail(params: {
+    to: string;
+    ownerName?: string | null;
+    salonName: string;
+    planName: string;
+    billingCycle: string;
+    /** Already formatted with the payment's currency, e.g. "₹11,313.84". */
+    amount: string;
+    paymentId: string;
+    paymentDate: string;
+    startDate: string;
+    endDate: string;
+    pdfBuffer: Buffer;
+    pdfFilename: string;
+  }) {
+    const loginUrl = `${config.frontend.url}/login`;
+    const e = escapeHtml;
+    const detail = (label: string, value: string) => `
+      <tr>
+        <td style="padding:7px 0;color:#6b7280;font-size:14px;width:46%;vertical-align:top;">${label}</td>
+        <td style="padding:7px 0;color:#111827;font-size:14px;font-weight:600;vertical-align:top;word-break:break-word;">${e(value)}</td>
+      </tr>`;
+    // For an owner who has finished onboarding; one who hasn't gets sendPaymentReceivedOnboardingPendingEmail instead.
+    const closing = `<p style="margin:0 0 18px;color:#374151;font-size:15px;line-height:1.7;">Your SalonOx account is ready. You can log in and start using all the features included in your subscription.</p>`;
+    const ctaLabel = "Login Now";
+
+    await transporter.sendMail({
+      from: config.smtp.from,
+      to: params.to,
+      subject: "Payment Successful – Your SalonOx Subscription is Active!",
+      html: `
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+          <meta charset="UTF-8" />
+          <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+          <title>Payment Successful</title>
+        </head>
+        <body style="margin:0;padding:0;background:#f4f4f7;font-family:'Segoe UI',Arial,sans-serif;">
+          <table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f7;padding:24px 12px;">
+            <tr>
+              <td align="center">
+                <table width="580" cellpadding="0" cellspacing="0"
+                  style="background:#ffffff;border-radius:12px;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,0.08);max-width:580px;width:100%;">
+                  <tr>
+                    <td style="background:#16a34a;background-image:linear-gradient(135deg,#16a34a 0%,#22c55e 100%);padding:32px;text-align:center;">
+                      <p style="margin:0 0 6px;color:rgba(255,255,255,0.85);font-size:12px;font-weight:700;letter-spacing:2px;text-transform:uppercase;">SalonOx</p>
+                      <h1 style="margin:0;color:#ffffff;font-size:24px;font-weight:800;">Payment Successful</h1>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td style="padding:32px 32px 8px;">
+                      <p style="margin:0 0 14px;color:#374151;font-size:16px;line-height:1.7;">Hi ${e(params.ownerName?.trim() || "there")},</p>
+                      <p style="margin:0 0 22px;color:#374151;font-size:16px;line-height:1.7;">
+                        Your payment has been successfully received. Thank you for choosing SalonOx!
+                      </p>
+                      <p style="margin:0 0 8px;color:#111827;font-size:15px;font-weight:700;">Payment Details:</p>
+                      <table cellpadding="0" cellspacing="0" width="100%" style="background:#f9fafb;border:1px solid #eef2f6;border-radius:10px;padding:8px 18px;margin-bottom:22px;">
+                        ${detail("Salon Name", params.salonName)}
+                        ${detail("Plan", params.planName)}
+                        ${detail("Billing Cycle", params.billingCycle)}
+                        ${detail("Amount Paid", params.amount)}
+                        ${detail("Payment ID", params.paymentId)}
+                        ${detail("Payment Date", params.paymentDate)}
+                        ${detail("Subscription Start Date", params.startDate)}
+                        ${detail("Subscription End Date", params.endDate)}
+                      </table>
+                      <p style="margin:0 0 18px;color:#374151;font-size:15px;line-height:1.7;">Your subscription payment has been confirmed successfully.</p>
+                      <p style="margin:0 0 18px;color:#374151;font-size:15px;line-height:1.7;">
+                        <strong>Invoice:</strong> Your official GST invoice is attached to this email for your records.
+                      </p>
+                      ${closing}
+                    </td>
+                  </tr>
+                  <tr>
+                    <td align="center" style="padding:4px 32px 12px;">
+                      <a href="${loginUrl}"
+                         style="display:inline-block;background:#6366f1;background-image:linear-gradient(135deg,#6366f1 0%,#8b5cf6 100%);
+                                color:#ffffff;font-size:15px;font-weight:700;text-decoration:none;padding:14px 36px;border-radius:8px;">
+                        ${ctaLabel}
+                      </a>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td style="padding:20px 32px 32px;">
+                      <p style="margin:0 0 14px;color:#374151;font-size:15px;line-height:1.7;">Thank you for being a part of SalonOx!</p>
+                      <p style="margin:0;color:#374151;font-size:15px;line-height:1.6;">Regards,<br /><strong>Team SalonOx</strong><br />
+                        <a href="https://salonox.in" style="color:#6366f1;text-decoration:none;">https://salonox.in</a></p>
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+          </table>
+        </body>
+        </html>
+      `,
+      attachments: [{ filename: params.pdfFilename, content: params.pdfBuffer }],
+    });
+  },
+
+  // The same verified payment, for an owner whose onboarding is NOT finished yet (they paid right after sign-up): confirms the
+  // payment, attaches the invoice and sends them back to finish setting up.
+  async sendPaymentReceivedOnboardingPendingEmail(params: {
+    to: string;
+    ownerName?: string | null;
+    salonName: string;
+    planName: string;
+    /** Already formatted with the payment's currency, e.g. "₹11,313.84". */
+    amount: string;
+    paymentId: string;
+    paymentDate: string;
+    pdfBuffer: Buffer;
+    pdfFilename: string;
+  }) {
+    const e = escapeHtml;
+    const loginUrl = `${config.frontend.url}/login`;
+    const detail = (label: string, value: string) => `
+      <tr>
+        <td style="padding:7px 0;color:#6b7280;font-size:14px;width:46%;vertical-align:top;">${label}</td>
+        <td style="padding:7px 0;color:#111827;font-size:14px;font-weight:600;vertical-align:top;word-break:break-word;">${e(value)}</td>
+      </tr>`;
+
+    await transporter.sendMail({
+      from: config.smtp.from,
+      to: params.to,
+      subject: "Payment Received – Complete Your SalonOx Setup",
+      html: `
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+          <meta charset="UTF-8" />
+          <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+          <title>Payment received</title>
+        </head>
+        <body style="margin:0;padding:0;background:#f4f4f7;font-family:'Segoe UI',Arial,sans-serif;">
+          <table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f7;padding:24px 12px;">
+            <tr>
+              <td align="center">
+                <table width="580" cellpadding="0" cellspacing="0"
+                  style="background:#ffffff;border-radius:12px;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,0.08);max-width:580px;width:100%;">
+                  <tr>
+                    <td style="background:#16a34a;background-image:linear-gradient(135deg,#16a34a 0%,#22c55e 100%);padding:32px;text-align:center;">
+                      <p style="margin:0 0 6px;color:rgba(255,255,255,0.85);font-size:12px;font-weight:700;letter-spacing:2px;text-transform:uppercase;">SalonOx</p>
+                      <h1 style="margin:0;color:#ffffff;font-size:24px;font-weight:800;">Payment Received</h1>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td style="padding:32px 32px 8px;">
+                      <p style="margin:0 0 14px;color:#374151;font-size:16px;line-height:1.7;">Hi ${e(params.ownerName?.trim() || "there")},</p>
+                      <p style="margin:0 0 14px;color:#374151;font-size:16px;line-height:1.7;">
+                        <strong>Great news! Your SalonOx subscription payment has been successfully received.</strong>
+                      </p>
+                      <p style="margin:0 0 22px;color:#374151;font-size:16px;line-height:1.7;">
+                        Your account has been created, and you are just one step away from getting started.
+                      </p>
+                      <p style="margin:0 0 8px;color:#111827;font-size:15px;font-weight:700;">Payment Details:</p>
+                      <table cellpadding="0" cellspacing="0" width="100%" style="background:#f9fafb;border:1px solid #eef2f6;border-radius:10px;padding:8px 18px;margin-bottom:24px;">
+                        ${detail("Salon Name", params.salonName)}
+                        ${detail("Plan", params.planName)}
+                        ${detail("Amount Paid", params.amount)}
+                        ${detail("Payment ID", params.paymentId)}
+                        ${detail("Payment Date", params.paymentDate)}
+                      </table>
+
+                      <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:18px 20px;margin-bottom:22px;">
+                        <p style="margin:0 0 8px;color:#92400e;font-size:16px;font-weight:800;">Complete Your Salon Setup</p>
+                        <p style="margin:0 0 10px;color:#78350f;font-size:15px;line-height:1.7;">We noticed that your onboarding process is still incomplete.</p>
+                        <p style="margin:0;color:#78350f;font-size:15px;line-height:1.7;">Please use the link below to log in and continue from where you left off.</p>
+                      </div>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td align="center" style="padding:0 32px 8px;">
+                      <p style="margin:0 0 12px;color:#111827;font-size:15px;font-weight:700;">Continue Onboarding:</p>
+                      <a href="${loginUrl}"
+                         style="display:inline-block;background:#6366f1;background-image:linear-gradient(135deg,#6366f1 0%,#8b5cf6 100%);
+                                color:#ffffff;font-size:15px;font-weight:700;text-decoration:none;padding:14px 36px;border-radius:8px;">
+                        Continue Onboarding
+                      </a>
+                      <p style="margin:12px 0 0;font-size:13px;color:#6b7280;word-break:break-all;">
+                        <a href="${loginUrl}" style="color:#6366f1;text-decoration:none;">${loginUrl}</a>
+                      </p>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td style="padding:22px 32px 32px;">
+                      <p style="margin:0 0 14px;color:#374151;font-size:15px;line-height:1.7;">
+                        Once you complete the onboarding process, you will be able to access your SalonOx dashboard and start managing your salon.
+                      </p>
+                      <p style="margin:0 0 14px;color:#374151;font-size:15px;line-height:1.7;">
+                        Your payment invoice is attached to this email for your reference.
+                      </p>
+                      <p style="margin:0 0 14px;color:#374151;font-size:15px;line-height:1.7;">
+                        If you need any assistance, feel free to contact our support team.
+                      </p>
+                      <p style="margin:0 0 14px;color:#374151;font-size:15px;line-height:1.7;">Welcome to SalonOx!</p>
+                      <p style="margin:0;color:#374151;font-size:15px;line-height:1.6;">Regards,<br /><strong>Team SalonOx</strong><br />
+                        <a href="https://salonox.com" style="color:#6366f1;text-decoration:none;">https://salonox.com</a></p>
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+          </table>
+        </body>
+        </html>
+      `,
+      attachments: [{ filename: params.pdfFilename, content: params.pdfBuffer }],
+    });
+  },
+
+  // Sent once, when an owner has completed every mandatory onboarding step (salons.service completeOnboarding): the account
+  // details and what they can do next. Not sent for registering or buying a plan on their own.
+  async sendOnboardingCompleteEmail(params: {
+    to: string;
+    ownerName?: string | null;
+    salonName: string;
+    /** The salon's current plan; the two plan rows are left out when the salon has none yet. */
+    planName?: string | null;
+    /** Already formatted, e.g. "5 Nov 2027". */
+    validUntil?: string | null;
+  }) {
+    const e = escapeHtml;
+    const loginUrl = `${config.frontend.url}/login`;
+    const detail = (label: string, value: string) => `
+      <tr>
+        <td style="padding:7px 0;color:#6b7280;font-size:14px;width:46%;vertical-align:top;">${label}</td>
+        <td style="padding:7px 0;color:#111827;font-size:14px;font-weight:600;vertical-align:top;word-break:break-word;">${e(value)}</td>
+      </tr>`;
+    const features = [
+      "Appointment &amp; Calendar Management",
+      "Quick Sale &amp; Billing",
+      "Client Management",
+      "Staff Management",
+      "Inventory Management",
+      "Reports &amp; Analytics",
+      "WhatsApp Marketing",
+      "Online Booking",
+    ];
+
+    await transporter.sendMail({
+      from: config.smtp.from,
+      to: params.to,
+      subject: "Congratulations! Your SalonOx Onboarding is Complete",
+      html: `
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+          <meta charset="UTF-8" />
+          <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+          <title>Your SalonOx onboarding is complete</title>
+        </head>
+        <body style="margin:0;padding:0;background:#f4f4f7;font-family:'Segoe UI',Arial,sans-serif;">
+          <table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f7;padding:24px 12px;">
+            <tr>
+              <td align="center">
+                <table width="580" cellpadding="0" cellspacing="0"
+                  style="background:#ffffff;border-radius:12px;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,0.08);max-width:580px;width:100%;">
+                  <tr>
+                    <td style="background:#6366f1;background-image:linear-gradient(135deg,#6366f1 0%,#8b5cf6 100%);padding:34px 32px;text-align:center;">
+                      <h1 style="margin:0 0 6px;color:#ffffff;font-size:28px;font-weight:800;letter-spacing:-0.5px;">SalonOx</h1>
+                      <p style="margin:0;color:rgba(255,255,255,0.9);font-size:16px;font-weight:600;">Your onboarding is complete</p>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td style="padding:32px 32px 8px;">
+                      <p style="margin:0 0 14px;color:#374151;font-size:16px;line-height:1.7;">Hi ${e(params.ownerName?.trim() || "there")},</p>
+                      <p style="margin:0 0 14px;color:#374151;font-size:16px;line-height:1.7;">
+                        <strong>Congratulations! Your SalonOx onboarding process has been successfully completed.</strong>
+                      </p>
+                      <p style="margin:0 0 22px;color:#374151;font-size:16px;line-height:1.7;">
+                        Your salon account is now ready, and you can start managing your salon operations with SalonOx.
+                      </p>
+                      <p style="margin:0 0 8px;color:#111827;font-size:15px;font-weight:700;">Your Account Details:</p>
+                      <table cellpadding="0" cellspacing="0" width="100%" style="background:#f9fafb;border:1px solid #eef2f6;border-radius:10px;padding:8px 18px;margin-bottom:22px;">
+                        ${detail("Salon Name", params.salonName)}
+                        ${params.planName ? detail("Subscription Plan", params.planName) : ""}
+                        ${detail("Account Email", params.to)}
+                        ${params.validUntil ? detail("Subscription Valid Until", params.validUntil) : ""}
+                      </table>
+                      <p style="margin:0 0 10px;color:#374151;font-size:15px;line-height:1.7;">
+                        You can now explore the features available in your subscription, including:
+                      </p>
+                      <ul style="margin:0 0 22px;padding-left:22px;color:#374151;font-size:15px;line-height:1.9;">
+                        ${features.map((f) => `<li>${f}</li>`).join("")}
+                      </ul>
+                      <p style="margin:0 0 12px;color:#111827;font-size:15px;font-weight:700;">Access Your SalonOx Dashboard:</p>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td align="center" style="padding:0 32px 8px;">
+                      <a href="${loginUrl}"
+                         style="display:inline-block;background:#6366f1;background-image:linear-gradient(135deg,#6366f1 0%,#8b5cf6 100%);
+                                color:#ffffff;font-size:15px;font-weight:700;text-decoration:none;padding:14px 36px;border-radius:8px;">
+                        Open Your Dashboard
+                      </a>
+                      <p style="margin:12px 0 0;font-size:13px;color:#6b7280;word-break:break-all;">
+                        <a href="${loginUrl}" style="color:#6366f1;text-decoration:none;">${loginUrl}</a>
+                      </p>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td style="padding:22px 32px 32px;">
+                      <p style="margin:0 0 14px;color:#374151;font-size:15px;line-height:1.7;">
+                        We're excited to help you simplify your salon operations and grow your business.
+                      </p>
+                      <p style="margin:0 0 14px;color:#374151;font-size:15px;line-height:1.7;">Thank you for choosing SalonOx!</p>
+                      <p style="margin:0;color:#374151;font-size:15px;line-height:1.6;">Regards,<br /><strong>Team SalonOx</strong><br />
+                        <a href="https://salonox.com" style="color:#6366f1;text-decoration:none;">https://salonox.com</a></p>
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+          </table>
+        </body>
+        </html>
+      `,
+    });
+  },
+
   async sendAccountCreatedEmail(params: {
     to: string;
     fullName: string;

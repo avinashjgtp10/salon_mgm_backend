@@ -18,6 +18,8 @@ const selectInvoice = async () => `
     JOIN salons sa ON sa.id = i.salon_id
     LEFT JOIN users ou ON ou.id = sa.owner_id`;
 
+let pdfColumn: Promise<boolean> | null = null;
+
 export interface InvoiceFilters {
     q?: string;
     status?: "paid" | "void";
@@ -251,6 +253,58 @@ export const subscriptionInvoicesRepository = {
 
     async markEmailed(id: string) {
         await pool.query(`UPDATE subscription_invoices SET emailed_at = NOW() WHERE id = $1`, [id]);
+    },
+
+    // The "send once" guard: only the caller whose UPDATE flips emailed_at from NULL gets true, so two webhook deliveries,
+    // a reconcile and a retry running together can never both send the email for the same invoice.
+    async claimEmail(id: string): Promise<boolean> {
+        const res = await pool.query(`UPDATE subscription_invoices SET emailed_at = NOW() WHERE id = $1 AND emailed_at IS NULL`, [id]);
+        return (res.rowCount ?? 0) > 0;
+    },
+
+    // The send failed: hand the claim back so a retry can send it. The invoice itself is never re-created.
+    async releaseEmailClaim(id: string) {
+        await pool.query(`UPDATE subscription_invoices SET emailed_at = NULL WHERE id = $1`, [id]);
+    },
+
+    // What the Payment Successful email prints beyond the invoice row: the owner, the payment date, and whether onboarding is done.
+    async paymentEmailContext(id: string) {
+        const { rows } = await pool.query(
+            `SELECT TRIM(CONCAT(ou.first_name, ' ', COALESCE(ou.last_name, ''))) AS owner_name,
+                    ou.first_name AS owner_first_name,
+                    COALESCE(ou.is_onboarding_complete, FALSE) AS onboarding_completed,
+                    p.paid_at, p.payment_status
+             FROM subscription_invoices i
+             JOIN salons sa ON sa.id = i.salon_id
+             LEFT JOIN users ou ON ou.id = sa.owner_id
+             LEFT JOIN subscription_payments p ON p.id = i.payment_id
+             WHERE i.id = $1`,
+            [id]
+        );
+        return rows[0] ?? null;
+    },
+
+    // Where the generated invoice PDF is kept (relative to the invoice storage folder). The column is added on first use, like the
+    // country-billing columns; if the database user may not alter tables, PDFs are simply regenerated on demand.
+    async pdfColumnReady(): Promise<boolean> {
+        if (pdfColumn === null) {
+            pdfColumn = pool
+                .query(`ALTER TABLE subscription_invoices ADD COLUMN IF NOT EXISTS pdf_path TEXT`)
+                .then(() => true)
+                .catch(() => false);
+        }
+        return pdfColumn;
+    },
+
+    async getPdfPath(id: string): Promise<string | null> {
+        if (!(await this.pdfColumnReady())) return null;
+        const { rows } = await pool.query(`SELECT pdf_path FROM subscription_invoices WHERE id = $1`, [id]);
+        return rows[0]?.pdf_path ?? null;
+    },
+
+    async setPdfPath(id: string, pdfPath: string) {
+        if (!(await this.pdfColumnReady())) return;
+        await pool.query(`UPDATE subscription_invoices SET pdf_path = $2 WHERE id = $1`, [id, pdfPath]);
     },
 
     async salonExists(salonId: string) {

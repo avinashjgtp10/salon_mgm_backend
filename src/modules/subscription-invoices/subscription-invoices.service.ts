@@ -7,8 +7,12 @@ import { GST_PERCENT } from "../plan-pricing/plan-pricing.service";
 import { buildInvoiceHtml, type InvoicePrintPayload } from "./invoice-html.template";
 import { amountInWords, BILLING_CYCLE_LABEL, SELLER } from "./invoice-format";
 import { subscriptionInvoicesRepository as repo, type InvoiceFilters } from "./subscription-invoices.repository";
-import { PLATFORM_BILLING_CURRENCY } from "../../config/currency";
+import { PLATFORM_BILLING_CURRENCY, formatMoney } from "../../config/currency";
 import { billingSchemaReady } from "../subscription-pricing/billing-schema";
+
+const BILLING_CYCLE_NAME: Record<string, string> = { monthly: "Monthly", quarterly: "Quarterly", yearly: "Yearly", annual: "Yearly" };
+const fmtDate = (v: unknown) =>
+    v ? new Date(v as string).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric", timeZone: "Asia/Kolkata" }) : "-";
 
 const num = (v: unknown) => Number(v ?? 0);
 const isoDate = (v: unknown) => (v ? new Date(v as string).toISOString() : null);
@@ -155,25 +159,78 @@ export const subscriptionInvoicesService = {
         return { pdf, filename: `${payload.invoice.invoice_no.replace(/\//g, "-")}.pdf` };
     },
 
+    // The invoice PDF is rendered from the invoice row each time it is needed (email, download) and never stored on the server:
+    // an invoice never changes after it is issued, so the result is the same every time.
+    async ensurePdf(id: string): Promise<{ pdf: Buffer; filename: string }> {
+        return this.renderPdf(id);
+    },
+
     // Best-effort: a mail hiccup or a missing owner email must never fail the bill itself, so callers never await it.
+    //
+    // Safe to call any number of times for the same invoice (webhook retries, a reconcile, a restart):
+    //  - the invoice exists once per payment (payment_id is unique), so a retry never creates a second one or a second PDF;
+    //  - the send is claimed with one atomic UPDATE (emailed_at NULL -> now), so concurrent calls send at most one email;
+    //  - if the send itself fails the claim is handed back, so the next call retries the email only.
+    // A Razorpay-paid invoice gets the "Payment Successful" email with the GST invoice attached; a manual / granted-plan bill
+    // (no Razorpay payment) keeps the plain invoice email. Voided invoices and unpaid payments are never emailed.
     async emailInvoice(id: string) {
+        let claimed = false;
         try {
             const inv = await repo.findById(id);
-            if (!inv || inv.emailed_at) return;
+            if (!inv || inv.status !== "paid") return;
+            if (inv.emailed_at) return;
             if (!inv.owner_email) { logger.warn("Invoice email skipped - salon has no owner email", { invoiceId: id }); return; }
-            const { pdf, filename } = await this.renderPdf(id);
-            await emailService.sendSubscriptionInvoiceEmail({
-                to: inv.owner_email,
-                salonName: inv.salon_name,
-                invoiceNo: inv.invoice_no,
-                planLabel: `${inv.plan_name ?? "Subscription"}${inv.billing_cycle ? ` (${inv.billing_cycle})` : ""}`,
-                amount: num(inv.total),
-                currency: inv.currency ?? PLATFORM_BILLING_CURRENCY,
-                pdfBuffer: pdf,
-                pdfFilename: filename,
-            });
-            await repo.markEmailed(id);
+
+            const ctx = inv.payment_id ? await repo.paymentEmailContext(id) : null;
+            if (inv.payment_id && ctx?.payment_status !== "paid") {
+                logger.warn("Invoice email skipped - the payment is not confirmed as paid", { invoiceId: id });
+                return;
+            }
+
+            claimed = await repo.claimEmail(id);
+            if (!claimed) return;   // someone else already sent it
+
+            // Rendered only now that an email is really going out (nothing is stored); a failure here hands the claim back below.
+            const { pdf, filename } = await this.ensurePdf(id);
+
+            if (ctx) {
+                const currency = inv.currency ?? PLATFORM_BILLING_CURRENCY;
+                const common = {
+                    to: inv.owner_email,
+                    ownerName: ctx.owner_first_name || ctx.owner_name,
+                    salonName: inv.salon_name,
+                    planName: inv.plan_name ?? "Subscription",
+                    amount: formatMoney(num(inv.total), currency),
+                    paymentId: inv.transaction_id ?? "-",
+                    paymentDate: fmtDate(ctx.paid_at ?? inv.issued_at),
+                    pdfBuffer: pdf,
+                    pdfFilename: filename,
+                };
+                if (ctx.onboarding_completed) {
+                    await emailService.sendPaymentSuccessEmail({
+                        ...common,
+                        billingCycle: BILLING_CYCLE_NAME[inv.billing_cycle] ?? inv.billing_cycle ?? "-",
+                        startDate: fmtDate(inv.period_start),
+                        endDate: fmtDate(inv.period_end),
+                    });
+                } else {
+                    // Paid right after sign-up: confirm the payment and send them back to finish onboarding.
+                    await emailService.sendPaymentReceivedOnboardingPendingEmail(common);
+                }
+            } else {
+                await emailService.sendSubscriptionInvoiceEmail({
+                    to: inv.owner_email,
+                    salonName: inv.salon_name,
+                    invoiceNo: inv.invoice_no,
+                    planLabel: `${inv.plan_name ?? "Subscription"}${inv.billing_cycle ? ` (${inv.billing_cycle})` : ""}`,
+                    amount: num(inv.total),
+                    currency: inv.currency ?? PLATFORM_BILLING_CURRENCY,
+                    pdfBuffer: pdf,
+                    pdfFilename: filename,
+                });
+            }
         } catch (err: any) {
+            if (claimed) await repo.releaseEmailClaim(id).catch(() => undefined);
             logger.error("Invoice email failed", { invoiceId: id, error: err?.message });
         }
     },
