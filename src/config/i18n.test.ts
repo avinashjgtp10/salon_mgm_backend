@@ -3,6 +3,13 @@
 import en from "../locales/en.json";
 import hi from "../locales/hi.json";
 import ar from "../locales/ar.json";
+import zh from "../locales/zh.json";
+import ko from "../locales/ko.json";
+import ja from "../locales/ja.json";
+import th from "../locales/th.json";
+import id from "../locales/id.json";
+import vi from "../locales/vi.json";
+import ms from "../locales/ms.json";
 import { translator, translationFor } from "./i18n";
 import { DEFAULT_PURCHASE_TEMPLATES } from "../modules/whatsapp-automation/wa-automation-defaults";
 import { DEFAULT_SMS_TEMPLATES, DEFAULT_EMAIL_TEMPLATES } from "../modules/notification-channels/notification-channels-defaults";
@@ -59,14 +66,14 @@ describe("languages", () => {
         expect(isSupportedLanguage(undefined)).toBe(false);
     });
     it("has a dictionary for every language listed", () => {
-        const have = new Set(["en", "hi", "ar"]);
+        const have = new Set(["en", "hi", "ar", "zh", "ko", "ja", "th", "id", "vi", "ms"]);
         expect(Object.keys(LANGUAGES).every((c) => have.has(c))).toBe(true);
     });
 });
 
 describe("dictionary parity", () => {
     const english = flatten(en as Tree);
-    for (const [code, tree] of [["hi", hi], ["ar", ar]] as const) {
+    for (const [code, tree] of [["hi", hi], ["ar", ar], ["zh", zh], ["ko", ko], ["ja", ja], ["th", th], ["id", id], ["vi", vi], ["ms", ms]] as const) {
         const dict = flatten(tree as Tree);
         it(`${code} has every English key, none empty, with the same placeholders`, () => {
             const missing = Object.keys(english).filter((k) => !(k in dict));
@@ -95,7 +102,7 @@ describe("seeded customer messages", () => {
         expect(translationFor("en", "messages.wa.client_welcome")).toBeUndefined();
     });
 
-    for (const lang of ["hi", "ar"]) {
+    for (const lang of ["hi", "ar", "zh", "ko", "ja", "th", "id", "vi", "ms"]) {
         it(`${lang} covers every event on every channel with the same placeholders`, () => {
             const problems: string[] = [];
             for (const event of events) {

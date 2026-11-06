@@ -12,6 +12,7 @@ import { notificationChannelsService } from '../notification-channels/notificati
 import {
   AutomationEventType,
   AutomationTriggerPayload,
+  TriggerOutcome,
   UpdateSalonAutomationSettingBody,
   ListAutomationLogsFilters,
   MARKETING_EVENTS,
@@ -84,7 +85,7 @@ export const whatsappAutomationService = {
    * 6. Create log entry
    * 7. Send via Meta API with retry
    */
-  async trigger(payload: AutomationTriggerPayload): Promise<void> {
+  async trigger(payload: AutomationTriggerPayload): Promise<TriggerOutcome> {
     const { salonId, eventType, clientId, phone, countryCode, variables, referenceId, referenceType, dedupeByReference } = payload
 
     try {
@@ -93,7 +94,7 @@ export const whatsappAutomationService = {
       // 1. Validate phone
       if (!phone || phone.trim().length < 5) {
         logger.debug(`[WA-TRACE] SKIP ${eventType} — no valid phone`)
-        return
+        return { skippedReason: 'Client has no valid phone number' }
       }
 
       // 1b. Atomic once-per-(event,reference) guard for event-driven sends —
@@ -104,7 +105,7 @@ export const whatsappAutomationService = {
         const won = await whatsappAutomationRepository.guardInsertIfNotExists(`trigger:${eventType}:${referenceId}${payload.dedupeKeySuffix ? `:${payload.dedupeKeySuffix}` : ""}`)
         if (!won) {
           logger.debug(`[WA-TRACE] SKIP ${eventType} — duplicate for reference ${referenceId}`)
-          return
+          return { skippedReason: 'Already sent for this reference' }
         }
       }
 
@@ -119,7 +120,7 @@ export const whatsappAutomationService = {
       const salonEnabled = await whatsappAutomationRepository.isSalonAutomationEnabled(salonId, eventType)
       if (!salonEnabled) {
         logger.debug(`[WA-TRACE] SKIP ${eventType} — salon ${salonId} disabled this automation`)
-        return
+        return { skippedReason: 'This message is switched off for the salon (Message Settings)' }
       }
 
       // 2b. Respect the client's WhatsApp opt-out. The scheduler jobs filter on
@@ -132,7 +133,7 @@ export const whatsappAutomationService = {
         const isMarketing = MARKETING_EVENTS.includes(eventType)
         if (optIn && ((isMarketing && !optIn.marketing) || (!isMarketing && !optIn.notifications))) {
           logger.debug(`[WA-TRACE] SKIP ${eventType} — client ${clientId} opted out of ${isMarketing ? 'marketing' : 'notifications'}`)
-          return
+          return { skippedReason: `Client opted out of WhatsApp ${isMarketing ? 'marketing' : 'notification'} messages` }
         }
       }
 
@@ -140,14 +141,14 @@ export const whatsappAutomationService = {
       const template = await whatsappAutomationRepository.findTemplate(eventType, salonId)
       if (!template) {
         logger.debug(`[WA-TRACE] SKIP ${eventType} — no active/APPROVED template for this salon (submit & get it approved first)`)
-        return
+        return { skippedReason: 'No Meta-approved template for this message — submit it under Marketing > Templates and wait for approval' }
       }
 
       // 4. Get the salon's own WA credentials — billed to the salon, not the platform
       const salonConfig = await configRepository.findBySalonId(salonId)
       if (!salonConfig?.phone_number_id || !salonConfig?.access_token) {
         logger.debug(`[WA-TRACE] SKIP ${eventType} — salon ${salonId} has no WhatsApp config (phone_number_id/access_token missing)`)
-        return
+        return { skippedReason: 'WhatsApp is not connected for this salon' }
       }
 
       // 5. Format phone
@@ -177,9 +178,11 @@ export const whatsappAutomationService = {
         variables,
         buttonSuffix:  template.has_button ? payload.buttonSuffix ?? undefined : undefined,
       })
+      return {}
 
     } catch (err: any) {
       logger.error(`[WA-AUTO] trigger() error for ${eventType}:`, { salonId, clientId, error: err?.message })
+      return { skippedReason: `Unexpected error before sending: ${err?.message ?? 'unknown'}` }
     }
   },
 

@@ -1,0 +1,462 @@
+{
+  "receipt": {
+    "salonFallback": "Salon",
+    "notBilled": "Belum dibilkan",
+    "walkIn": "Tanpa Janji",
+    "phoneAbbr": "Tel: {{phone}}",
+    "status": {
+      "paid": "Dibayar",
+      "partial": "Separa",
+      "unpaid": "Belum dibayar",
+      "cancelled": "Dibatalkan"
+    },
+    "type": {
+      "service": "Perkhidmatan",
+      "product": "Produk",
+      "membership": "Keahlian",
+      "package": "Pakej",
+      "giftCard": "Kad Hadiah",
+      "quick": "Jualan Pantas"
+    },
+    "method": {
+      "cash": "Tunai",
+      "card": "Kad",
+      "upi": "UPI",
+      "ewallet": "eWallet",
+      "giftCard": "Kad Hadiah",
+      "package": "Pakej",
+      "membership": "Keahlian",
+      "posMachine": "Mesin Pembayaran",
+      "other": "Lain-lain"
+    },
+    "tax": "Cukai",
+    "incl": "(termasuk)",
+    "totalTax": "Jumlah Cukai",
+    "itemsTotal": "Jumlah Item",
+    "itemDiscount": "Diskaun Item",
+    "subtotal": "Jumlah Kecil",
+    "coupon": "Kupon",
+    "couponWith": "Kupon ({{code}})",
+    "packageCovered": "Dilindungi Pakej",
+    "membershipDiscount": "Diskaun Keahlian",
+    "extraCharges": "Caj Tambahan",
+    "billDiscount": "Diskaun Bil",
+    "referralDiscount": "Diskaun Rujukan",
+    "rewardPointsUsed": "Mata Ganjaran Digunakan",
+    "membershipWalletUsed": "Dompet Keahlian Digunakan",
+    "ewalletUsed": "eWallet Digunakan",
+    "referralCreditUsed": "Kredit Rujukan Digunakan",
+    "roundOff": "Pembundaran",
+    "grandTotal": "Jumlah Besar",
+    "amountToPay": "Jumlah Perlu Dibayar",
+    "staffTipIncluded": "Tip Kakitangan (termasuk di atas)",
+    "staffTipIncl": "Tip Kakitangan (termasuk)",
+    "paidVia": "Dibayar melalui {{method}}",
+    "totalAmountPaid": "Jumlah Keseluruhan Dibayar",
+    "amountPaid": "Jumlah Dibayar",
+    "totalPaid": "Jumlah Dibayar",
+    "paid": "Dibayar",
+    "balanceDue": "Baki Tertunggak",
+    "invoice": "Invois",
+    "taxInvoice": "Invois Cukai",
+    "invoiceNo": "No. Invois",
+    "bookingNo": "No. Tempahan #",
+    "date": "Tarikh",
+    "time": "Masa",
+    "billTo": "Bil Kepada",
+    "name": "Nama",
+    "client": "Pelanggan",
+    "phone": "Telefon",
+    "email": "E-mel",
+    "membership": "Keahlian",
+    "yourReferralCode": "Kod Rujukan Anda",
+    "referralEarnings": "Pendapatan Rujukan",
+    "apptDetails": "Butiran Temu Janji",
+    "staff": "Kakitangan",
+    "staffName": "Kakitangan: {{name}}",
+    "paymentMethod": "Kaedah Pembayaran",
+    "bookingStatus": "Status Tempahan",
+    "paymentStatus": "Status Pembayaran",
+    "servicesItems": "Perkhidmatan & Item",
+    "col": {
+      "itemName": "Nama Item",
+      "type": "Jenis",
+      "staff": "Kakitangan",
+      "time": "Masa",
+      "qty": "Kuantiti",
+      "rate": "Kadar",
+      "disc": "Diskaun",
+      "tax": "Cukai",
+      "amount": "Jumlah",
+      "item": "Item"
+    },
+    "noItems": "Tiada item",
+    "notes": "Nota",
+    "activePackages": "Pakej Aktif",
+    "sessionsLeft": "{{name}} — baki {{remaining}}/{{total}} sesi",
+    "activeMemberships": "Keahlian Aktif",
+    "expires": "Tamat tempoh: {{date}}",
+    "paymentSummary": "Ringkasan Pembayaran",
+    "thankYouFor": "Terima kasih kerana memilih {{name}}!",
+    "lookForward": "Kami menantikan kedatangan anda lagi.",
+    "computerGenerated": "Ini ialah resit yang dijana komputer.",
+    "noSignature": "Tandatangan tidak diperlukan.",
+    "poweredBy": "Dikuasakan oleh Salonox",
+    "total": "JUMLAH",
+    "thanks": "Terima Kasih!",
+    "titleInvoice": "Invois {{no}} — {{name}}",
+    "titleReceipt": "Resit {{no}} — {{name}}",
+    "membershipLoyalty": "Kesetiaan Keahlian",
+    "invoiceDate": "Tarikh Invois",
+    "staffAlert": "Amaran Kakitangan",
+    "tipIncl": "Tip (termasuk)"
+  },
+  "email": {
+    "automatedNotification": "Pemberitahuan automatik.",
+    "common": {
+      "hiName": "Hai {{name}},",
+      "hiPlain": "Hai,",
+      "hiBold": "Hai <strong>{{name}}</strong>,",
+      "rights": "© {{year}} SalonOx. Hak cipta terpelihara.",
+      "footerAuto": "© {{year}} SalonOx. Pemberitahuan automatik.",
+      "ref": "Rujukan: {{ref}}"
+    },
+    "label": {
+      "client": "Pelanggan",
+      "service": "Perkhidmatan",
+      "date": "Tarikh",
+      "time": "Masa",
+      "name": "Nama",
+      "email": "E-mel",
+      "phone": "Telefon",
+      "method": "Kaedah",
+      "salon": "Salon",
+      "period": "Tempoh",
+      "netPay": "Gaji Bersih"
+    },
+    "otp": {
+      "subject": "Pengesahan OTP E-mel Anda",
+      "title": "Pengesahan E-mel",
+      "intro": "Kod OTP anda ialah:",
+      "expiry": "OTP ini tamat tempoh dalam {{minutes}} minit."
+    },
+    "resetOtp": {
+      "subject": "Permintaan Tetapan Semula Kata Laluan",
+      "title": "Pengesahan Tetapan Semula Kata Laluan",
+      "intro": "Kami menerima permintaan untuk menetapkan semula kata laluan anda. Ini kod pengesahan anda:",
+      "expiry": "Kod ini tamat tempoh dalam {{minutes}} minit. Jika anda tidak meminta tetapan semula kata laluan, sila abaikan e-mel ini."
+    },
+    "resetDone": {
+      "subject": "Kata Laluan SalonOx Anda Telah Berjaya Ditetapkan Semula",
+      "title": "Pengesahan Tetapan Semula Kata Laluan",
+      "body": "Kata laluan akaun <strong>SalonOx</strong> anda telah berjaya ditetapkan semula.",
+      "details": "Butiran Tetapan Semula",
+      "loginNote": "Anda kini boleh log masuk ke akaun SalonOx anda menggunakan kata laluan baharu.",
+      "loginButton": "Log Masuk Sekarang",
+      "securityTitle": "Notis Keselamatan",
+      "securityBody": "Jika anda tidak meminta tetapan semula kata laluan ini, sila hubungi pasukan sokongan kami dengan segera — akaun anda mungkin berisiko.",
+      "support": "Sokongan:",
+      "footerAuto": "Ini ialah pemberitahuan keselamatan automatik. Sila jangan balas e-mel ini."
+    },
+    "welcome": {
+      "subject": "Selamat datang ke SalonOx, {{name}}! 🎉",
+      "pageTitle": "Selamat datang ke SalonOx",
+      "tagline": "Platform Pengurusan Salon",
+      "banner": "Selamat menyertai kami, {{name}}!",
+      "bannerSub": "Akaun salon anda sudah sedia.",
+      "intro": "Tahniah! Akaun SalonOx anda untuk <strong>{{salon}}</strong> telah berjaya dicipta. Kami gembira anda bersama kami.",
+      "about": "SalonOx membantu anda mengurus temu janji, kakitangan, pelanggan, dan mengembangkan perniagaan salon anda — semuanya di satu tempat.",
+      "stepsTitle": "Mulakan dalam 3 langkah mudah:",
+      "step1": "Lengkapkan profil salon anda",
+      "step1Body": "Tambah butiran salon, logo dan waktu operasi.",
+      "step2": "Tambah perkhidmatan &amp; kakitangan",
+      "step2Body": "Sediakan menu perkhidmatan dan jemput ahli pasukan anda.",
+      "step3": "Mula menerima tempahan",
+      "step3Body": "Kongsi pautan tempahan anda dan lihat temu janji masuk.",
+      "footer": "Anda menerima e-mel ini kerana anda telah mencipta akaun di SalonOx."
+    },
+    "newAppointment": {
+      "subject": "Temu Janji Baharu — {{name}}",
+      "title": "Temu Janji Baharu",
+      "intro": "Temu janji baharu telah ditempah. Berikut butirannya:",
+      "details": "Butiran Temu Janji"
+    },
+    "cancelledOwner": {
+      "subject": "Temu Janji Dibatalkan — {{name}}",
+      "title": "Temu Janji Dibatalkan",
+      "intro": "Satu temu janji telah dibatalkan. Berikut butirannya:"
+    },
+    "newPayment": {
+      "subject": "Pembayaran Diterima — {{amount}}",
+      "title": "Pembayaran Diterima",
+      "intro": "Satu pembayaran telah direkodkan untuk <strong>{{client}}</strong>.",
+      "invoice": "Invois: {{id}}"
+    },
+    "newClient": {
+      "subject": "Pelanggan Baharu Ditambah — {{name}}",
+      "title": "Pelanggan Baharu Ditambah",
+      "intro": "Pelanggan baharu telah ditambah ke <strong>{{salon}}</strong>."
+    },
+    "staffLogin": {
+      "subject": "Amaran Log Masuk Kakitangan — {{name}} telah log masuk",
+      "title": "Amaran Log Masuk Kakitangan",
+      "intro": "Seorang ahli pasukan telah log masuk ke <strong>{{salon}}</strong>.",
+      "note": "Jika log masuk ini tidak dijangka, sila semak kebenaran akses pasukan anda."
+    },
+    "deactivated": {
+      "subject": "Akaun SalonOx anda telah dinyahaktifkan",
+      "title": "Akaun Dinyahaktifkan",
+      "body": "{{greeting}} akaun anda dinyahaktifkan. Sila hubungi pasukan Salonox.",
+      "note": "Anda tidak akan dapat log masuk sehingga akaun anda diaktifkan semula. Sila hubungi pasukan Salonox untuk bantuan."
+    },
+    "staffInvite": {
+      "subject": "Anda dijemput menyertai {{salon}}",
+      "title": "Jemputan Kakitangan",
+      "body": "Anda telah dijemput menyertai <strong>{{salon}}</strong> sebagai ahli kakitangan di platform kami. Klik butang di bawah untuk menyediakan akaun anda dan mula.",
+      "expiry": "Pautan jemputan ini akan tamat tempoh dalam <strong>72 jam</strong>.",
+      "button": "Terima Jemputan",
+      "fallback": "Jika butang tidak berfungsi, salin dan tampal pautan ini ke pelayar anda:",
+      "ignore": "Jika anda tidak menjangka jemputan ini, anda boleh mengabaikan e-mel ini."
+    },
+    "dailySummary": {
+      "subject": "Ringkasan Tunai Harian Salon - {{date}}",
+      "pageTitle": "Laporan Ringkasan Harian",
+      "title": "Laporan Ringkasan Kaunter Harian",
+      "intro": "Berikut ringkasan kewangan sesi kaunter tunai hari ini:",
+      "opening": "Baki Pembukaan",
+      "cashRevenue": "Hasil Tunai",
+      "cashExpense": "Perbelanjaan Tunai",
+      "closing": "Baki Penutup",
+      "inStore": "Tunai di Kedai",
+      "reconciliation": "Jumlah Penyesuaian",
+      "upi": "Pembayaran UPI",
+      "card": "Pembayaran Kad",
+      "remarks": "Catatan Penutup",
+      "footer": "© {{year}} SalonOx. Laporan Ringkasan Harian Automatik."
+    },
+    "salary": {
+      "subject": "Resit Gaji Anda — {{salon}}",
+      "title": "Pembayaran Gaji Diproses",
+      "body": "Hai <strong>{{name}}</strong>, gaji anda untuk tempoh di bawah telah diproses. Resit terperinci dilampirkan sebagai PDF.",
+      "periodRange": "{{from}} hingga {{to}}"
+    }
+  },
+  "notify": {
+    "walkIn": "Tanpa Janji",
+    "service": "Perkhidmatan",
+    "invoiceNotGenerated": "Invois belum dijana",
+    "status": {
+      "booked": "ditempah",
+      "paid": "dibayar",
+      "partial": "separa",
+      "cancelled": "dibatalkan",
+      "no-show": "tidak hadir",
+      "deleted": "dipadam",
+      "pending": "menunggu",
+      "completed": "selesai",
+      "in_progress": "sedang berjalan"
+    },
+    "yourTurn": {
+      "title": "Giliran anda",
+      "body": "{{client}} sudah sedia untuk {{services}}"
+    },
+    "newAppointment": {
+      "title": "Temu Janji Baharu"
+    },
+    "appointmentUpdated": {
+      "title": "Temu Janji Dikemas Kini"
+    },
+    "appointmentCancelled": {
+      "title": "Temu Janji Dibatalkan"
+    },
+    "appointmentLine": "{{client}} — {{date}} pada {{time}}",
+    "paymentComplete": {
+      "title": "Pembayaran Selesai"
+    },
+    "newSale": {
+      "title": "Jualan Baharu Dicipta"
+    },
+    "newClient": {
+      "title": "Pelanggan Baharu Ditambah"
+    },
+    "attendance": {
+      "staffFallback": "Seorang kakitangan",
+      "checkedIn": {
+        "title": "Kakitangan Daftar Masuk",
+        "body": "{{name}} mendaftar masuk pada {{clock}} pada {{day}}."
+      },
+      "checkedOut": {
+        "title": "Kakitangan Daftar Keluar",
+        "body": "{{name}} mendaftar keluar pada {{clock}} pada {{day}}."
+      },
+      "breakStart": {
+        "title": "Kakitangan Sedang Berehat",
+        "body": "{{name}} mula berehat pada {{clock}} pada {{day}} (sehingga {{until}}).{{note}}"
+      },
+      "breakEnd": {
+        "title": "Kakitangan Kembali Daripada Rehat",
+        "body": "{{name}} kembali daripada rehat pada {{clock}} pada {{day}}."
+      },
+      "breakNote": " Nota: {{note}}",
+      "reminder": {
+        "title": "Anda belum mendaftar masuk ({{date}})",
+        "body": "Syif anda bermula pada {{time}}. Buka SalonOX dan daftar masuk."
+      }
+    },
+    "inventory": {
+      "outOfStock": {
+        "title": "Produk kehabisan stok",
+        "body": "{{name}} kehabisan stok (baki 0)."
+      },
+      "low": {
+        "title": "Amaran stok rendah",
+        "body": "Stok {{name}} rendah — {{remaining}}; tahap amaran ialah {{threshold}}."
+      },
+      "left": "Baki {{amount}}",
+      "leftBottle": "Baki {{amount}} (kira-kira 1 botol)",
+      "leftBottles": "Baki {{amount}} (kira-kira {{n}} botol)",
+      "expired": {
+        "title": "Produk tamat tempoh",
+        "body": "{{name}} telah tamat tempoh (tarikh luput: {{date}})."
+      },
+      "expiring": {
+        "title": "Produk hampir tamat tempoh"
+      },
+      "expiringOne": "{{name}} tamat tempoh pada {{date}} (tinggal 1 hari).",
+      "expiringMany": "{{name}} tamat tempoh pada {{date}} (tinggal {{days}} hari)."
+    },
+    "whatsapp": {
+      "formNotSent": {
+        "title": "Borang tempahan tidak dihantar",
+        "body": "Tidak dapat menghantar borang tempahan secara automatik ke {{phone}}. Buka sembang dan hantar secara manual."
+      },
+      "bookingRequest": {
+        "title": "Permintaan tempahan: {{name}}"
+      },
+      "message": {
+        "title": "WhatsApp: {{sender}}"
+      }
+    },
+    "spotlight": {
+      "title": "Ciri Baharu Ditambah"
+    }
+  },
+  "messages": {
+    "wa": {
+      "client_welcome": "Hai {{customer_name}},\nSelamat datang ke {{salon_name}}!\nKami gembira anda bersama kami.\nKod rujukan anda: {{referral_code}}\nTerima kasih kerana memilih {{salon_name}} — kami menghargai anda!",
+      "package_purchased": "Hai {{customer_name}},\nTerima kasih kerana membeli {{package_name}} kami!\n\nPakej: {{package_name}}\nPerkhidmatan: {{services}}\nSesi: {{total_sessions}}\nSah Sehingga: {{expiry_date}}\nAmaun: ¤{{package_value}}\nInvois: {{invoice_number}}\n\nKami berharap dapat berjumpa anda lagi. Tempah lawatan seterusnya bersama kami!",
+      "membership_purchased": "Hai {{customer_name}},\n\n🎉 {{membership_name}} anda kini aktif!\n\nKeahlian: {{membership_name}}\nFaedah: {{benefit}}\nTarikh Mula: {{start_date}}\nSah Sehingga: {{expiry_date}}\nHarga Keahlian: ¤{{membership_price}}\nInvois: {{invoice_number}}\n\nNikmati faedah keahlian eksklusif anda pada lawatan akan datang!",
+      "bill_receipt": "Hai {{customer_name}},\nTerima kasih kerana melawat {{salon_name}}.\nKami harap anda mendapat pengalaman yang hebat!\nBil anda dilampirkan bersama mesej ini.\n{{items}}\n{{feedback_line}}\nTerima kasih kerana memilih {{salon_name}} — kami menghargai anda!",
+      "appointment_confirmation": "Hai {{customer_name}},\nTemu janji anda di {{salon_name}} telah disahkan.\nTarikh: {{appointment_date}}\nMasa: {{appointment_time}}\nPerkhidmatan: {{service_name}}\nKakitangan: {{staff_name}}\nKami berharap dapat berjumpa anda!",
+      "appointment_rescheduled": "Hai {{customer_name}},\nTemu janji anda di {{salon_name}} telah dijadualkan semula.\nSebelum ini: {{old_date}} pada {{old_time}}\nBaharu: {{new_date}} pada {{new_time}}\nPerkhidmatan: {{service_name}}\nKakitangan: {{staff_name}}\nKami berharap dapat berjumpa anda!",
+      "appointment_cancelled": "Hai {{customer_name}},\nTemu janji anda di {{salon_name}} telah dibatalkan.\nTarikh: {{appointment_date}}\nMasa: {{appointment_time}}\nPerkhidmatan: {{service_name}}\nJika anda mahu menempah temu janji lain, kami sedia membantu.",
+      "appointment_no_show": "Hai {{customer_name}},\nKami tidak berjumpa anda di {{salon_name}} untuk temu janji anda.\nTarikh: {{appointment_date}}\nMasa: {{appointment_time}}\nPerkhidmatan: {{service_name}}\nJika anda masih mahu melawat, sila balas mesej ini dan kami akan gembira menjadualkan semula.",
+      "payment_received": "Hai {{customer_name}},\nBil anda sebanyak ¤{{amount}} di {{salon_name}} telah berjaya dibayar.\nTemu janji: {{appointment_date}}\nMasa: {{appointment_time}}\nTerima kasih kerana memilih {{salon_name}} — kami menghargai anda!",
+      "package_expiring_7d": "Hai {{customer_name}},\n{{package_name}} anda akan tamat tempoh dalam 7 hari.\nTarikh Luput: {{expiry_date}}\nBaki Sesi: {{remaining_sessions}}\nJangan lepaskan baki sesi anda!\nTempah lawatan seterusnya hari ini.",
+      "package_expiring_24h": "Hai {{customer_name}},\n{{package_name}} anda tamat tempoh esok.\nBaki Sesi: {{remaining_sessions}}\nTarikh Luput: {{expiry_date}}\nAnda masih ada masa untuk menggunakan baki sesi anda.\nTempah temu janji anda sekarang.",
+      "membership_expiring_7d": "Hai {{customer_name}},\nKeahlian {{membership_name}} anda tamat tempoh dalam 7 hari.\nTarikh Luput: {{expiry_date}}\nBaki Tinggal: ¤{{remaining_balance}}\nManfaatkan baki faedah keahlian anda sebelum tamat tempoh.",
+      "membership_expiring_24h": "Hai {{customer_name}},\nKeahlian {{membership_name}} anda tamat tempoh esok.\nBaki Tinggal: ¤{{remaining_balance}}\nTarikh Luput: {{expiry_date}}\nJangan biarkan baki keahlian anda tidak digunakan.",
+      "package_session_used": "Hai {{customer_name}},\nPerkhidmatan {{service_name}} anda telah berjaya ditebus daripada {{package_name}}.\nSesi Digunakan: 1\nBaki Sesi: {{remaining_sessions}}\nBaki Perkhidmatan: {{remaining_services_breakdown}}\nTerima kasih kerana melawat {{salon_name}} — kami menghargai anda!",
+      "membership_session_used": "Hai {{customer_name}},\nPerkhidmatan {{service_name}} anda telah berjaya ditebus daripada keahlian.\nAmaun Digunakan: ¤{{amount_used}}\nBaki Tinggal: ¤{{remaining_balance}}\nTerima kasih kerana melawat {{salon_name}} — kami menghargai anda!",
+      "package_appointment_reminder_24h": "Hai {{customer_name}},\nPeringatan bahawa anda mempunyai temu janji esok di {{salon_name}}.\nTarikh: {{appointment_date}}\nMasa: {{appointment_time}}\nPerkhidmatan: {{service_name}}\nTemu janji ini akan menggunakan 1 sesi daripada {{package_name}} anda.\nJumpa esok!",
+      "service_reminder_24h": "Hai {{customer_name}},\nIni ialah peringatan untuk temu janji anda yang akan datang di {{salon_name}}.\nTarikh: {{appointment_date}}\nMasa: {{appointment_time}}\nPerkhidmatan: {{service_name}}\nKakitangan: {{staff_name}}\nKami berharap dapat berjumpa anda!",
+      "reward_points_earned": "Hai {{customer_name}},\nAnda memperoleh {{points_earned}} mata ganjaran daripada lawatan terbaharu anda ke {{salon_name}}.\nMata Diperoleh: {{points_earned}}\nJumlah Mata: {{total_points}}\nTeruskan melawat dan kumpul ganjaran!",
+      "referral_reward": "Hai {{customer_name}},\nKhabar baik! Rujukan anda, {{referred_customer_name}}, telah menyelesaikan lawatan yang layak di {{salon_name}}.\nGanjaran Rujukan: {{reward}}\nJumlah Mata Ganjaran Anda: {{total_points}}\nTerima kasih kerana menyebarkan berita!",
+      "ewallet_used": "Hai {{customer_name}},\ne-Dompet anda digunakan untuk pembayaran di {{salon_name}}.\nAmaun Digunakan: ¤{{amount_used}}\nBaki Tinggal: ¤{{remaining_balance}}\nTerima kasih kerana memilih {{salon_name}} — kami menghargai anda!",
+      "referral_credit_used": "Hai {{customer_name}},\nBaki Rujukan anda digunakan untuk pembayaran di {{salon_name}}.\nAmaun Digunakan: ¤{{amount_used}}\nBaki Rujukan Tinggal: ¤{{remaining_balance}}\nTerima kasih kerana memilih {{salon_name}} — kami menghargai anda!",
+      "reward_points_used": "Hai {{customer_name}},\nMata Ganjaran anda digunakan untuk pembayaran di {{salon_name}}.\nMata Digunakan: {{points_used}}\nBaki Mata: {{remaining_points}}\nTerima kasih kerana memilih {{salon_name}} — kami menghargai anda!",
+      "birthday_wishes": "Hai {{customer_name}},\n🎉 Selamat Hari Lahir daripada kami semua di {{salon_name}}!\nSemoga hari anda indah — kami ingin membantu meraikannya. Datanglah melawat kami tidak lama lagi!",
+      "anniversary_wishes": "Hai {{customer_name}},\n🎉 Selamat Ulang Tahun daripada kami semua di {{salon_name}}!\nSemoga lebih banyak tahun indah menanti — kami ingin membantu meraikannya. Datanglah melawat kami tidak lama lagi!",
+      "service_redo_reminder": "Hai {{customer_name}},\nSudah agak lama sejak {{service_name}} anda di {{salon_name}} pada {{last_visit_date}}.\nMungkin sudah tiba masanya untuk yang seterusnya. Balas mesej ini dan kami akan membantu menempah slot.",
+      "cash_counter_opened": "*Kaunter Tunai Dibuka — {{salon_name}}*\n\nKaunter tunai anda telah dibuka dan sedia untuk transaksi hari ini.\n\nTarikh: {{opening_date}}\nMasa: {{opening_time}}\nAmaun Tunai Pembukaan: {{opening_amount}}\n\nSemoga hari perniagaan anda lancar!",
+      "cash_counter_closed": "*Kaunter Tunai Ditutup — {{salon_name}}*\n\nKaunter tunai anda telah ditutup untuk hari ini. Berikut ringkasan kutipan bagi sesi ini.\n\nTarikh: {{closing_date}}\nMasa: {{closing_time}}\n\n*Ringkasan Kutipan*\n{{collection_breakdown}}\n━━━━━━━━━━━━━━\n*Jumlah Kutipan: {{total_collection}}*\nPerbelanjaan: {{expenses}}\nTunai Dalam Kedai: {{in_store_cash}}\n\nTerima kasih kerana menyelaraskan kaunter tunai hari ini."
+    },
+    "sms": {
+      "client_welcome": "Hai {{customer_name}}, selamat datang ke {{salon_name}}! Kod rujukan anda ialah {{referral_code}}.",
+      "package_purchased": "Hai {{customer_name}}, terima kasih kerana membeli {{package_name}} ({{total_sessions}} sesi, sah sehingga {{expiry_date}}). Invois: {{invoice_number}}.",
+      "membership_purchased": "Hai {{customer_name}}, {{membership_name}} anda kini aktif, sah sehingga {{expiry_date}}. Invois: {{invoice_number}}.",
+      "bill_receipt": "Hai {{customer_name}}, terima kasih kerana melawat {{salon_name}}! Bil anda telah dijelaskan. {{feedback_line}}",
+      "appointment_confirmation": "Hai {{customer_name}}, temu janji anda di {{salon_name}} telah disahkan. Tarikh: {{appointment_date}}, Masa: {{appointment_time}}, Perkhidmatan: {{service_name}}.",
+      "appointment_rescheduled": "Hai {{customer_name}}, temu janji {{salon_name}} anda dipindahkan ke {{new_date}} {{new_time}} (sebelum ini {{old_date}} {{old_time}}).",
+      "appointment_cancelled": "Hai {{customer_name}}, temu janji anda pada {{appointment_date}} {{appointment_time}} di {{salon_name}} telah dibatalkan.",
+      "appointment_no_show": "Hai {{customer_name}}, kami tidak berjumpa anda di {{salon_name}} untuk temu janji {{appointment_date}} {{appointment_time}}. Balas untuk menjadualkan semula.",
+      "payment_received": "Hai {{customer_name}}, bil anda sebanyak ¤{{amount}} di {{salon_name}} telah dibayar. Terima kasih!",
+      "package_expiring_7d": "Hai {{customer_name}}, {{package_name}} anda tamat tempoh pada {{expiry_date}} (baki {{remaining_sessions}} sesi). Tempah sekarang!",
+      "package_expiring_24h": "Hai {{customer_name}}, {{package_name}} anda tamat tempoh esok (baki {{remaining_sessions}} sesi). Tempah sekarang!",
+      "membership_expiring_7d": "Hai {{customer_name}}, keahlian {{membership_name}} anda tamat tempoh pada {{expiry_date}} (baki ¤{{remaining_balance}}).",
+      "membership_expiring_24h": "Hai {{customer_name}}, keahlian {{membership_name}} anda tamat tempoh esok (baki ¤{{remaining_balance}}).",
+      "package_session_used": "Hai {{customer_name}}, sesi {{service_name}} anda daripada {{package_name}} telah digunakan. Baki {{remaining_sessions}} sesi.",
+      "membership_session_used": "Hai {{customer_name}}, ¤{{amount_used}} digunakan daripada keahlian anda untuk {{service_name}}. Baki: ¤{{remaining_balance}}.",
+      "package_appointment_reminder_24h": "Peringatan: {{customer_name}}, temu janji {{service_name}} anda di {{salon_name}} ialah esok pada {{appointment_time}} (menggunakan 1 sesi daripada {{package_name}}).",
+      "service_reminder_24h": "Peringatan: {{customer_name}}, temu janji {{service_name}} anda di {{salon_name}} pada {{appointment_date}} jam {{appointment_time}}.",
+      "reward_points_earned": "Hai {{customer_name}}, anda memperoleh {{points_earned}} mata ganjaran di {{salon_name}}! Jumlah: {{total_points}}.",
+      "referral_reward": "Hai {{customer_name}}, anda mendapat ganjaran rujukan atas lawatan {{referred_customer_name}} ke {{salon_name}}! Ganjaran: {{reward}}.",
+      "ewallet_used": "Hai {{customer_name}}, ¤{{amount_used}} digunakan daripada e-Dompet anda di {{salon_name}}. Baki: ¤{{remaining_balance}}.",
+      "referral_credit_used": "Hai {{customer_name}}, ¤{{amount_used}} digunakan daripada Baki Rujukan anda di {{salon_name}}. Baki: ¤{{remaining_balance}}.",
+      "reward_points_used": "Hai {{customer_name}}, {{points_used}} mata ganjaran digunakan di {{salon_name}}. Baki: {{remaining_points}}.",
+      "birthday_wishes": "Selamat Hari Lahir {{customer_name}}! Semoga hari anda indah daripada kami semua di {{salon_name}}. Datang raikan bersama kami tidak lama lagi!",
+      "anniversary_wishes": "Selamat Ulang Tahun {{customer_name}}! Semoga lebih banyak tahun indah menanti daripada kami semua di {{salon_name}}.",
+      "service_redo_reminder": "Hai {{customer_name}}, sudah agak lama sejak {{service_name}} anda di {{salon_name}} ({{last_visit_date}}). Masa untuk yang seterusnya? Balas untuk menempah.",
+      "cash_counter_opened": "Kaunter Tunai Dibuka - {{salon_name}}. {{opening_date}} {{opening_time}}. Tunai Pembukaan: {{opening_amount}}.",
+      "cash_counter_closed": "Kaunter Tunai Ditutup - {{salon_name}}. {{closing_date}} {{closing_time}}. {{collection_breakdown}}. Jumlah: {{total_collection}}. Perbelanjaan: {{expenses}}. Tunai Dalam Kedai: {{in_store_cash}}."
+    },
+    "emailSubject": {
+      "client_welcome": "Selamat datang ke {{salon_name}}!",
+      "package_purchased": "Pembelian {{package_name}} anda disahkan",
+      "membership_purchased": "Keahlian {{membership_name}} anda aktif",
+      "bill_receipt": "Terima kasih kerana melawat {{salon_name}}",
+      "appointment_confirmation": "Temu Janji Disahkan di {{salon_name}} — {{appointment_date}}",
+      "appointment_rescheduled": "Temu janji anda di {{salon_name}} telah dijadualkan semula",
+      "appointment_cancelled": "Temu Janji Anda Telah Dibatalkan — {{salon_name}}",
+      "appointment_no_show": "Kami tidak berjumpa anda di {{salon_name}}",
+      "payment_received": "Resit Temu Janji Anda — {{salon_name}}",
+      "package_expiring_7d": "{{package_name}} anda tamat tempoh dalam 7 hari",
+      "package_expiring_24h": "{{package_name}} anda tamat tempoh esok",
+      "membership_expiring_7d": "Keahlian {{membership_name}} anda tamat tempoh dalam 7 hari",
+      "membership_expiring_24h": "Keahlian {{membership_name}} anda tamat tempoh esok",
+      "package_session_used": "Sesi digunakan — {{package_name}}",
+      "membership_session_used": "Baki keahlian digunakan di {{salon_name}}",
+      "package_appointment_reminder_24h": "Peringatan: Temu janji anda esok di {{salon_name}}",
+      "service_reminder_24h": "Peringatan: Temu janji anda yang akan datang di {{salon_name}}",
+      "reward_points_earned": "Anda memperoleh {{points_earned}} mata ganjaran!",
+      "referral_reward": "Ganjaran rujukan anda telah dikreditkan",
+      "ewallet_used": "e-Dompet digunakan di {{salon_name}}",
+      "referral_credit_used": "Baki Rujukan digunakan di {{salon_name}}",
+      "reward_points_used": "Mata Ganjaran digunakan di {{salon_name}}",
+      "birthday_wishes": "Selamat Hari Lahir daripada {{salon_name}}!",
+      "anniversary_wishes": "Selamat Ulang Tahun daripada {{salon_name}}!",
+      "service_redo_reminder": "Tiba masa {{service_name}} seterusnya di {{salon_name}}?",
+      "cash_counter_opened": "Kaunter Tunai Dibuka — {{salon_name}}",
+      "cash_counter_closed": "Kaunter Tunai Ditutup — {{salon_name}}"
+    },
+    "emailBody": {
+      "client_welcome": "Hai {{customer_name}},\n\nSelamat datang ke {{salon_name}}! Kami gembira anda bersama kami.\n\nKod rujukan anda: {{referral_code}}\n\nTerima kasih kerana memilih kami — kami berharap dapat berjumpa anda tidak lama lagi.",
+      "package_purchased": "Hai {{customer_name}},\n\nTerima kasih kerana membeli {{package_name}} kami!\n\nPakej: {{package_name}}\nPerkhidmatan: {{services}}\nSesi: {{total_sessions}}\nSah Sehingga: {{expiry_date}}\nAmaun: ¤{{package_value}}\nInvois: {{invoice_number}}\n\nKami berharap dapat berjumpa anda lagi. Tempah lawatan seterusnya bersama kami!",
+      "membership_purchased": "Hai {{customer_name}},\n\n{{membership_name}} anda kini aktif!\n\nKeahlian: {{membership_name}}\nFaedah: {{benefit}}\nTarikh Mula: {{start_date}}\nSah Sehingga: {{expiry_date}}\nHarga Keahlian: ¤{{membership_price}}\nInvois: {{invoice_number}}\n\nNikmati faedah keahlian eksklusif anda pada lawatan akan datang!",
+      "bill_receipt": "Hai {{customer_name}},\n\nTerima kasih kerana melawat {{salon_name}}. Kami harap anda mendapat pengalaman yang hebat! Bil anda dilampirkan bersama e-mel ini.\n\n{{items}}\n\n{{feedback_line}}\n\nTerima kasih kerana memilih {{salon_name}} — kami menghargai anda!",
+      "appointment_confirmation": "Hai {{customer_name}},\n\nTemu janji anda telah berjaya disahkan.\n\nButiran Temu Janji:\nSalon: {{salon_name}}\nTarikh: {{appointment_date}}\nMasa: {{appointment_time}}\nPerkhidmatan: {{service_name}}\nKakitangan: {{staff_name}}\nID Tempahan: {{booking_id}}\n\nBayaran:\nJumlah: {{appointment_amount}}\nDibayar: {{paid_amount}}\nPerlu dibayar di salon: {{remaining_amount}}\n\nLokasi kami:\n{{salon_address}}\n{{google_maps_link}}\n\nPerlu membuat perubahan?\n{{manage_booking_link}}\n\n{{cancellation_policy}}\n\nKami berharap dapat berjumpa anda!",
+      "appointment_rescheduled": "Hai {{customer_name}},\n\nTemu janji anda di {{salon_name}} telah dijadualkan semula.\n\nSebelum ini: {{old_date}} pada {{old_time}}\nBaharu: {{new_date}} pada {{new_time}}\nPerkhidmatan: {{service_name}}\nKakitangan: {{staff_name}}\n\nKami berharap dapat berjumpa anda!",
+      "appointment_cancelled": "Hai {{customer_name}},\n\nTemu janji anda di {{salon_name}} telah dibatalkan.\n\nTarikh: {{appointment_date}}\nMasa: {{appointment_time}}\nPerkhidmatan: {{service_name}}\n\nSila hubungi kami jika anda mahu menempah semula atau mempunyai sebarang soalan.",
+      "appointment_no_show": "Hai {{customer_name}},\n\nKami tidak berjumpa anda di {{salon_name}} untuk temu janji anda.\n\nTarikh: {{appointment_date}}\nMasa: {{appointment_time}}\nPerkhidmatan: {{service_name}}\n\nJika anda masih mahu melawat, sila balas e-mel ini atau hubungi kami dan kami akan gembira menjadualkan semula.",
+      "payment_received": "Hai {{customer_name}},\n\nTerima kasih kerana melawat {{salon_name}}. Berikut resit anda:\n\nAmaun Dibayar: ¤{{amount}}\nTemu janji: {{appointment_date}} pada {{appointment_time}}\n\nKami berharap dapat berjumpa anda lagi tidak lama lagi!",
+      "package_expiring_7d": "Hai {{customer_name}},\n\n{{package_name}} anda akan tamat tempoh dalam 7 hari.\n\nTarikh Luput: {{expiry_date}}\nBaki Sesi: {{remaining_sessions}}\n\nJangan lepaskan baki sesi anda! Tempah lawatan seterusnya hari ini.",
+      "package_expiring_24h": "Hai {{customer_name}},\n\n{{package_name}} anda tamat tempoh esok.\n\nBaki Sesi: {{remaining_sessions}}\nTarikh Luput: {{expiry_date}}\n\nAnda masih ada masa untuk menggunakan baki sesi anda. Tempah temu janji anda sekarang.",
+      "membership_expiring_7d": "Hai {{customer_name}},\n\nKeahlian {{membership_name}} anda tamat tempoh dalam 7 hari.\n\nTarikh Luput: {{expiry_date}}\nBaki Tinggal: ¤{{remaining_balance}}\n\nManfaatkan baki faedah keahlian anda sebelum tamat tempoh.",
+      "membership_expiring_24h": "Hai {{customer_name}},\n\nKeahlian {{membership_name}} anda tamat tempoh esok.\n\nBaki Tinggal: ¤{{remaining_balance}}\nTarikh Luput: {{expiry_date}}\n\nJangan biarkan baki keahlian anda tidak digunakan.",
+      "package_session_used": "Hai {{customer_name}},\n\nPerkhidmatan {{service_name}} anda telah berjaya ditebus daripada {{package_name}}.\n\nBaki Sesi: {{remaining_sessions}}\nBaki Perkhidmatan: {{remaining_services_breakdown}}\n\nTerima kasih kerana melawat {{salon_name}} — kami menghargai anda!",
+      "membership_session_used": "Hai {{customer_name}},\n\nPerkhidmatan {{service_name}} anda telah berjaya ditebus daripada keahlian.\n\nAmaun Digunakan: ¤{{amount_used}}\nBaki Tinggal: ¤{{remaining_balance}}\n\nTerima kasih kerana melawat {{salon_name}} — kami menghargai anda!",
+      "package_appointment_reminder_24h": "Hai {{customer_name}},\n\nPeringatan bahawa anda mempunyai temu janji esok di {{salon_name}}.\n\nTarikh: {{appointment_date}}\nMasa: {{appointment_time}}\nPerkhidmatan: {{service_name}}\n\nTemu janji ini akan menggunakan 1 sesi daripada {{package_name}} anda. Jumpa esok!",
+      "service_reminder_24h": "Hai {{customer_name}},\n\nIni ialah peringatan untuk temu janji anda yang akan datang di {{salon_name}}.\n\nTarikh: {{appointment_date}}\nMasa: {{appointment_time}}\nPerkhidmatan: {{service_name}}\nKakitangan: {{staff_name}}\n\nKami berharap dapat berjumpa anda!",
+      "reward_points_earned": "Hai {{customer_name}},\n\nAnda memperoleh {{points_earned}} mata ganjaran daripada lawatan terbaharu anda ke {{salon_name}}.\n\nMata Diperoleh: {{points_earned}}\nJumlah Mata: {{total_points}}\n\nTeruskan melawat dan kumpul ganjaran!",
+      "referral_reward": "Hai {{customer_name}},\n\nKhabar baik! Rujukan anda, {{referred_customer_name}}, telah menyelesaikan lawatan yang layak di {{salon_name}}.\n\nGanjaran Rujukan: {{reward}}\nJumlah Mata Ganjaran Anda: {{total_points}}\n\nTerima kasih kerana menyebarkan berita!",
+      "ewallet_used": "Hai {{customer_name}},\n\ne-Dompet anda digunakan untuk pembayaran di {{salon_name}}.\n\nAmaun Digunakan: ¤{{amount_used}}\nBaki Tinggal: ¤{{remaining_balance}}\n\nTerima kasih kerana memilih {{salon_name}} — kami menghargai anda!",
+      "referral_credit_used": "Hai {{customer_name}},\n\nBaki Rujukan anda digunakan untuk pembayaran di {{salon_name}}.\n\nAmaun Digunakan: ¤{{amount_used}}\nBaki Rujukan Tinggal: ¤{{remaining_balance}}\n\nTerima kasih kerana memilih {{salon_name}} — kami menghargai anda!",
+      "reward_points_used": "Hai {{customer_name}},\n\nMata Ganjaran anda digunakan untuk pembayaran di {{salon_name}}.\n\nMata Digunakan: {{points_used}}\nBaki Mata: {{remaining_points}}\n\nTerima kasih kerana memilih {{salon_name}} — kami menghargai anda!",
+      "birthday_wishes": "Hai {{customer_name}},\n\n🎉 Selamat Hari Lahir daripada kami semua di {{salon_name}}!\n\nSemoga hari anda indah — kami ingin membantu meraikannya. Datanglah melawat kami tidak lama lagi!",
+      "anniversary_wishes": "Hai {{customer_name}},\n\n🎉 Selamat Ulang Tahun daripada kami semua di {{salon_name}}!\n\nSemoga lebih banyak tahun indah menanti — kami ingin membantu meraikannya. Datanglah melawat kami tidak lama lagi!",
+      "service_redo_reminder": "Hai {{customer_name}},\n\nSudah agak lama sejak {{service_name}} anda di {{salon_name}} pada {{last_visit_date}}.\n\nMungkin sudah tiba masanya untuk yang seterusnya. Balas e-mel ini atau hubungi kami dan kami akan membantu menempah slot.",
+      "cash_counter_opened": "Kaunter Tunai Dibuka — {{salon_name}}\n\nKaunter tunai anda telah dibuka dan sedia untuk transaksi hari ini.\n\nTarikh: {{opening_date}}\nMasa: {{opening_time}}\nAmaun Tunai Pembukaan: {{opening_amount}}\n\nSemoga hari perniagaan anda lancar!",
+      "cash_counter_closed": "Kaunter Tunai Ditutup — {{salon_name}}\n\nKaunter tunai anda telah ditutup untuk hari ini. Berikut ringkasan kutipan bagi sesi ini.\n\nTarikh: {{closing_date}}\nMasa: {{closing_time}}\n\nRingkasan Kutipan\n{{collection_breakdown}}\n\nJumlah Kutipan: {{total_collection}}\nPerbelanjaan: {{expenses}}\nTunai Dalam Kedai: {{in_store_cash}}\n\nTerima kasih kerana menyelaraskan kaunter tunai hari ini."
+    }
+  }
+}

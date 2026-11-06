@@ -21,11 +21,11 @@ const FEEDBACK_FORM_BASE_URL =
 export const DEFAULT_PURCHASE_TEMPLATES: Record<
     | "client_welcome" | "package_purchased"
     | "membership_purchased" | "bill_receipt" | "appointment_confirmation" | "appointment_rescheduled"
-    | "appointment_cancelled" | "payment_received" | "package_expiring_7d" | "package_expiring_24h"
+    | "appointment_cancelled" | "appointment_no_show" | "payment_received" | "package_expiring_7d" | "package_expiring_24h"
     | "membership_expiring_7d" | "membership_expiring_24h" | "package_session_used"
     | "membership_session_used" | "package_appointment_reminder_24h" | "service_reminder_24h"
     | "reward_points_earned" | "referral_reward" | "ewallet_used" | "referral_credit_used" | "reward_points_used"
-    | "birthday_wishes" | "anniversary_wishes"
+    | "birthday_wishes" | "anniversary_wishes" | "service_redo_reminder"
     | "cash_counter_opened" | "cash_counter_closed",
     {
         label: string;
@@ -89,6 +89,14 @@ export const DEFAULT_PURCHASE_TEMPLATES: Record<
         language: "en",
         bodyText: "Hi {{customer_name}},\nYour appointment at {{salon_name}} has been cancelled.\nDate: {{appointment_date}}\nTime: {{appointment_time}}\nService: {{service_name}}\nIf you'd like to book another appointment, we're happy to help.",
     },
+    // Factual and non-promotional on purpose: submitted under UTILITY, and Meta
+    // rejects a UTILITY template that reads like a marketing message.
+    appointment_no_show: {
+        label: "Appointment Missed",
+        category: "UTILITY",
+        language: "en",
+        bodyText: "Hi {{customer_name}},\nWe missed you at {{salon_name}} for your appointment.\nDate: {{appointment_date}}\nTime: {{appointment_time}}\nService: {{service_name}}\nIf you would still like to visit, please reply to this message and we will be happy to reschedule.",
+    },
     payment_received: {
         label: "Payment Received (Appointment)",
         category: "UTILITY",
@@ -138,10 +146,11 @@ export const DEFAULT_PURCHASE_TEMPLATES: Record<
         bodyText: "Hi {{customer_name}},\nJust a reminder that you have an appointment tomorrow at {{salon_name}}.\nDate: {{appointment_date}}\nTime: {{appointment_time}}\nService: {{service_name}}\nThis appointment will use 1 session from your {{package_name}}.\nSee you tomorrow!",
     },
     service_reminder_24h: {
-        label: "Appointment Reminder (Tomorrow)",
+        label: "Appointment Reminder",
         category: "UTILITY",
         language: "en",
-        bodyText: "Hi {{customer_name}},\nThis is a reminder for your appointment tomorrow at {{salon_name}}.\nDate: {{appointment_date}}\nTime: {{appointment_time}}\nService: {{service_name}}\nStaff: {{staff_name}}\nWe look forward to seeing you tomorrow!",
+        // Sent 5 hours before the visit (see SERVICE_REMINDER_LEAD_HOURS), so the wording must not say "tomorrow".
+        bodyText: "Hi {{customer_name}},\nThis is a reminder for your upcoming appointment at {{salon_name}}.\nDate: {{appointment_date}}\nTime: {{appointment_time}}\nService: {{service_name}}\nStaff: {{staff_name}}\nWe look forward to seeing you!",
     },
     reward_points_earned: {
         label: "Reward Points Earned",
@@ -201,6 +210,13 @@ export const DEFAULT_PURCHASE_TEMPLATES: Record<
     // ones — same "one variable, multi-line value" trick bill_receipt's
     // {{items}} already uses, so the rendered message still shows each
     // payment method on its own line.
+    // Re-engagement nudge, so it goes to Meta as MARKETING (and honours the client's marketing opt-out).
+    service_redo_reminder: {
+        label: "Service Reminder (Time to Redo)",
+        category: "MARKETING",
+        language: "en",
+        bodyText: "Hi {{customer_name}},\nIt has been a while since your {{service_name}} at {{salon_name}} on {{last_visit_date}}.\nIt may be time for your next one. Reply to this message and we will help you book a slot.",
+    },
     cash_counter_opened: {
         label: "Cash Counter Opened",
         category: "UTILITY",
@@ -232,6 +248,7 @@ export const EVENT_VARIABLE_NAMES: Record<DefaultPurchaseEventType, string[]> = 
     appointment_confirmation: ["customer_name", "salon_name", "appointment_date", "appointment_time", "service_name", "staff_name"],
     appointment_rescheduled:  ["customer_name", "salon_name", "old_date", "old_time", "new_date", "new_time", "service_name", "staff_name"],
     appointment_cancelled:    ["customer_name", "salon_name", "appointment_date", "appointment_time", "service_name"],
+    appointment_no_show:      ["customer_name", "salon_name", "appointment_date", "appointment_time", "service_name"],
     payment_received:         ["customer_name", "amount", "salon_name", "appointment_date", "appointment_time"],
     package_expiring_7d:     ["customer_name", "package_name", "expiry_date", "remaining_sessions"],
     package_expiring_24h:    ["customer_name", "package_name", "remaining_sessions", "expiry_date"],
@@ -248,6 +265,7 @@ export const EVENT_VARIABLE_NAMES: Record<DefaultPurchaseEventType, string[]> = 
     reward_points_used:   ["customer_name", "points_used", "salon_name", "remaining_points"],
   birthday_wishes:      ["customer_name", "salon_name"],
   anniversary_wishes:   ["customer_name", "salon_name"],
+  service_redo_reminder: ["customer_name", "salon_name", "service_name", "last_visit_date"],
   cash_counter_opened:  ["salon_name", "opening_date", "opening_time", "opening_amount"],
   cash_counter_closed:  ["salon_name", "closing_date", "closing_time", "collection_breakdown", "total_collection", "expenses", "in_store_cash"],
 };

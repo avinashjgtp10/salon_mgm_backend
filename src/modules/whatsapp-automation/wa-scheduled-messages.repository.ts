@@ -253,6 +253,60 @@ export const waScheduledMessagesRepository = {
     return { data: dataRes.rows, total: parseInt(countRes.rows[0].count) }
   },
 
+  // Service "time to redo" reminders (services.reminder_after_days): one row per
+  // service line of an appointment that was paid in the last 2 days, whose
+  // service has a reminder configured, and that has never been scheduled before
+  // (any status - so a SENT or CANCELLED one is not recreated). The line's own
+  // id is the reference, which is what keeps two lines of one visit apart.
+  async findPaidServiceLinesForRedo(limit = 500): Promise<Array<{
+    appointment_id: string; salon_id: string; client_id: string; paid_at: Date
+    row_id: string; service_id: string; service_name: string; reminder_after_days: number
+    client_name: string | null; phone: string; country_code: string | null; salon_name: string | null
+  }>> {
+    const { rows } = await pool.query(
+      `SELECT a.id AS appointment_id, a.salon_id, a.client_id, a.updated_at AS paid_at,
+              item->>'id' AS row_id, item->>'service_id' AS service_id,
+              COALESCE(NULLIF(item->>'name', ''), sv.name) AS service_name,
+              sv.reminder_after_days,
+              c.full_name AS client_name, c.phone_number AS phone, c.phone_country_code AS country_code,
+              sal.business_name AS salon_name
+       FROM appointments a
+       JOIN clients c   ON c.id = a.client_id
+       JOIN salons sal  ON sal.id = a.salon_id
+       CROSS JOIN LATERAL jsonb_array_elements(COALESCE(a.services, '[]'::jsonb)) AS item
+       JOIN services sv ON sv.id::text = item->>'service_id' AND sv.salon_id = a.salon_id
+       WHERE a.status = 'paid' AND a.deleted_at IS NULL
+         AND a.updated_at > NOW() - INTERVAL '2 days'
+         AND sv.reminder_after_days IS NOT NULL AND sv.reminder_after_days > 0
+         AND (item->>'id') ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+         AND COALESCE(c.phone_number, '') <> ''
+         AND NOT EXISTS (
+           SELECT 1 FROM wa_scheduled_messages m
+           WHERE m.reference_type = 'appointment_service'
+             AND m.event_type = 'service_redo_reminder'
+             AND m.reference_id::text = item->>'id'
+         )
+       ORDER BY a.updated_at
+       LIMIT $1`,
+      [limit]
+    )
+    return rows
+  },
+
+  // A repeat visit makes an earlier pending "time to redo" for the same client and
+  // service pointless - cancel it. Matched on the preview text, which carries the
+  // service name (variables only hold the positional Meta values).
+  async cancelPendingRedoForClientService(salonId: string, clientId: string, messagePreview: string, exceptReferenceId: string): Promise<number> {
+    const { rowCount } = await pool.query(
+      `UPDATE wa_scheduled_messages
+       SET status = 'CANCELLED', cancelled_at = NOW(), updated_at = NOW()
+       WHERE salon_id = $1 AND client_id = $2 AND event_type = 'service_redo_reminder'
+         AND status = 'SCHEDULED' AND message_preview = $3 AND reference_id::text <> $4`,
+      [salonId, clientId, messagePreview, exceptReferenceId]
+    )
+    return rowCount ?? 0
+  },
+
   // Group B's overnight cleanup — deletes a preview event type's still-
   // SCHEDULED rows whose reference is no longer in today's candidate list
   // (the underlying condition resolved: balance paid, client came back).

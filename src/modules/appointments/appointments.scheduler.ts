@@ -9,8 +9,14 @@
 import logger from '../../config/logger'
 import { appointmentsRepository } from './appointments.repository'
 import { clientPackagesService } from '../client-packages/client-packages.service'
+import { appointmentsService } from './appointments.service'
 
 let schedulerInterval: NodeJS.Timeout | null = null
+
+// A "we missed you" message only makes sense soon after the visit. If the sweep
+// was down for a while, appointments it catches up on older than this are still
+// flipped to no-show but the client is not messaged.
+const NOTIFY_WITHIN_MS = 24 * 60 * 60 * 1000
 
 async function runNoShowSweep(): Promise<void> {
   const flipped = await appointmentsRepository.markNoShowBatch()
@@ -30,6 +36,12 @@ async function runNoShowSweep(): Promise<void> {
     } catch (err: any) {
       logger.error('[NO-SHOW-SCHEDULER] package no-show handling failed', { appointmentId: id, message: err?.message })
     }
+  }
+
+  // Tell the client they missed it (WhatsApp / SMS / email per the salon's settings).
+  for (const { id, ends_at } of flipped) {
+    if (Date.now() - new Date(ends_at).getTime() > NOTIFY_WITHIN_MS) continue
+    await appointmentsService.notifyNoShow(id)
   }
 }
 

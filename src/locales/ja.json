@@ -1,0 +1,462 @@
+{
+  "receipt": {
+    "salonFallback": "サロン",
+    "notBilled": "未請求",
+    "walkIn": "飛び込み",
+    "phoneAbbr": "電話：{{phone}}",
+    "status": {
+      "paid": "支払い済み",
+      "partial": "一部支払い",
+      "unpaid": "未払い",
+      "cancelled": "キャンセル"
+    },
+    "type": {
+      "service": "サービス",
+      "product": "商品",
+      "membership": "会員プラン",
+      "package": "パッケージ",
+      "giftCard": "ギフトカード",
+      "quick": "クイック販売"
+    },
+    "method": {
+      "cash": "現金",
+      "card": "カード",
+      "upi": "UPI",
+      "ewallet": "e ウォレット",
+      "giftCard": "ギフトカード",
+      "package": "パッケージ",
+      "membership": "会員プラン",
+      "posMachine": "決済端末",
+      "other": "その他"
+    },
+    "tax": "税",
+    "incl": "（税込）",
+    "totalTax": "税合計",
+    "itemsTotal": "明細合計",
+    "itemDiscount": "明細割引",
+    "subtotal": "小計",
+    "coupon": "クーポン",
+    "couponWith": "クーポン（{{code}}）",
+    "packageCovered": "パッケージ適用",
+    "membershipDiscount": "会員割引",
+    "extraCharges": "追加料金",
+    "billDiscount": "請求割引",
+    "referralDiscount": "紹介割引",
+    "rewardPointsUsed": "利用したリワードポイント",
+    "membershipWalletUsed": "利用した会員ウォレット",
+    "ewalletUsed": "利用した e ウォレット",
+    "referralCreditUsed": "利用した紹介クレジット",
+    "roundOff": "端数調整",
+    "grandTotal": "合計",
+    "amountToPay": "お支払い金額",
+    "staffTipIncluded": "スタッフへのチップ（上記に含む）",
+    "staffTipIncl": "スタッフへのチップ（込）",
+    "paidVia": "{{method}} で支払い",
+    "totalAmountPaid": "お支払い総額",
+    "amountPaid": "お支払い金額",
+    "totalPaid": "支払い合計",
+    "paid": "支払い済み",
+    "balanceDue": "残高",
+    "invoice": "請求書",
+    "taxInvoice": "税務請求書",
+    "invoiceNo": "請求書番号",
+    "bookingNo": "予約番号 #",
+    "date": "日付",
+    "time": "時間",
+    "billTo": "請求先",
+    "name": "氏名",
+    "client": "顧客",
+    "phone": "電話",
+    "email": "メール",
+    "membership": "会員プラン",
+    "yourReferralCode": "あなたの紹介コード",
+    "referralEarnings": "紹介報酬",
+    "apptDetails": "予約詳細",
+    "staff": "スタッフ",
+    "staffName": "スタッフ：{{name}}",
+    "paymentMethod": "支払い方法",
+    "bookingStatus": "予約ステータス",
+    "paymentStatus": "支払いステータス",
+    "servicesItems": "サービスと明細",
+    "col": {
+      "itemName": "品名",
+      "type": "種別",
+      "staff": "スタッフ",
+      "time": "時間",
+      "qty": "数量",
+      "rate": "単価",
+      "disc": "割引",
+      "tax": "税",
+      "amount": "金額",
+      "item": "項目"
+    },
+    "noItems": "明細なし",
+    "notes": "メモ",
+    "activePackages": "有効なパッケージ",
+    "sessionsLeft": "{{name}} — 残り {{remaining}}/{{total}} 回",
+    "activeMemberships": "有効な会員プラン",
+    "expires": "有効期限：{{date}}",
+    "paymentSummary": "お支払いの概要",
+    "thankYouFor": "{{name}} をご利用いただきありがとうございます！",
+    "lookForward": "またのご来店をお待ちしております。",
+    "computerGenerated": "これはコンピューターで作成された領収書です。",
+    "noSignature": "署名は不要です。",
+    "poweredBy": "Salonox 提供",
+    "total": "合計",
+    "thanks": "ありがとうございました！",
+    "titleInvoice": "請求書 {{no}} — {{name}}",
+    "titleReceipt": "領収書 {{no}} — {{name}}",
+    "membershipLoyalty": "会員ロイヤルティ",
+    "invoiceDate": "請求日",
+    "staffAlert": "スタッフへの通知",
+    "tipIncl": "チップ（込）"
+  },
+  "email": {
+    "automatedNotification": "自動通知です。",
+    "common": {
+      "hiName": "{{name}} 様",
+      "hiPlain": "こんにちは。",
+      "hiBold": "<strong>{{name}}</strong> 様",
+      "rights": "© {{year}} SalonOx. All rights reserved.",
+      "footerAuto": "© {{year}} SalonOx. 自動通知です。",
+      "ref": "参照：{{ref}}"
+    },
+    "label": {
+      "client": "顧客",
+      "service": "サービス",
+      "date": "日付",
+      "time": "時間",
+      "name": "氏名",
+      "email": "メール",
+      "phone": "電話",
+      "method": "方法",
+      "salon": "サロン",
+      "period": "期間",
+      "netPay": "差引支給額"
+    },
+    "otp": {
+      "subject": "メール認証コード",
+      "title": "メール認証",
+      "intro": "認証コードは次のとおりです：",
+      "expiry": "このコードは {{minutes}} 分で無効になります。"
+    },
+    "resetOtp": {
+      "subject": "パスワード再設定のリクエスト",
+      "title": "パスワード再設定の認証",
+      "intro": "パスワード再設定のリクエストを受け付けました。認証コードは次のとおりです：",
+      "expiry": "このコードは {{minutes}} 分で無効になります。パスワードの再設定をリクエストしていない場合は、このメールを無視してください。"
+    },
+    "resetDone": {
+      "subject": "SalonOx のパスワードを再設定しました",
+      "title": "パスワード再設定の確認",
+      "body": "<strong>SalonOx</strong> アカウントのパスワードを再設定しました。",
+      "details": "再設定の詳細",
+      "loginNote": "新しいパスワードで SalonOx アカウントにログインできます。",
+      "loginButton": "今すぐログイン",
+      "securityTitle": "セキュリティに関するお知らせ",
+      "securityBody": "このパスワード再設定に心当たりがない場合は、アカウントが危険にさらされている可能性があります。直ちにサポートチームへご連絡ください。",
+      "support": "サポート：",
+      "footerAuto": "これは自動送信のセキュリティ通知です。このメールには返信しないでください。"
+    },
+    "welcome": {
+      "subject": "SalonOx へようこそ、{{name}} 様！🎉",
+      "pageTitle": "SalonOx へようこそ",
+      "tagline": "サロン管理プラットフォーム",
+      "banner": "ようこそ、{{name}} 様！",
+      "bannerSub": "サロンアカウントの準備ができました。",
+      "intro": "おめでとうございます！<strong>{{salon}}</strong> の SalonOx アカウントを作成しました。ご利用を心より歓迎します。",
+      "about": "SalonOx は、予約、スタッフ、顧客の管理をまとめて行い、サロン経営の成長を支援します。",
+      "stepsTitle": "3 つの簡単なステップで始めましょう：",
+      "step1": "サロンプロフィールを完成させる",
+      "step1Body": "サロンの情報、ロゴ、営業時間を追加します。",
+      "step2": "サービスとスタッフを追加する",
+      "step2Body": "サービスメニューを設定し、チームメンバーを招待します。",
+      "step3": "予約の受付を開始する",
+      "step3Body": "予約リンクを共有すると、予約が入り始めます。",
+      "footer": "SalonOx でアカウントを作成されたため、このメールをお送りしています。"
+    },
+    "newAppointment": {
+      "subject": "新規予約 — {{name}}",
+      "title": "新規予約",
+      "intro": "新しい予約が入りました。詳細は次のとおりです：",
+      "details": "予約詳細"
+    },
+    "cancelledOwner": {
+      "subject": "予約キャンセル — {{name}}",
+      "title": "予約キャンセル",
+      "intro": "予約がキャンセルされました。詳細は次のとおりです："
+    },
+    "newPayment": {
+      "subject": "入金を受領 — {{amount}}",
+      "title": "入金を受領",
+      "intro": "<strong>{{client}}</strong> 様の入金を記録しました。",
+      "invoice": "請求書：{{id}}"
+    },
+    "newClient": {
+      "subject": "新規顧客を追加 — {{name}}",
+      "title": "新規顧客を追加",
+      "intro": "<strong>{{salon}}</strong> に新しい顧客が追加されました。"
+    },
+    "staffLogin": {
+      "subject": "スタッフログイン通知 — {{name}} がログインしました",
+      "title": "スタッフログイン通知",
+      "intro": "チームメンバーが <strong>{{salon}}</strong> にログインしました。",
+      "note": "このログインに心当たりがない場合は、チームのアクセス権限を確認してください。"
+    },
+    "deactivated": {
+      "subject": "SalonOx アカウントが無効化されました",
+      "title": "アカウント無効化",
+      "body": "{{greeting}} アカウントが無効化されています。Salonox チームまでご連絡ください。",
+      "note": "アカウントが再有効化されるまでサインインできません。サポートが必要な場合は Salonox チームまでお問い合わせください。"
+    },
+    "staffInvite": {
+      "subject": "{{salon}} への参加に招待されました",
+      "title": "スタッフ招待",
+      "body": "プラットフォーム上の <strong>{{salon}}</strong> にスタッフとして招待されました。下のボタンをクリックしてアカウントを設定し、始めましょう。",
+      "expiry": "この招待リンクは <strong>72 時間</strong>で無効になります。",
+      "button": "招待を承諾",
+      "fallback": "ボタンが動作しない場合は、次のリンクをコピーしてブラウザに貼り付けてください：",
+      "ignore": "この招待に心当たりがない場合は、このメールを無視していただいて問題ありません。"
+    },
+    "dailySummary": {
+      "subject": "サロン日次現金サマリー - {{date}}",
+      "pageTitle": "日次サマリーレポート",
+      "title": "日次レジサマリーレポート",
+      "intro": "本日のレジ営業の財務サマリーです：",
+      "opening": "開始残高",
+      "cashRevenue": "現金売上",
+      "cashExpense": "現金支出",
+      "closing": "終了残高",
+      "inStore": "店内現金",
+      "reconciliation": "照合金額",
+      "upi": "UPI 支払い",
+      "card": "カード支払い",
+      "remarks": "締めメモ",
+      "footer": "© {{year}} SalonOx. 自動日次サマリーレポート。"
+    },
+    "salary": {
+      "subject": "給与明細 — {{salon}}",
+      "title": "給与の支払い処理が完了しました",
+      "body": "<strong>{{name}}</strong> 様、下記期間の給与を処理しました。明細付きの領収書を PDF で添付しています。",
+      "periodRange": "{{from}} ～ {{to}}"
+    }
+  },
+  "notify": {
+    "walkIn": "飛び込み",
+    "service": "サービス",
+    "invoiceNotGenerated": "請求書は未作成です",
+    "status": {
+      "booked": "予約済み",
+      "paid": "支払い済み",
+      "partial": "一部支払い",
+      "cancelled": "キャンセル",
+      "no-show": "無断キャンセル",
+      "deleted": "削除済み",
+      "pending": "保留中",
+      "completed": "完了",
+      "in_progress": "進行中"
+    },
+    "yourTurn": {
+      "title": "順番です",
+      "body": "{{client}} 様の {{services}} の準備ができました"
+    },
+    "newAppointment": {
+      "title": "新規予約"
+    },
+    "appointmentUpdated": {
+      "title": "予約が更新されました"
+    },
+    "appointmentCancelled": {
+      "title": "予約キャンセル"
+    },
+    "appointmentLine": "{{client}} — {{date}} {{time}}",
+    "paymentComplete": {
+      "title": "支払い完了"
+    },
+    "newSale": {
+      "title": "新しい販売を作成しました"
+    },
+    "newClient": {
+      "title": "新規顧客を追加"
+    },
+    "attendance": {
+      "staffFallback": "スタッフ",
+      "checkedIn": {
+        "title": "スタッフが出勤",
+        "body": "{{name}} が {{day}} {{clock}} に出勤しました。"
+      },
+      "checkedOut": {
+        "title": "スタッフが退勤",
+        "body": "{{name}} が {{day}} {{clock}} に退勤しました。"
+      },
+      "breakStart": {
+        "title": "スタッフが休憩中",
+        "body": "{{name}} が {{day}} {{clock}} に休憩を開始しました（{{until}} まで）。{{note}}"
+      },
+      "breakEnd": {
+        "title": "スタッフが休憩から復帰",
+        "body": "{{name}} が {{day}} {{clock}} に休憩から戻りました。"
+      },
+      "breakNote": " メモ：{{note}}",
+      "reminder": {
+        "title": "まだ出勤していません（{{date}}）",
+        "body": "シフトは {{time}} に始まりました。SalonOX を開いて出勤してください。"
+      }
+    },
+    "inventory": {
+      "outOfStock": {
+        "title": "商品が在庫切れ",
+        "body": "{{name}} は在庫切れです（残り 0）。"
+      },
+      "low": {
+        "title": "在庫僅少のお知らせ",
+        "body": "{{name}} の在庫が少なくなっています — {{remaining}}、アラート基準は {{threshold}} です。"
+      },
+      "left": "残り {{amount}}",
+      "leftBottle": "残り {{amount}}（約 1 本）",
+      "leftBottles": "残り {{amount}}（約 {{n}} 本）",
+      "expired": {
+        "title": "商品の期限切れ",
+        "body": "{{name}} の期限が切れています（期限：{{date}}）。"
+      },
+      "expiring": {
+        "title": "商品の期限が近づいています"
+      },
+      "expiringOne": "{{name}} は {{date}} に期限を迎えます（残り 1 日）。",
+      "expiringMany": "{{name}} は {{date}} に期限を迎えます（残り {{days}} 日）。"
+    },
+    "whatsapp": {
+      "formNotSent": {
+        "title": "予約フォームを送信できませんでした",
+        "body": "{{phone}} に予約フォームを自動送信できませんでした。チャットを開いて手動で送信してください。"
+      },
+      "bookingRequest": {
+        "title": "予約リクエスト：{{name}}"
+      },
+      "message": {
+        "title": "WhatsApp：{{sender}}"
+      }
+    },
+    "spotlight": {
+      "title": "新機能を追加しました"
+    }
+  },
+  "messages": {
+    "wa": {
+      "client_welcome": "こんにちは、{{customer_name}}様。\n{{salon_name}}へようこそ！\nご縁をいただけてうれしいです。\nあなたの紹介コード：{{referral_code}}\n{{salon_name}}をお選びいただきありがとうございます — 心より感謝しております！",
+      "package_purchased": "こんにちは、{{customer_name}}様。\n{{package_name}}をご購入いただきありがとうございます！\n\nパッケージ：{{package_name}}\nサービス：{{services}}\n回数：{{total_sessions}}\n有効期限：{{expiry_date}}まで\n金額：¤{{package_value}}\n請求書：{{invoice_number}}\n\nまたのご来店をお待ちしております。次回のご予約をぜひ！",
+      "membership_purchased": "こんにちは、{{customer_name}}様。\n\n🎉 {{membership_name}}が有効になりました！\n\nメンバーシップ：{{membership_name}}\n特典：{{benefit}}\n開始日：{{start_date}}\n有効期限：{{expiry_date}}まで\nメンバーシップ料金：¤{{membership_price}}\n請求書：{{invoice_number}}\n\n今後のご来店で、会員限定の特典をお楽しみください！",
+      "bill_receipt": "こんにちは、{{customer_name}}様。\n{{salon_name}}にご来店いただきありがとうございます。\nご満足いただけましたら幸いです！\nお会計の明細をこのメッセージに添付しています。\n{{items}}\n{{feedback_line}}\n{{salon_name}}をお選びいただきありがとうございます — 心より感謝しております！",
+      "appointment_confirmation": "こんにちは、{{customer_name}}様。\n{{salon_name}}でのご予約が確定しました。\n日付：{{appointment_date}}\n時間：{{appointment_time}}\nサービス：{{service_name}}\n担当：{{staff_name}}\nお会いできるのを楽しみにしています！",
+      "appointment_rescheduled": "こんにちは、{{customer_name}}様。\n{{salon_name}}でのご予約が変更されました。\n変更前：{{old_date}} {{old_time}}\n変更後：{{new_date}} {{new_time}}\nサービス：{{service_name}}\n担当：{{staff_name}}\nお会いできるのを楽しみにしています！",
+      "appointment_cancelled": "こんにちは、{{customer_name}}様。\n{{salon_name}}でのご予約がキャンセルされました。\n日付：{{appointment_date}}\n時間：{{appointment_time}}\nサービス：{{service_name}}\n別のご予約をご希望の場合は、喜んでお手伝いします。",
+      "appointment_no_show": "こんにちは、{{customer_name}}様。\n{{salon_name}}のご予約でお会いできませんでした。\n日付：{{appointment_date}}\n時間：{{appointment_time}}\nサービス：{{service_name}}\nそれでもご来店をご希望の場合は、このメッセージにご返信ください。喜んで日程を変更いたします。",
+      "payment_received": "こんにちは、{{customer_name}}様。\n{{salon_name}}での¤{{amount}}のお会計のお支払いが完了しました。\nご予約：{{appointment_date}}\n時間：{{appointment_time}}\n{{salon_name}}をお選びいただきありがとうございます — 心より感謝しております！",
+      "package_expiring_7d": "こんにちは、{{customer_name}}様。\n{{package_name}}の有効期限があと7日です。\n有効期限：{{expiry_date}}\n残り回数：{{remaining_sessions}}\n残りの回数をお見逃しなく！\n今日、次回のご予約をどうぞ。",
+      "package_expiring_24h": "こんにちは、{{customer_name}}様。\n{{package_name}}は明日で期限が切れます。\n残り回数：{{remaining_sessions}}\n有効期限：{{expiry_date}}\n残りの回数を使う時間はまだあります。\n今すぐご予約ください。",
+      "membership_expiring_7d": "こんにちは、{{customer_name}}様。\n{{membership_name}}メンバーシップの有効期限があと7日です。\n有効期限：{{expiry_date}}\n残高：¤{{remaining_balance}}\n期限が切れる前に、残りの会員特典をお役立てください。",
+      "membership_expiring_24h": "こんにちは、{{customer_name}}様。\n{{membership_name}}メンバーシップは明日で期限が切れます。\n残高：¤{{remaining_balance}}\n有効期限：{{expiry_date}}\nメンバーシップの残高を使い切れずに失効させないでください。",
+      "package_session_used": "こんにちは、{{customer_name}}様。\n{{package_name}}から{{service_name}}のサービスを利用しました。\n利用回数：1\n残り回数：{{remaining_sessions}}\n残りのサービス：{{remaining_services_breakdown}}\n{{salon_name}}にご来店いただきありがとうございます — 心より感謝しております！",
+      "membership_session_used": "こんにちは、{{customer_name}}様。\nメンバーシップから{{service_name}}のサービスを利用しました。\n利用金額：¤{{amount_used}}\n残高：¤{{remaining_balance}}\n{{salon_name}}にご来店いただきありがとうございます — 心より感謝しております！",
+      "package_appointment_reminder_24h": "こんにちは、{{customer_name}}様。\n明日、{{salon_name}}でのご予約がございます。\n日付：{{appointment_date}}\n時間：{{appointment_time}}\nサービス：{{service_name}}\nこのご予約では{{package_name}}から1回分を使用します。\n明日お待ちしております！",
+      "service_reminder_24h": "こんにちは、{{customer_name}}様。\n{{salon_name}}でのご予約が近づいています。\n日付：{{appointment_date}}\n時間：{{appointment_time}}\nサービス：{{service_name}}\n担当：{{staff_name}}\nお会いできるのを楽しみにしています！",
+      "reward_points_earned": "こんにちは、{{customer_name}}様。\n先日の{{salon_name}}へのご来店で、リワードポイントを{{points_earned}}ポイント獲得しました。\n獲得ポイント：{{points_earned}}\n合計ポイント：{{total_points}}\nご来店を重ねて、特典をためましょう！",
+      "referral_reward": "こんにちは、{{customer_name}}様。\nうれしいお知らせです！ご紹介いただいた{{referred_customer_name}}様が{{salon_name}}で対象のご来店を完了しました。\n紹介特典：{{reward}}\nリワードポイント合計：{{total_points}}\nご紹介ありがとうございます！",
+      "ewallet_used": "こんにちは、{{customer_name}}様。\n{{salon_name}}でのお支払いにeウォレットを利用しました。\n利用金額：¤{{amount_used}}\n残高：¤{{remaining_balance}}\n{{salon_name}}をお選びいただきありがとうございます — 心より感謝しております！",
+      "referral_credit_used": "こんにちは、{{customer_name}}様。\n{{salon_name}}でのお支払いに紹介残高を利用しました。\n利用金額：¤{{amount_used}}\n紹介残高：¤{{remaining_balance}}\n{{salon_name}}をお選びいただきありがとうございます — 心より感謝しております！",
+      "reward_points_used": "こんにちは、{{customer_name}}様。\n{{salon_name}}でのお支払いにリワードポイントを利用しました。\n利用ポイント：{{points_used}}\n残りポイント：{{remaining_points}}\n{{salon_name}}をお選びいただきありがとうございます — 心より感謝しております！",
+      "birthday_wishes": "こんにちは、{{customer_name}}様。\n🎉 {{salon_name}}スタッフ一同より、お誕生日おめでとうございます！\nすてきな一日をお過ごしください — お祝いのお手伝いができればうれしいです。ぜひお越しください！",
+      "anniversary_wishes": "こんにちは、{{customer_name}}様。\n🎉 {{salon_name}}スタッフ一同より、記念日おめでとうございます！\nこれからも幸せな年月が続きますように — お祝いのお手伝いができればうれしいです。ぜひお越しください！",
+      "service_redo_reminder": "こんにちは、{{customer_name}}様。\n{{last_visit_date}}に{{salon_name}}で{{service_name}}をお受けになってから、しばらく経ちました。\nそろそろ次回の頃かもしれません。このメッセージにご返信いただければ、ご予約をお手伝いします。",
+      "cash_counter_opened": "*現金カウンター開始 — {{salon_name}}*\n\n現金カウンターが開かれ、本日の取引を開始できます。\n\n日付：{{opening_date}}\n時間：{{opening_time}}\n開始時の現金：{{opening_amount}}\n\n本日も良い営業日になりますように！",
+      "cash_counter_closed": "*現金カウンター終了 — {{salon_name}}*\n\n本日の現金カウンターが終了しました。今回の回収サマリーです。\n\n日付：{{closing_date}}\n時間：{{closing_time}}\n\n*回収サマリー*\n{{collection_breakdown}}\n━━━━━━━━━━━━━━\n*回収合計：{{total_collection}}*\n経費：{{expenses}}\n店内の現金：{{in_store_cash}}\n\n本日の現金カウンターの照合をありがとうございました。"
+    },
+    "sms": {
+      "client_welcome": "こんにちは、{{customer_name}}様。{{salon_name}}へようこそ！あなたの紹介コードは{{referral_code}}です。",
+      "package_purchased": "こんにちは、{{customer_name}}様。{{package_name}}（{{total_sessions}}回、{{expiry_date}}まで有効）をご購入いただきありがとうございます。請求書：{{invoice_number}}。",
+      "membership_purchased": "こんにちは、{{customer_name}}様。{{membership_name}}が有効になりました。{{expiry_date}}まで有効です。請求書：{{invoice_number}}。",
+      "bill_receipt": "こんにちは、{{customer_name}}様。{{salon_name}}にご来店いただきありがとうございます！お会計は完了しています。{{feedback_line}}",
+      "appointment_confirmation": "こんにちは、{{customer_name}}様。{{salon_name}}でのご予約が確定しました。日付：{{appointment_date}}、時間：{{appointment_time}}、サービス：{{service_name}}。",
+      "appointment_rescheduled": "こんにちは、{{customer_name}}様。{{salon_name}}のご予約が{{new_date}} {{new_time}}に変更されました（変更前：{{old_date}} {{old_time}}）。",
+      "appointment_cancelled": "こんにちは、{{customer_name}}様。{{salon_name}}の{{appointment_date}} {{appointment_time}}のご予約がキャンセルされました。",
+      "appointment_no_show": "こんにちは、{{customer_name}}様。{{salon_name}}の{{appointment_date}} {{appointment_time}}のご予約でお会いできませんでした。日程変更はご返信ください。",
+      "payment_received": "こんにちは、{{customer_name}}様。{{salon_name}}での¤{{amount}}のお会計のお支払いが完了しました。ありがとうございました！",
+      "package_expiring_7d": "こんにちは、{{customer_name}}様。{{package_name}}は{{expiry_date}}に期限が切れます（残り{{remaining_sessions}}回）。今すぐご予約を！",
+      "package_expiring_24h": "こんにちは、{{customer_name}}様。{{package_name}}は明日で期限が切れます（残り{{remaining_sessions}}回）。今すぐご予約を！",
+      "membership_expiring_7d": "こんにちは、{{customer_name}}様。{{membership_name}}メンバーシップは{{expiry_date}}に期限が切れます（残高¤{{remaining_balance}}）。",
+      "membership_expiring_24h": "こんにちは、{{customer_name}}様。{{membership_name}}メンバーシップは明日で期限が切れます（残高¤{{remaining_balance}}）。",
+      "package_session_used": "こんにちは、{{customer_name}}様。{{package_name}}の{{service_name}}を1回利用しました。残り{{remaining_sessions}}回です。",
+      "membership_session_used": "こんにちは、{{customer_name}}様。{{service_name}}のため、メンバーシップから¤{{amount_used}}を利用しました。残高：¤{{remaining_balance}}。",
+      "package_appointment_reminder_24h": "リマインダー：{{customer_name}}様、{{salon_name}}での{{service_name}}のご予約は明日{{appointment_time}}です（{{package_name}}から1回使用）。",
+      "service_reminder_24h": "リマインダー：{{customer_name}}様、{{salon_name}}での{{service_name}}のご予約は{{appointment_date}}の{{appointment_time}}です。",
+      "reward_points_earned": "こんにちは、{{customer_name}}様。{{salon_name}}でリワードポイントを{{points_earned}}ポイント獲得しました！合計：{{total_points}}。",
+      "referral_reward": "こんにちは、{{customer_name}}様。{{referred_customer_name}}様の{{salon_name}}へのご来店により、紹介特典を獲得しました！特典：{{reward}}。",
+      "ewallet_used": "こんにちは、{{customer_name}}様。{{salon_name}}でeウォレットから¤{{amount_used}}を利用しました。残高：¤{{remaining_balance}}。",
+      "referral_credit_used": "こんにちは、{{customer_name}}様。{{salon_name}}で紹介残高から¤{{amount_used}}を利用しました。残高：¤{{remaining_balance}}。",
+      "reward_points_used": "こんにちは、{{customer_name}}様。{{salon_name}}でリワードポイントを{{points_used}}ポイント利用しました。残り：{{remaining_points}}。",
+      "birthday_wishes": "{{customer_name}}様、お誕生日おめでとうございます！{{salon_name}}スタッフ一同、すてきな一日をお祈りしています。ぜひお祝いにお越しください！",
+      "anniversary_wishes": "{{customer_name}}様、記念日おめでとうございます！{{salon_name}}スタッフ一同、これからも幸せな年月が続くことをお祈りしています。",
+      "service_redo_reminder": "こんにちは、{{customer_name}}様。{{salon_name}}で{{service_name}}をお受けになってから（{{last_visit_date}}）しばらく経ちました。そろそろ次回はいかがですか？ご返信でご予約いただけます。",
+      "cash_counter_opened": "現金カウンター開始 - {{salon_name}}。{{opening_date}} {{opening_time}}。開始時の現金：{{opening_amount}}。",
+      "cash_counter_closed": "現金カウンター終了 - {{salon_name}}。{{closing_date}} {{closing_time}}。{{collection_breakdown}}。合計：{{total_collection}}。経費：{{expenses}}。店内の現金：{{in_store_cash}}。"
+    },
+    "emailSubject": {
+      "client_welcome": "{{salon_name}}へようこそ！",
+      "package_purchased": "{{package_name}}のご購入を確認しました",
+      "membership_purchased": "{{membership_name}}メンバーシップが有効になりました",
+      "bill_receipt": "{{salon_name}}にご来店いただきありがとうございます",
+      "appointment_confirmation": "{{salon_name}}でのご予約が確定しました — {{appointment_date}}",
+      "appointment_rescheduled": "{{salon_name}}でのご予約が変更されました",
+      "appointment_cancelled": "ご予約がキャンセルされました — {{salon_name}}",
+      "appointment_no_show": "{{salon_name}}でお会いできませんでした",
+      "payment_received": "ご予約の領収書 — {{salon_name}}",
+      "package_expiring_7d": "{{package_name}}の有効期限があと7日です",
+      "package_expiring_24h": "{{package_name}}は明日で期限が切れます",
+      "membership_expiring_7d": "{{membership_name}}メンバーシップの有効期限があと7日です",
+      "membership_expiring_24h": "{{membership_name}}メンバーシップは明日で期限が切れます",
+      "package_session_used": "回数を利用しました — {{package_name}}",
+      "membership_session_used": "{{salon_name}}でメンバーシップ残高を利用しました",
+      "package_appointment_reminder_24h": "リマインダー：明日の{{salon_name}}でのご予約",
+      "service_reminder_24h": "リマインダー：{{salon_name}}でのご予約が近づいています",
+      "reward_points_earned": "リワードポイントを{{points_earned}}ポイント獲得しました！",
+      "referral_reward": "紹介特典が付与されました",
+      "ewallet_used": "{{salon_name}}でeウォレットを利用しました",
+      "referral_credit_used": "{{salon_name}}で紹介残高を利用しました",
+      "reward_points_used": "{{salon_name}}でリワードポイントを利用しました",
+      "birthday_wishes": "{{salon_name}}よりお誕生日おめでとうございます！",
+      "anniversary_wishes": "{{salon_name}}より記念日おめでとうございます！",
+      "service_redo_reminder": "{{salon_name}}で次の{{service_name}}はいかがですか？",
+      "cash_counter_opened": "現金カウンター開始 — {{salon_name}}",
+      "cash_counter_closed": "現金カウンター終了 — {{salon_name}}"
+    },
+    "emailBody": {
+      "client_welcome": "こんにちは、{{customer_name}}様。\n\n{{salon_name}}へようこそ！ご縁をいただけてうれしいです。\n\nあなたの紹介コード：{{referral_code}}\n\n私たちをお選びいただきありがとうございます — 近いうちにお会いできるのを楽しみにしています。",
+      "package_purchased": "こんにちは、{{customer_name}}様。\n\n{{package_name}}をご購入いただきありがとうございます！\n\nパッケージ：{{package_name}}\nサービス：{{services}}\n回数：{{total_sessions}}\n有効期限：{{expiry_date}}まで\n金額：¤{{package_value}}\n請求書：{{invoice_number}}\n\nまたのご来店をお待ちしております。次回のご予約をぜひ！",
+      "membership_purchased": "こんにちは、{{customer_name}}様。\n\n{{membership_name}}が有効になりました！\n\nメンバーシップ：{{membership_name}}\n特典：{{benefit}}\n開始日：{{start_date}}\n有効期限：{{expiry_date}}まで\nメンバーシップ料金：¤{{membership_price}}\n請求書：{{invoice_number}}\n\n今後のご来店で、会員限定の特典をお楽しみください！",
+      "bill_receipt": "こんにちは、{{customer_name}}様。\n\n{{salon_name}}にご来店いただきありがとうございます。ご満足いただけましたら幸いです！お会計の明細をこのメールに添付しています。\n\n{{items}}\n\n{{feedback_line}}\n\n{{salon_name}}をお選びいただきありがとうございます — 心より感謝しております！",
+      "appointment_confirmation": "こんにちは、{{customer_name}}様。\n\nご予約が確定しました。\n\nご予約内容：\nサロン：{{salon_name}}\n日付：{{appointment_date}}\n時間：{{appointment_time}}\nサービス：{{service_name}}\n担当：{{staff_name}}\n予約ID：{{booking_id}}\n\nお支払い：\n合計：{{appointment_amount}}\n支払い済み：{{paid_amount}}\n店頭でのお支払い：{{remaining_amount}}\n\nアクセス：\n{{salon_address}}\n{{google_maps_link}}\n\n変更が必要な場合は：\n{{manage_booking_link}}\n\n{{cancellation_policy}}\n\nお会いできるのを楽しみにしています！",
+      "appointment_rescheduled": "こんにちは、{{customer_name}}様。\n\n{{salon_name}}でのご予約が変更されました。\n\n変更前：{{old_date}} {{old_time}}\n変更後：{{new_date}} {{new_time}}\nサービス：{{service_name}}\n担当：{{staff_name}}\n\nお会いできるのを楽しみにしています！",
+      "appointment_cancelled": "こんにちは、{{customer_name}}様。\n\n{{salon_name}}でのご予約がキャンセルされました。\n\n日付：{{appointment_date}}\n時間：{{appointment_time}}\nサービス：{{service_name}}\n\n再予約をご希望の場合やご不明な点がございましたら、お問い合わせください。",
+      "appointment_no_show": "こんにちは、{{customer_name}}様。\n\n{{salon_name}}のご予約でお会いできませんでした。\n\n日付：{{appointment_date}}\n時間：{{appointment_time}}\nサービス：{{service_name}}\n\nそれでもご来店をご希望の場合は、このメールにご返信いただくか、お問い合わせください。喜んで日程を変更いたします。",
+      "payment_received": "こんにちは、{{customer_name}}様。\n\n{{salon_name}}にご来店いただきありがとうございます。領収内容をお送りします：\n\nお支払い金額：¤{{amount}}\nご予約：{{appointment_date}} {{appointment_time}}\n\nまたのご来店をお待ちしております！",
+      "package_expiring_7d": "こんにちは、{{customer_name}}様。\n\n{{package_name}}の有効期限があと7日です。\n\n有効期限：{{expiry_date}}\n残り回数：{{remaining_sessions}}\n\n残りの回数をお見逃しなく！今日、次回のご予約をどうぞ。",
+      "package_expiring_24h": "こんにちは、{{customer_name}}様。\n\n{{package_name}}は明日で期限が切れます。\n\n残り回数：{{remaining_sessions}}\n有効期限：{{expiry_date}}\n\n残りの回数を使う時間はまだあります。今すぐご予約ください。",
+      "membership_expiring_7d": "こんにちは、{{customer_name}}様。\n\n{{membership_name}}メンバーシップの有効期限があと7日です。\n\n有効期限：{{expiry_date}}\n残高：¤{{remaining_balance}}\n\n期限が切れる前に、残りの会員特典をお役立てください。",
+      "membership_expiring_24h": "こんにちは、{{customer_name}}様。\n\n{{membership_name}}メンバーシップは明日で期限が切れます。\n\n残高：¤{{remaining_balance}}\n有効期限：{{expiry_date}}\n\nメンバーシップの残高を使い切れずに失効させないでください。",
+      "package_session_used": "こんにちは、{{customer_name}}様。\n\n{{package_name}}から{{service_name}}のサービスを利用しました。\n\n残り回数：{{remaining_sessions}}\n残りのサービス：{{remaining_services_breakdown}}\n\n{{salon_name}}にご来店いただきありがとうございます — 心より感謝しております！",
+      "membership_session_used": "こんにちは、{{customer_name}}様。\n\nメンバーシップから{{service_name}}のサービスを利用しました。\n\n利用金額：¤{{amount_used}}\n残高：¤{{remaining_balance}}\n\n{{salon_name}}にご来店いただきありがとうございます — 心より感謝しております！",
+      "package_appointment_reminder_24h": "こんにちは、{{customer_name}}様。\n\n明日、{{salon_name}}でのご予約がございます。\n\n日付：{{appointment_date}}\n時間：{{appointment_time}}\nサービス：{{service_name}}\n\nこのご予約では{{package_name}}から1回分を使用します。明日お待ちしております！",
+      "service_reminder_24h": "こんにちは、{{customer_name}}様。\n\n{{salon_name}}でのご予約が近づいています。\n\n日付：{{appointment_date}}\n時間：{{appointment_time}}\nサービス：{{service_name}}\n担当：{{staff_name}}\n\nお会いできるのを楽しみにしています！",
+      "reward_points_earned": "こんにちは、{{customer_name}}様。\n\n先日の{{salon_name}}へのご来店で、リワードポイントを{{points_earned}}ポイント獲得しました。\n\n獲得ポイント：{{points_earned}}\n合計ポイント：{{total_points}}\n\nご来店を重ねて、特典をためましょう！",
+      "referral_reward": "こんにちは、{{customer_name}}様。\n\nうれしいお知らせです！ご紹介いただいた{{referred_customer_name}}様が{{salon_name}}で対象のご来店を完了しました。\n\n紹介特典：{{reward}}\nリワードポイント合計：{{total_points}}\n\nご紹介ありがとうございます！",
+      "ewallet_used": "こんにちは、{{customer_name}}様。\n\n{{salon_name}}でのお支払いにeウォレットを利用しました。\n\n利用金額：¤{{amount_used}}\n残高：¤{{remaining_balance}}\n\n{{salon_name}}をお選びいただきありがとうございます — 心より感謝しております！",
+      "referral_credit_used": "こんにちは、{{customer_name}}様。\n\n{{salon_name}}でのお支払いに紹介残高を利用しました。\n\n利用金額：¤{{amount_used}}\n紹介残高：¤{{remaining_balance}}\n\n{{salon_name}}をお選びいただきありがとうございます — 心より感謝しております！",
+      "reward_points_used": "こんにちは、{{customer_name}}様。\n\n{{salon_name}}でのお支払いにリワードポイントを利用しました。\n\n利用ポイント：{{points_used}}\n残りポイント：{{remaining_points}}\n\n{{salon_name}}をお選びいただきありがとうございます — 心より感謝しております！",
+      "birthday_wishes": "こんにちは、{{customer_name}}様。\n\n🎉 {{salon_name}}スタッフ一同より、お誕生日おめでとうございます！\n\nすてきな一日をお過ごしください — お祝いのお手伝いができればうれしいです。ぜひお越しください！",
+      "anniversary_wishes": "こんにちは、{{customer_name}}様。\n\n🎉 {{salon_name}}スタッフ一同より、記念日おめでとうございます！\n\nこれからも幸せな年月が続きますように — お祝いのお手伝いができればうれしいです。ぜひお越しください！",
+      "service_redo_reminder": "こんにちは、{{customer_name}}様。\n\n{{last_visit_date}}に{{salon_name}}で{{service_name}}をお受けになってから、しばらく経ちました。\n\nそろそろ次回の頃かもしれません。このメールにご返信いただくかお問い合わせいただければ、ご予約をお手伝いします。",
+      "cash_counter_opened": "現金カウンター開始 — {{salon_name}}\n\n現金カウンターが開かれ、本日の取引を開始できます。\n\n日付：{{opening_date}}\n時間：{{opening_time}}\n開始時の現金：{{opening_amount}}\n\n本日も良い営業日になりますように！",
+      "cash_counter_closed": "現金カウンター終了 — {{salon_name}}\n\n本日の現金カウンターが終了しました。今回の回収サマリーです。\n\n日付：{{closing_date}}\n時間：{{closing_time}}\n\n回収サマリー\n{{collection_breakdown}}\n\n回収合計：{{total_collection}}\n経費：{{expenses}}\n店内の現金：{{in_store_cash}}\n\n本日の現金カウンターの照合をありがとうございました。"
+    }
+  }
+}

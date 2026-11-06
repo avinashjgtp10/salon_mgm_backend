@@ -23,6 +23,13 @@ export const LANGUAGES: Record<string, LanguageDef> = {
     en: { nativeName: "English", dir: "ltr" },
     hi: { nativeName: "हिन्दी", dir: "ltr", dateLocale: "hi-IN" },
     ar: { nativeName: "العربية", dir: "rtl", dateLocale: "ar-AE" },
+    zh: { nativeName: "简体中文", dir: "ltr", dateLocale: "zh-CN" },
+    ko: { nativeName: "한국어", dir: "ltr", dateLocale: "ko-KR" },
+    ja: { nativeName: "日本語", dir: "ltr", dateLocale: "ja-JP" },
+    th: { nativeName: "ไทย", dir: "ltr", dateLocale: "th-TH-u-ca-gregory" },
+    id: { nativeName: "Bahasa Indonesia", dir: "ltr", dateLocale: "id-ID" },
+    vi: { nativeName: "Tiếng Việt", dir: "ltr", dateLocale: "vi-VN" },
+    ms: { nativeName: "Bahasa Melayu", dir: "ltr", dateLocale: "ms-MY" },
 };
 
 export const SUPPORTED_LANGUAGE_CODES = Object.keys(LANGUAGES);
