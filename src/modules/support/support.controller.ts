@@ -2,6 +2,8 @@ import { Request, Response, NextFunction } from "express";
 import { supportService } from "./support.service";
 import { botQuestionsService } from "../bot/bot-questions.service";
 import pool from "../../config/database";
+import { getSalonTimezone } from "../../config/salonTimezone";
+import { supportNotificationsRepo } from "./support.notifications";
 
 export const supportController = {
   // POST /api/v1/support — salon user submits a ticket
@@ -36,6 +38,62 @@ export const supportController = {
     } catch (err) { next(err); }
   },
 
+  // POST /api/v1/support/callback — salon user asks the support team to call them back. Stored as a ticket
+  // (category "Callback") for the caller's own salon, so it follows the normal ticket flow.
+  async requestCallback(req: Request & { user?: any }, res: Response, next: NextFunction) {
+    try {
+      const salon_id = req.user?.salonId;
+      const user_id  = req.user?.userId ?? req.user?.id;
+      if (!salon_id) {
+        return res.status(400).json({ success: false, error: { message: "No salon associated with this account" } });
+      }
+      const phone = String(req.body?.phone ?? "").trim();
+      if (!/^\+?[0-9][0-9 ()-]{5,19}$/.test(phone)) {
+        return res.status(400).json({ success: false, error: { message: "Enter a valid phone number" } });
+      }
+      const slot = String(req.body?.slot ?? "");
+      const now = Date.now();
+      let at: Date;
+      if (slot === "within_30_min") at = new Date(now + 30 * 60_000);
+      else if (slot === "within_1_hour") at = new Date(now + 60 * 60_000);
+      else if (slot === "later") {
+        at = new Date(String(req.body?.at ?? ""));
+        if (Number.isNaN(at.getTime())) {
+          return res.status(400).json({ success: false, error: { message: "Choose a date and time for the callback" } });
+        }
+        if (at.getTime() < now + 5 * 60_000) {
+          return res.status(400).json({ success: false, error: { message: "Choose a callback time in the future" } });
+        }
+        if (at.getTime() > now + 30 * 86_400_000) {
+          return res.status(400).json({ success: false, error: { message: "Choose a callback time within the next 30 days" } });
+        }
+      } else {
+        return res.status(400).json({ success: false, error: { message: "Choose when you would like the callback" } });
+      }
+      const module = String(req.body?.module ?? "").trim() || null;
+      if (module && module.length > 50) {
+        return res.status(400).json({ success: false, error: { message: "Module name is too long" } });
+      }
+      const note = String(req.body?.note ?? "").trim();
+      if (note.length > 1000) {
+        return res.status(400).json({ success: false, error: { message: "Note must be 1000 characters or fewer" } });
+      }
+
+      const when = slot === "within_30_min" ? "within 30 minutes"
+        : slot === "within_1_hour" ? "within 1 hour"
+        : `on ${at.toLocaleString("en-IN", { timeZone: await getSalonTimezone(salon_id), day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", hour12: true })}`;
+      const ticket = await supportService.submitTicket({
+        salon_id, user_id,
+        subject: "Callback request",
+        category: "Callback",
+        message: `Please call back ${when} on ${phone}.${module ? `\nModule: ${module}` : ""}${note ? `\n\nNote: ${note}` : ""}`,
+        priority: "medium",
+        callback: { phone, slot, at, module },
+      });
+      return res.status(201).json({ success: true, data: ticket });
+    } catch (err) { next(err); }
+  },
+
   // GET /api/v1/support/my — salon user views their own tickets
   async getMyTickets(req: Request & { user?: any }, res: Response, next: NextFunction) {
     try {
@@ -59,10 +117,68 @@ export const supportController = {
   // GET /api/v1/support — super admin lists ALL tickets
   async getAllTickets(req: Request, res: Response, next: NextFunction) {
     try {
-      const { status, priority, search } = req.query as Record<string, string>;
-      const tickets = await supportService.getAllTickets({ status, priority, search });
+      const { status, priority, search, kind } = req.query as Record<string, string>;
+      const tickets = await supportService.getAllTickets({ status, priority, search, kind: kind === "callback" || kind === "ticket" ? kind : undefined });
       return res.json({ success: true, data: tickets });
     } catch (err) { next(err); }
+  },
+
+  // GET /api/v1/support/assignees — super admin: who a ticket / callback can be assigned to
+  async listAssignees(_req: Request, res: Response, next: NextFunction) {
+    try { return res.json({ success: true, data: await supportService.listAssignees() }); } catch (err) { next(err); }
+  },
+
+  // PATCH /api/v1/support/:id/assign — super admin: assign (or unassign with assignee_id null)
+  async assign(req: Request, res: Response, next: NextFunction) {
+    try {
+      const raw = req.body?.assignee_id;
+      const ticket = await supportService.assign(String(req.params.id), raw ? String(raw) : null);
+      return res.json({ success: true, data: ticket });
+    } catch (err) { next(err); }
+  },
+
+  // POST /api/v1/support/:id/notes — super admin: add an internal note (never shown to the salon)
+  async addNote(req: Request & { user?: any }, res: Response, next: NextFunction) {
+    try {
+      const adminId = req.user?.userId ?? req.user?.id;
+      const author = (await supportService.listAssignees()).find((a: any) => a.id === adminId);
+      const ticket = await supportService.addNote(String(req.params.id), String(req.body?.note ?? ""), { id: adminId, name: author?.name ?? "Support" });
+      return res.status(201).json({ success: true, data: ticket });
+    } catch (err) { next(err); }
+  },
+
+  // POST /api/v1/support/admin — super admin raises a ticket for a salon
+  async createForSalon(req: Request & { user?: any }, res: Response, next: NextFunction) {
+    try {
+      const { salon_id, subject, category, message, priority = "medium" } = req.body ?? {};
+      if (!salon_id) return res.status(400).json({ success: false, error: { message: "Choose a salon" } });
+      if (!String(subject ?? "").trim() || !String(message ?? "").trim()) {
+        return res.status(400).json({ success: false, error: { message: "Subject and message are required" } });
+      }
+      if (!["low", "medium", "high"].includes(priority)) return res.status(400).json({ success: false, error: { message: "Invalid priority" } });
+      if (String(subject).trim().length > 200 || String(message).trim().length > 5000 || String(category ?? "").length > 50) {
+        return res.status(400).json({ success: false, error: { message: "Subject, message or category is too long" } });
+      }
+      const ticket = await supportService.createForSalon({
+        salon_id: String(salon_id), subject: String(subject).trim(), category: String(category ?? "General"), message: String(message).trim(), priority,
+      });
+      return res.status(201).json({ success: true, data: ticket });
+    } catch (err) { next(err); }
+  },
+
+  // GET /api/v1/support/notifications — the support team's bell
+  async listNotifications(req: Request & { user?: any }, res: Response, next: NextFunction) {
+    try { return res.json({ success: true, data: await supportNotificationsRepo.list(req.user?.userId ?? req.user?.id) }); } catch (err) { next(err); }
+  },
+  async markNotificationRead(req: Request & { user?: any }, res: Response, next: NextFunction) {
+    try {
+      const ok = await supportNotificationsRepo.markRead(req.user?.userId ?? req.user?.id, String(req.params.id));
+      if (!ok) return res.status(404).json({ success: false, error: { message: "Notification not found" } });
+      return res.json({ success: true, data: { id: String(req.params.id) } });
+    } catch (err) { next(err); }
+  },
+  async markAllNotificationsRead(req: Request & { user?: any }, res: Response, next: NextFunction) {
+    try { await supportNotificationsRepo.markAllRead(req.user?.userId ?? req.user?.id); return res.json({ success: true, data: {} }); } catch (err) { next(err); }
   },
 
   // GET /api/v1/support/stats — super admin ticket stats
