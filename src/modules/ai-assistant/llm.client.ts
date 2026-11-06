@@ -4,6 +4,7 @@ import logger from "../../config/logger";
 import { aiAssistantRepository } from "./ai-assistant.repository";
 import { requireSalonAiCredentials } from "../ai-credentials/ai-credentials.service";
 import { LlmMessage, Tool } from "./ai-assistant.types";
+import { hasProtocolContent, InvalidLlmReplyError } from "./reply-validation";
 
 // Cloudflare Workers AI exposes an OpenAI-compatible chat-completions endpoint, including tool calling and JSON mode.
 const cfUrl = (accountId: string) => `https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(accountId)}/ai/v1/chat/completions`;
@@ -70,13 +71,19 @@ export const llmClient = {
 
                 const message = data.choices?.[0]?.message;
                 if (!message) throw new Error("LLM returned no message");
+                // Retry malformed provider output; never interpret tool commands
+                // embedded in plain text or expose that text as an answer.
+                if (!message.tool_calls?.length && hasProtocolContent(message.content)) {
+                    throw new InvalidLlmReplyError();
+                }
+                if (hasProtocolContent(message.content)) message.content = null;
                 // drop the model's hidden-reasoning fields so only role / content / tool_calls are sent back on the next turn
                 return { role: message.role, content: message.content ?? null, ...(message.tool_calls?.length ? { tool_calls: message.tool_calls } : {}) } as LlmMessage;
             } catch (err: any) {
                 lastErr = err;
                 const status = err?.response?.status;
                 logger.error("[ai-assistant] LLM call failed", { attempt, status, error: err?.response?.data?.error ?? err?.message });
-                const retryable = status === 429 || (status && status >= 500);
+                const retryable = err instanceof InvalidLlmReplyError || status === 429 || (status && status >= 500);
                 if (!retryable || attempt === MAX_RETRIES) break;
                 await sleep(RETRY_DELAY_MS * (attempt + 1));
             }
