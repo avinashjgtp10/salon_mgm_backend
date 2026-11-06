@@ -2,6 +2,13 @@ import { DEFAULT_LANGUAGE, getSalonLanguage, normalizeLanguage } from "./languag
 import en from "../locales/en.json";
 import hi from "../locales/hi.json";
 import ar from "../locales/ar.json";
+import zh from "../locales/zh.json";
+import ko from "../locales/ko.json";
+import ja from "../locales/ja.json";
+import th from "../locales/th.json";
+import id from "../locales/id.json";
+import vi from "../locales/vi.json";
+import ms from "../locales/ms.json";
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Translated wording for everything the backend writes for a person: receipts and invoices, and (as they are moved
@@ -15,7 +22,7 @@ import ar from "../locales/ar.json";
 
 type Dict = { [key: string]: string | Dict };
 
-const DICTIONARIES: Record<string, Dict> = { en, hi, ar };
+const DICTIONARIES: Record<string, Dict> = { en, hi, ar, zh, ko, ja, th, id, vi, ms };
 
 export type Translator = (key: string, vars?: Record<string, string | number>) => string;
 

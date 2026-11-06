@@ -8,6 +8,7 @@ import { ChatRequestBody } from "./ai-assistant.types";
 import { recommendProductsForService } from "./recommendations.service";
 import { generateCampaign } from "./campaign.service";
 import { dataAssistantService } from "./data/data-assistant.service";
+import { dailyInsightService } from "./data/daily-insight.service";
 import { explainReport, isReportKey, REPORT_PERMISSIONS } from "./report-insights.generic";
 import { userCanUse } from "./ai-assistant.service";
 import { explainCampaign, suggestInboxReplies, writeTemplateCopy } from "./marketing-ai.service";
@@ -140,6 +141,20 @@ export const aiAssistantController = {
             return sendSuccess(res, 200, result, "OK");
         } catch (err) {
             logger.error("POST /ai-assistant/ask-data error", { err });
+            return next(err);
+        }
+    },
+
+    // GET /api/v1/ai-assistant/daily-insight — dashboard "AI insight" card: one short tip, cached per salon per day.
+    // { insight: null } when LUNOX isn't switched on (or a limit is hit), so the app simply hides the card.
+    async dailyInsight(req: AuthRequest, res: Response, next: NextFunction) {
+        try {
+            const user = req.user;
+            if (!user?.userId || !user.salonId) throw new AppError(403, "Salon context required", "NO_SALON_CONTEXT");
+            const insight = await dailyInsightService.get({ userId: user.userId, role: user.role, salonId: user.salonId });
+            return sendSuccess(res, 200, { insight }, "OK");
+        } catch (err) {
+            logger.error("GET /ai-assistant/daily-insight error", { err });
             return next(err);
         }
     },

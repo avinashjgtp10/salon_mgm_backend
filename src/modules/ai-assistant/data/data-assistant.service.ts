@@ -8,6 +8,7 @@ import { AssistantUser, ChatTurn, LlmMessage } from "../ai-assistant.types";
 import { dataTools, findDataTool } from "./data.tools";
 import { todayIn } from "./periods";
 import { dateLocale } from "../../../config/currency";
+import { hasProtocolContent } from "../reply-validation";
 
 const MAX_TOOL_ITERATIONS = 5;
 const HISTORY_LIMIT = 6;
@@ -55,6 +56,7 @@ export const dataAssistantService = {
 
         const history = (body.history ?? [])
             .filter((t) => (t.role === "user" || t.role === "assistant") && typeof t.content === "string")
+            .filter((t) => t.role !== "assistant" || !hasProtocolContent(t.content))
             .slice(-HISTORY_LIMIT)
             .map((t) => ({ role: t.role, content: t.content.slice(0, 1500) }));
         const messages: LlmMessage[] = [

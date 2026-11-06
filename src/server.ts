@@ -10,6 +10,7 @@ import { startCampaignScheduler, stopCampaignScheduler } from './modules/marketi
 import { startAutomationScheduler, stopAutomationScheduler } from './modules/whatsapp-automation/whatsapp-automation.scheduler'
 import { startWaLimitSyncScheduler, stopWaLimitSyncScheduler } from './modules/marketing/whatsapp/config/wa-limit-sync.scheduler'
 import { startAttendanceReminderScheduler, stopAttendanceReminderScheduler } from './modules/attendance/staffAttendance.scheduler'
+import { startCallbackDeadlineScheduler, stopCallbackDeadlineScheduler } from './modules/support/support.callbackScheduler'
 import { startNoShowScheduler, stopNoShowScheduler } from './modules/appointments/appointments.scheduler'
 import { startPushReceiptScheduler, stopPushReceiptScheduler } from './modules/notifications/pushNotification.service'
 import { startBotQuestionsCleanupScheduler, stopBotQuestionsCleanupScheduler } from './modules/bot/bot-questions-cleanup.scheduler'
@@ -55,6 +56,8 @@ httpServer.listen(PORT, () => {
   // Auto-flip overdue unpaid appointments to no-show
   startNoShowScheduler()
   startAttendanceReminderScheduler()
+  // Support callbacks: due-soon / overdue notifications for the Super Admin
+  startCallbackDeadlineScheduler()
 
   // Retry Expo push receipt processing after restarts.
   startPushReceiptScheduler()
@@ -98,6 +101,7 @@ process.on('SIGTERM', () => {
   stopWaLimitSyncScheduler()
   stopNoShowScheduler()
   stopAttendanceReminderScheduler()
+  stopCallbackDeadlineScheduler()
   stopPushReceiptScheduler()
   stopBotQuestionsCleanupScheduler()
   stopExpiryWriteOffScheduler()

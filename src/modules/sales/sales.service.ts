@@ -193,6 +193,11 @@ export const salesService = {
             appointmentId:   sale.appointment_id ?? null,
             fallbackStaffId: sale.staff_id       ?? null,
             items,
+            // Commission follows what was actually collected: a deposit-only checkout earns on the deposit's
+            // share of the bill, not on the whole of it (a walk-in sale has no appointment to read this from).
+            paidRatio: parseFloat(sale.total_amount) > 0
+                ? Math.min(1, Math.max(0, 1 - saleDueAmount / parseFloat(sale.total_amount)))
+                : 1,
         }).catch(() => {}); // already safe internally, double-guard here
         tipCalculationService.earnForSale(sale.id, sale.salon_id).catch(() => {});
 

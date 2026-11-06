@@ -19,7 +19,24 @@ const CACHE_TTL_MS = 60_000;
 const cache = new Map<string, { creds: SalonAiCredentials | null; expiresAt: number }>();
 let warnedMissingTable = false;
 
+// Local development only: a developer's backend often shares the dev database but not the server's JWT_SECRET, so it
+// can't decrypt the saved tokens. LUNOX_LOCAL_CF_ACCOUNT_ID + LUNOX_LOCAL_CF_API_TOKEN in a local .env.local (never set
+// on a server, ignored when NODE_ENV=production) are used instead, without touching the shared salon_ai_credentials rows.
+let warnedLocalOverride = false;
+function localDevCredentials(): SalonAiCredentials | null {
+    const accountId = process.env.LUNOX_LOCAL_CF_ACCOUNT_ID?.trim();
+    const apiToken = process.env.LUNOX_LOCAL_CF_API_TOKEN?.trim();
+    if (!accountId || !apiToken || process.env.NODE_ENV === "production") return null;
+    if (!warnedLocalOverride) {
+        warnedLocalOverride = true;
+        logger.warn("[ai-credentials] using LUNOX_LOCAL_CF_* credentials for every salon (local development override)");
+    }
+    return { accountId, apiToken };
+}
+
 async function load(salonId: string): Promise<SalonAiCredentials | null> {
+    const local = localDevCredentials();
+    if (local) return local;
     const hit = cache.get(salonId);
     if (hit && hit.expiresAt > Date.now()) return hit.creds;
 

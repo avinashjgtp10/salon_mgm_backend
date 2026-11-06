@@ -31,6 +31,14 @@ export type LoginBody = {
   userAgent?: string | null;
 };
 
+/** Native Google sign-in from the mobile app: the ID token from the account picker. */
+export type GoogleNativeLoginBody = {
+  idToken: string;
+  clientType?: ClientType;
+  ip?: string | null;
+  userAgent?: string | null;
+};
+
 
 // REFRESH TOKEN
 

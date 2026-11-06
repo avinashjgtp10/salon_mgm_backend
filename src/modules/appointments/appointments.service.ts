@@ -1398,7 +1398,45 @@ export const appointmentsService = {
             }
         }
 
+        // Staff marked it no-show by hand (the sweep covers the automatic case).
+        if (existing.status !== "no-show" && updated?.status === "no-show") {
+            void appointmentsService.notifyNoShow(appointmentId);
+        }
+
         return updated;
+    },
+
+    // Tells the client their appointment was missed. Runs for both ways an
+    // appointment becomes a no-show: the 10-minute sweep (appointments.scheduler.ts)
+    // and staff marking it by hand. Never throws; trigger() itself is a no-op
+    // when the salon has not had this template approved, or the client opted out.
+    async notifyNoShow(appointmentId: string): Promise<void> {
+        try {
+            const appt = await appointmentsRepository.findById(appointmentId);
+            if (!appt || appt.status !== "no-show" || !appt.client_id || !(appt as any).client_phone) return;
+            const tz = await getSalonTimezone(appt.salon_id);
+            await whatsappAutomationService.trigger({
+                salonId:       appt.salon_id,
+                eventType:     "appointment_no_show",
+                clientId:      appt.client_id,
+                phone:         (appt as any).client_phone,
+                countryCode:   (appt as any).client_phone_code ?? null,
+                variables: {
+                    "1": appt.client_name         ?? "Valued Customer",
+                    "2": (appt as any).salon_name ?? "our salon",
+                    "3": formatDate(appt.scheduled_at, tz),
+                    "4": await formatTime(appt.scheduled_at, appt.salon_id),
+                    "5": appt.services?.[0]?.name ?? appt.title ?? "your service",
+                },
+                // scheduled_at in the key: an appointment rescheduled after a
+                // no-show and missed again is a new miss and gets its own message.
+                referenceId:   `${appt.id}:${appt.scheduled_at}`,
+                referenceType: "appointment",
+                dedupeByReference: true,
+            });
+        } catch (err: any) {
+            logger.error("[WA-AUTO] appointment_no_show trigger failed:", err?.message ?? err);
+        }
     },
 
     async cancel(params: {

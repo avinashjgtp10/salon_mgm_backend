@@ -5,10 +5,11 @@ import { AppError } from "../../middleware/error.middleware";
 import { authRepository } from "./auth.repository";
 import { issueSessionTokens, refreshExpiryDate } from "./session.util";
 import { clientActivityTracker } from "../client-activity/client-activity.tracker";
-import type { RegisterBody, LoginBody } from "./auth.types";
+import type { RegisterBody, LoginBody, ClientType, GoogleNativeLoginBody } from "./auth.types";
 import { generateOtp, hashOtp, compareOtp, otpExpiry } from "../utils/otp.util";
 import { emailService } from "../utils/email.service";
 import { salonsRepository } from "../salons/salons.repository";
+import { salonBranchesService } from "../salon-branches/salon-branches.service";
 import { canSendEmail } from "../utils/notif-prefs";
 import { getSalonTimezone } from "../../config/salonTimezone";
 import { exotelSendSmsOtp, exotelVerifySmsOtp } from "../utils/exotel.service";
@@ -66,6 +67,138 @@ function randomString(bytes = 32) {
 function sha256Base64Url(input: string) {
   const hash = crypto.createHash("sha256").update(input).digest();
   return base64url(hash);
+}
+
+/**
+ * Everything a successful sign-in does once the user is known to be allowed in
+ * (password checked, or Google token verified): salon-active check, last-login,
+ * single-session tokens, the owner's staff-login email, and the response body.
+ * Shared by email/password login and native Google login so both behave alike.
+ */
+async function completeLogin(
+  user: any,
+  email: string,
+  opts: { clientType?: ClientType; ip?: string | null; userAgent?: string | null },
+  logLabel: string,
+) {
+  const salonId = await authRepository.findSalonIdByUserId(user.id);
+
+  // Mirrors the user.is_active check each caller makes first, but for the salon itself —
+  // Super Admin's "Deactivate" action on a salon (super-admin.repository.ts
+  // setSalonStatus) only ever flipped salons.is_active; nothing previously
+  // consulted that flag at login, so a deactivated salon's owner/staff
+  // could still sign in and use the app normally.
+  if (salonId) {
+    const salon = await salonsRepository.findById(salonId);
+    if (salon && salon.is_active === false) {
+      logger.warn(`${logLabel} Salon is inactive`, { email, userId: user.id, salonId });
+      throw new AppError(403, "Your account is deactivated. Kindly contact the Salonox team.", "SALON_INACTIVE");
+    }
+  }
+
+  await authRepository.updateLastLogin(user.id);
+  // Informational only — see findStaffRoleNameByUserId's own comment for
+  // why this must never replace user.role in the token or response below.
+  const staffRoleName = await authRepository.findStaffRoleNameByUserId(user.id);
+  // Single login per account: this ends the user's other sessions (so the
+  // previous device is signed out on its next request). Impersonation
+  // sessions are not affected by this call starting, and are ended by it.
+  const { accessToken, refreshToken } = await issueSessionTokens({
+    userId: user.id, role: user.role, salonId, kickOthers: true, clientType: opts.clientType,
+    meta: { ip: opts.ip ?? null, userAgent: opts.userAgent ?? null },
+  });
+
+  logger.info(`${logLabel} Login successful`, { email, userId: user.id, role: user.role, salonId });
+
+  // ── Email: Staff Login alert (to salon owner) ─────────────────────────────
+  const STAFF_ROLES = ["staff", "manager", "receptionist", "stylist", "therapist", "technician"];
+  if (salonId && STAFF_ROLES.includes(user.role)) {
+    ;(async () => {
+      try {
+        const ownerEmail = await salonsRepository.findOwnerEmailById(salonId);
+        if (!ownerEmail) { return; }
+        const allowed = await canSendEmail(salonId, "staffLogin");
+        if (!allowed) { return; }
+        const salon = await salonsRepository.findById(salonId);
+        const staffName = [user.first_name, user.last_name].filter(Boolean).join(" ") || email;
+        const loginTime = new Date().toLocaleString(await getSalonDateLocale(salonId), { timeZone: await getSalonTimezone(salonId), dateStyle: "medium", timeStyle: "short" });
+        await emailService.sendStaffLoginEmail({
+          to:         ownerEmail,
+          salonId,
+          salonName:  salon?.business_name ?? "your salon",
+          staffName,
+          staffEmail: email,
+          loginTime,
+        });
+      } catch (err: any) { console.error("[EMAIL DEBUG] staffLogin FAILED:", err?.message, err); }
+    })();
+  }
+
+  return {
+    accessToken,
+    refreshToken,
+    isOnboardingComplete: user.is_onboarding_complete ?? false,
+    user: {
+      id: user.id,
+      email: user.email,
+      role: user.role,
+      // The staff member's assigned role NAME from Roles & Permissions
+      // (e.g. "Manager", "Staff") — null for owner/admin/client, and for
+      // staff who haven't been assigned a role yet. This is what the
+      // frontend should use to show/label "Manager" after login; `role`
+      // above stays the fixed authorization enum and is never "manager".
+      roleName: staffRoleName,
+      first_name: user.first_name,
+      last_name: user.last_name,
+      salonId,
+      custom_permissions: user.custom_permissions ?? null,
+    },
+  };
+}
+
+/**
+ * Verifies a Google ID token from the mobile app's native account picker with
+ * Google's tokeninfo endpoint (signature, expiry and issuer are checked by
+ * Google), then checks it was issued for one of our client IDs and that the
+ * email is verified.
+ */
+async function verifyGoogleIdToken(idToken: string): Promise<GoogleOAuthProfile> {
+  const allowedAudiences = String(process.env.GOOGLE_NATIVE_CLIENT_IDS || "")
+    .split(",").map((value) => value.trim()).filter(Boolean);
+  if (!allowedAudiences.length) {
+    throw new AppError(503, "Google sign-in is not configured", "GOOGLE_NOT_CONFIGURED");
+  }
+
+  let info: Record<string, unknown>;
+  try {
+    const res = await axios.get("https://oauth2.googleapis.com/tokeninfo", { params: { id_token: idToken }, timeout: 8000 });
+    info = res.data ?? {};
+  } catch (err: any) {
+    // 4xx from Google = the token itself is bad; anything else = Google unreachable.
+    if (err?.response?.status && err.response.status < 500) {
+      throw new AppError(401, "Invalid Google token", "GOOGLE_TOKEN_INVALID");
+    }
+    logger.error("[authService.verifyGoogleIdToken] tokeninfo unreachable", { error: err?.message });
+    throw new AppError(503, "Could not verify Google sign-in", "GOOGLE_UNAVAILABLE");
+  }
+
+  const issuerOk = info.iss === "accounts.google.com" || info.iss === "https://accounts.google.com";
+  const notExpired = Number(info.exp) * 1000 > Date.now();
+  if (!issuerOk || !notExpired || !allowedAudiences.includes(String(info.aud))) {
+    throw new AppError(401, "Invalid Google token", "GOOGLE_TOKEN_INVALID");
+  }
+  if (String(info.email_verified) !== "true" || !info.email) {
+    throw new AppError(401, "Google account email is not verified", "GOOGLE_EMAIL_UNVERIFIED");
+  }
+
+  return {
+    provider: "google",
+    providerUserId: String(info.sub),
+    email: String(info.email).trim().toLowerCase(),
+    fullName: typeof info.name === "string" ? info.name : null,
+    avatarUrl: typeof info.picture === "string" ? info.picture : null,
+    emailVerified: true,
+  };
 }
 
 export const authService = {
@@ -156,8 +289,17 @@ export const authService = {
     logger.debug("[authService.login] Start", { email: body?.email });
     assertEnv();
 
-    const email = String(body.email || "").trim().toLowerCase();
+    let email = String(body.email || "").trim().toLowerCase();
     const password = String(body.password || "");
+
+    // Not an email: the shared branch-login username from Settings > Migration > Connected Branches. It belongs to a
+    // `branch_owner` user whose sign-in email nobody types, so map the username to it and let the normal path below do the
+    // password check and session. An unknown username fails exactly like a wrong password.
+    if (!email.includes("@")) {
+      const branchEmail = await salonBranchesService.resolveLoginEmail(email, password);
+      if (!branchEmail) throw new AppError(401, "Invalid credentials", "INVALID_CREDENTIALS");
+      email = branchEmail;
+    }
 
     const user = await authRepository.findUserByEmail(email);
     if (!user) {
@@ -176,79 +318,39 @@ export const authService = {
       throw new AppError(401, "Invalid credentials", "INVALID_CREDENTIALS");
     }
 
-    const salonId = await authRepository.findSalonIdByUserId(user.id);
+    return completeLogin(user, email, { clientType: body.clientType, ip: body.ip, userAgent: body.userAgent }, "[authService.login]");
+  },
 
-    // Mirrors the user.is_active check above, but for the salon itself —
-    // Super Admin's "Deactivate" action on a salon (super-admin.repository.ts
-    // setSalonStatus) only ever flipped salons.is_active; nothing previously
-    // consulted that flag at login, so a deactivated salon's owner/staff
-    // could still sign in and use the app normally.
-    if (salonId) {
-      const salon = await salonsRepository.findById(salonId);
-      if (salon && salon.is_active === false) {
-        logger.warn("[authService.login] Salon is inactive", { email, userId: user.id, salonId });
-        throw new AppError(403, "Your account is deactivated. Kindly contact the Salonox team.", "SALON_INACTIVE");
-      }
+  /**
+   * Native Google sign-in (mobile account picker). Never creates an account:
+   * an email that isn't registered gets 404 NOT_REGISTERED so the app can offer
+   * web registration. A registered user's Google identity is linked on first use.
+   */
+  async loginWithGoogleIdToken(body: GoogleNativeLoginBody) {
+    assertEnv();
+    const profile = await verifyGoogleIdToken(body.idToken);
+
+    const user =
+      (await authRepository.findGoogleIdentity(profile.providerUserId)) ??
+      (profile.email ? await authRepository.findUserByEmail(profile.email) : null);
+
+    if (!user) {
+      logger.warn("[authService.loginWithGoogleIdToken] Email not registered", { email: profile.email });
+      throw new AppError(404, "No SalonOX account is registered with this email", "NOT_REGISTERED", { email: profile.email });
+    }
+    if (user.is_active === false) {
+      logger.warn("[authService.loginWithGoogleIdToken] User is inactive", { email: user.email, userId: user.id });
+      throw new AppError(403, "User is inactive", "USER_INACTIVE");
     }
 
-    await authRepository.updateLastLogin(user.id);
-    // Informational only — see findStaffRoleNameByUserId's own comment for
-    // why this must never replace user.role in the token or response below.
-    const staffRoleName = await authRepository.findStaffRoleNameByUserId(user.id);
-    // Single login per account: this ends the user's other sessions (so the
-    // previous device is signed out on its next request). Impersonation
-    // sessions are not affected by this call starting, and are ended by it.
-    const { accessToken, refreshToken } = await issueSessionTokens({
-      userId: user.id, role: user.role, salonId, kickOthers: true, clientType: body.clientType,
-      meta: { ip: body.ip ?? null, userAgent: body.userAgent ?? null },
-    });
+    await authRepository.attachGoogleIdentity(user.id, profile);
 
-    logger.info("[authService.login] Login successful", { email, userId: user.id, role: user.role, salonId });
-
-    // ── Email: Staff Login alert (to salon owner) ─────────────────────────────
-    const STAFF_ROLES = ["staff", "manager", "receptionist", "stylist", "therapist", "technician"];
-    if (salonId && STAFF_ROLES.includes(user.role)) {
-      ;(async () => {
-        try {
-          const ownerEmail = await salonsRepository.findOwnerEmailById(salonId);
-          if (!ownerEmail) { return; }
-          const allowed = await canSendEmail(salonId, "staffLogin");
-          if (!allowed) { return; }
-          const salon = await salonsRepository.findById(salonId);
-          const staffName = [user.first_name, user.last_name].filter(Boolean).join(" ") || email;
-          const loginTime = new Date().toLocaleString(await getSalonDateLocale(salonId), { timeZone: await getSalonTimezone(salonId), dateStyle: "medium", timeStyle: "short" });
-          await emailService.sendStaffLoginEmail({
-            to:         ownerEmail,
-            salonId,
-            salonName:  salon?.business_name ?? "your salon",
-            staffName,
-            staffEmail: email,
-            loginTime,
-          });
-        } catch (err: any) { console.error("[EMAIL DEBUG] staffLogin FAILED:", err?.message, err); }
-      })();
-    }
-
-    return {
-      accessToken,
-      refreshToken,
-      isOnboardingComplete: user.is_onboarding_complete ?? false,
-      user: {
-        id: user.id,
-        email: user.email,
-        role: user.role,
-        // The staff member's assigned role NAME from Roles & Permissions
-        // (e.g. "Manager", "Staff") — null for owner/admin/client, and for
-        // staff who haven't been assigned a role yet. This is what the
-        // frontend should use to show/label "Manager" after login; `role`
-        // above stays the fixed authorization enum and is never "manager".
-        roleName: staffRoleName,
-        first_name: user.first_name,
-        last_name: user.last_name,
-        salonId,
-        custom_permissions: user.custom_permissions ?? null,
-      },
-    };
+    return completeLogin(
+      user,
+      String(user.email || profile.email || "").toLowerCase(),
+      { clientType: body.clientType, ip: body.ip, userAgent: body.userAgent },
+      "[authService.loginWithGoogleIdToken]",
+    );
   },
 
   async refresh(refreshToken: string) {

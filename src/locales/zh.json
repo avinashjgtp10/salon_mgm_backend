@@ -1,0 +1,462 @@
+{
+  "receipt": {
+    "salonFallback": "门店",
+    "notBilled": "尚未开单",
+    "walkIn": "散客",
+    "phoneAbbr": "电话：{{phone}}",
+    "status": {
+      "paid": "已付款",
+      "partial": "部分付款",
+      "unpaid": "未付款",
+      "cancelled": "已取消"
+    },
+    "type": {
+      "service": "服务",
+      "product": "产品",
+      "membership": "会员",
+      "package": "套餐",
+      "giftCard": "礼品卡",
+      "quick": "快速销售"
+    },
+    "method": {
+      "cash": "现金",
+      "card": "银行卡",
+      "upi": "UPI",
+      "ewallet": "电子钱包",
+      "giftCard": "礼品卡",
+      "package": "套餐",
+      "membership": "会员",
+      "posMachine": "支付设备",
+      "other": "其他"
+    },
+    "tax": "税",
+    "incl": "（含税）",
+    "totalTax": "税额合计",
+    "itemsTotal": "项目合计",
+    "itemDiscount": "项目折扣",
+    "subtotal": "小计",
+    "coupon": "优惠券",
+    "couponWith": "优惠券（{{code}}）",
+    "packageCovered": "套餐抵扣",
+    "membershipDiscount": "会员折扣",
+    "extraCharges": "额外费用",
+    "billDiscount": "账单折扣",
+    "referralDiscount": "推荐折扣",
+    "rewardPointsUsed": "已用奖励积分",
+    "membershipWalletUsed": "已用会员钱包",
+    "ewalletUsed": "已用电子钱包",
+    "referralCreditUsed": "已用推荐credit",
+    "roundOff": "抹零",
+    "grandTotal": "总计",
+    "amountToPay": "应付金额",
+    "staffTipIncluded": "员工小费（已含在上方）",
+    "staffTipIncl": "员工小费（含）",
+    "paidVia": "通过{{method}}支付",
+    "totalAmountPaid": "已付总额",
+    "amountPaid": "已付金额",
+    "totalPaid": "已付合计",
+    "paid": "已付",
+    "balanceDue": "待付余额",
+    "invoice": "发票",
+    "taxInvoice": "税务发票",
+    "invoiceNo": "发票号",
+    "bookingNo": "预约号 #",
+    "date": "日期",
+    "time": "时间",
+    "billTo": "开票对象",
+    "name": "姓名",
+    "client": "客户",
+    "phone": "电话",
+    "email": "电子邮件",
+    "membership": "会员",
+    "yourReferralCode": "您的推荐码",
+    "referralEarnings": "推荐收益",
+    "apptDetails": "预约详情",
+    "staff": "员工",
+    "staffName": "员工：{{name}}",
+    "paymentMethod": "付款方式",
+    "bookingStatus": "预约状态",
+    "paymentStatus": "付款状态",
+    "servicesItems": "服务与项目",
+    "col": {
+      "itemName": "项目名称",
+      "type": "类型",
+      "staff": "员工",
+      "time": "时间",
+      "qty": "数量",
+      "rate": "单价",
+      "disc": "折扣",
+      "tax": "税",
+      "amount": "金额",
+      "item": "项目"
+    },
+    "noItems": "没有项目",
+    "notes": "备注",
+    "activePackages": "有效套餐",
+    "sessionsLeft": "{{name}} —— 剩余 {{remaining}}/{{total}} 次",
+    "activeMemberships": "有效会员",
+    "expires": "到期：{{date}}",
+    "paymentSummary": "付款汇总",
+    "thankYouFor": "感谢您选择 {{name}}！",
+    "lookForward": "期待再次为您服务。",
+    "computerGenerated": "此为电脑生成的小票。",
+    "noSignature": "无需签名。",
+    "poweredBy": "由 Salonox 提供支持",
+    "total": "合计",
+    "thanks": "谢谢！",
+    "titleInvoice": "发票 {{no}} — {{name}}",
+    "titleReceipt": "小票 {{no}} — {{name}}",
+    "membershipLoyalty": "会员忠诚度",
+    "invoiceDate": "开票日期",
+    "staffAlert": "员工提醒",
+    "tipIncl": "小费（含）"
+  },
+  "email": {
+    "automatedNotification": "自动通知。",
+    "common": {
+      "hiName": "{{name}}，您好：",
+      "hiPlain": "您好：",
+      "hiBold": "<strong>{{name}}</strong>，您好：",
+      "rights": "© {{year}} SalonOx。保留所有权利。",
+      "footerAuto": "© {{year}} SalonOx。自动通知。",
+      "ref": "参考编号：{{ref}}"
+    },
+    "label": {
+      "client": "客户",
+      "service": "服务",
+      "date": "日期",
+      "time": "时间",
+      "name": "姓名",
+      "email": "电子邮件",
+      "phone": "电话",
+      "method": "方式",
+      "salon": "门店",
+      "period": "期间",
+      "netPay": "实发工资"
+    },
+    "otp": {
+      "subject": "您的邮箱验证码",
+      "title": "邮箱验证",
+      "intro": "您的验证码是：",
+      "expiry": "此验证码将在 {{minutes}} 分钟后失效。"
+    },
+    "resetOtp": {
+      "subject": "密码重置请求",
+      "title": "密码重置验证",
+      "intro": "我们收到了重置您密码的请求。您的验证码是：",
+      "expiry": "此验证码将在 {{minutes}} 分钟后失效。如果您没有请求重置密码，请忽略此邮件。"
+    },
+    "resetDone": {
+      "subject": "您的 SalonOx 密码已成功重置",
+      "title": "密码重置确认",
+      "body": "您的 <strong>SalonOx</strong> 账户密码已成功重置。",
+      "details": "重置详情",
+      "loginNote": "您现在可以使用新密码登录 SalonOx 账户。",
+      "loginButton": "立即登录",
+      "securityTitle": "安全提示",
+      "securityBody": "如果这不是您本人请求的密码重置，请立即联系我们的支持团队——您的账户可能存在风险。",
+      "support": "支持：",
+      "footerAuto": "这是一封自动发送的安全通知，请勿回复此邮件。"
+    },
+    "welcome": {
+      "subject": "欢迎使用 SalonOx，{{name}}！🎉",
+      "pageTitle": "欢迎使用 SalonOx",
+      "tagline": "沙龙管理平台",
+      "banner": "欢迎加入，{{name}}！",
+      "bannerSub": "您的沙龙账户已准备就绪。",
+      "intro": "恭喜！您为 <strong>{{salon}}</strong> 创建的 SalonOx 账户已成功建立。我们很高兴您的加入。",
+      "about": "SalonOx 帮助您管理预约、员工和客户，并发展您的沙龙业务——一切尽在一处。",
+      "stepsTitle": "只需 3 步即可开始：",
+      "step1": "完善您的沙龙资料",
+      "step1Body": "添加沙龙详情、徽标和营业时间。",
+      "step2": "添加服务和员工",
+      "step2Body": "设置服务菜单并邀请团队成员。",
+      "step3": "开始接受预约",
+      "step3Body": "分享您的预约链接，坐等预约上门。",
+      "footer": "您收到此邮件是因为您在 SalonOx 创建了账户。"
+    },
+    "newAppointment": {
+      "subject": "新预约 — {{name}}",
+      "title": "新预约",
+      "intro": "有一个新预约。详情如下：",
+      "details": "预约详情"
+    },
+    "cancelledOwner": {
+      "subject": "预约已取消 — {{name}}",
+      "title": "预约已取消",
+      "intro": "有一个预约已被取消。详情如下："
+    },
+    "newPayment": {
+      "subject": "已收到付款 — {{amount}}",
+      "title": "已收到付款",
+      "intro": "已记录 <strong>{{client}}</strong> 的一笔付款。",
+      "invoice": "发票：{{id}}"
+    },
+    "newClient": {
+      "subject": "新增客户 — {{name}}",
+      "title": "新增客户",
+      "intro": "<strong>{{salon}}</strong> 新增了一位客户。"
+    },
+    "staffLogin": {
+      "subject": "员工登录提醒 — {{name}} 已登录",
+      "title": "员工登录提醒",
+      "intro": "有团队成员登录了 <strong>{{salon}}</strong>。",
+      "note": "如果此次登录不在您的预期之内，请检查团队的访问权限。"
+    },
+    "deactivated": {
+      "subject": "您的 SalonOx 账户已被停用",
+      "title": "账户已停用",
+      "body": "{{greeting}}，您的账户已被停用。请联系 Salonox 团队。",
+      "note": "在账户重新启用之前，您将无法登录。请联系 Salonox 团队获取帮助。"
+    },
+    "staffInvite": {
+      "subject": "您受邀加入 {{salon}}",
+      "title": "员工邀请",
+      "body": "您已受邀以员工身份加入我们平台上的 <strong>{{salon}}</strong>。请点击下方按钮设置账户并开始使用。",
+      "expiry": "此邀请链接将在 <strong>72 小时</strong>后失效。",
+      "button": "接受邀请",
+      "fallback": "如果按钮无法使用，请将此链接复制并粘贴到浏览器中：",
+      "ignore": "如果您没有预期收到此邀请，可以放心忽略此邮件。"
+    },
+    "dailySummary": {
+      "subject": "沙龙每日现金汇总 - {{date}}",
+      "pageTitle": "每日汇总报告",
+      "title": "每日收银台汇总报告",
+      "intro": "以下是今日收银台时段的财务汇总：",
+      "opening": "期初余额",
+      "cashRevenue": "现金收入",
+      "cashExpense": "现金支出",
+      "closing": "期末余额",
+      "inStore": "店内现金",
+      "reconciliation": "对账金额",
+      "upi": "UPI 付款",
+      "card": "银行卡付款",
+      "remarks": "结账备注",
+      "footer": "© {{year}} SalonOx。自动每日汇总报告。"
+    },
+    "salary": {
+      "subject": "您的工资单 — {{salon}}",
+      "title": "工资已发放",
+      "body": "<strong>{{name}}</strong>，您好，以下期间的工资已处理完毕。明细小票已作为 PDF 附上。",
+      "periodRange": "{{from}} 至 {{to}}"
+    }
+  },
+  "notify": {
+    "walkIn": "散客",
+    "service": "服务",
+    "invoiceNotGenerated": "尚未生成发票",
+    "status": {
+      "booked": "已预约",
+      "paid": "已付款",
+      "partial": "部分付款",
+      "cancelled": "已取消",
+      "no-show": "未到店",
+      "deleted": "已删除",
+      "pending": "待处理",
+      "completed": "已完成",
+      "in_progress": "进行中"
+    },
+    "yourTurn": {
+      "title": "轮到您了",
+      "body": "{{client}} 已准备好接受 {{services}}"
+    },
+    "newAppointment": {
+      "title": "新预约"
+    },
+    "appointmentUpdated": {
+      "title": "预约已更新"
+    },
+    "appointmentCancelled": {
+      "title": "预约已取消"
+    },
+    "appointmentLine": "{{client}} — {{date}} {{time}}",
+    "paymentComplete": {
+      "title": "付款完成"
+    },
+    "newSale": {
+      "title": "已创建新销售"
+    },
+    "newClient": {
+      "title": "新增客户"
+    },
+    "attendance": {
+      "staffFallback": "一位员工",
+      "checkedIn": {
+        "title": "员工已打卡上班",
+        "body": "{{name}} 于 {{day}} {{clock}} 打卡上班。"
+      },
+      "checkedOut": {
+        "title": "员工已打卡下班",
+        "body": "{{name}} 于 {{day}} {{clock}} 打卡下班。"
+      },
+      "breakStart": {
+        "title": "员工正在休息",
+        "body": "{{name}} 于 {{day}} {{clock}} 开始休息（至 {{until}}）。{{note}}"
+      },
+      "breakEnd": {
+        "title": "员工休息结束",
+        "body": "{{name}} 于 {{day}} {{clock}} 结束休息。"
+      },
+      "breakNote": " 备注：{{note}}",
+      "reminder": {
+        "title": "您尚未打卡（{{date}}）",
+        "body": "您的班次已于 {{time}} 开始。请打开 SalonOX 打卡。"
+      }
+    },
+    "inventory": {
+      "outOfStock": {
+        "title": "产品已缺货",
+        "body": "{{name}} 已缺货（剩余 0）。"
+      },
+      "low": {
+        "title": "库存不足提醒",
+        "body": "{{name}} 库存不足——{{remaining}}；预警线为 {{threshold}}。"
+      },
+      "left": "剩余 {{amount}}",
+      "leftBottle": "剩余 {{amount}}（约 1 瓶）",
+      "leftBottles": "剩余 {{amount}}（约 {{n}} 瓶）",
+      "expired": {
+        "title": "产品已过期",
+        "body": "{{name}} 已过期（到期日：{{date}}）。"
+      },
+      "expiring": {
+        "title": "产品即将过期"
+      },
+      "expiringOne": "{{name}} 将于 {{date}} 到期（还剩 1 天）。",
+      "expiringMany": "{{name}} 将于 {{date}} 到期（还剩 {{days}} 天）。"
+    },
+    "whatsapp": {
+      "formNotSent": {
+        "title": "预约表单未发送",
+        "body": "无法自动向 {{phone}} 发送预约表单。请打开聊天并手动发送。"
+      },
+      "bookingRequest": {
+        "title": "预约请求：{{name}}"
+      },
+      "message": {
+        "title": "WhatsApp：{{sender}}"
+      }
+    },
+    "spotlight": {
+      "title": "新增功能"
+    }
+  },
+  "messages": {
+    "wa": {
+      "client_welcome": "您好 {{customer_name}}，\n欢迎来到 {{salon_name}}！\n很高兴有您的加入。\n您的推荐码：{{referral_code}}\n感谢您选择 {{salon_name}}——我们非常珍视您！",
+      "package_purchased": "您好 {{customer_name}}，\n感谢您购买我们的{{package_name}}！\n\n套餐：{{package_name}}\n服务：{{services}}\n次数：{{total_sessions}}\n有效期至：{{expiry_date}}\n金额：¤{{package_value}}\n发票：{{invoice_number}}\n\n期待再次见到您。预约您的下一次到访吧！",
+      "membership_purchased": "您好 {{customer_name}}，\n\n🎉 您的{{membership_name}}现已生效！\n\n会员资格：{{membership_name}}\n权益：{{benefit}}\n开始日期：{{start_date}}\n有效期至：{{expiry_date}}\n会员价格：¤{{membership_price}}\n发票：{{invoice_number}}\n\n在今后的到访中尽享您的专属会员权益！",
+      "bill_receipt": "您好 {{customer_name}}，\n感谢您光临 {{salon_name}}。\n希望您有愉快的体验！\n您的账单已附在此消息中。\n{{items}}\n{{feedback_line}}\n感谢您选择 {{salon_name}}——我们非常珍视您！",
+      "appointment_confirmation": "您好 {{customer_name}}，\n您在 {{salon_name}} 的预约已确认。\n日期：{{appointment_date}}\n时间：{{appointment_time}}\n服务：{{service_name}}\n员工：{{staff_name}}\n期待见到您！",
+      "appointment_rescheduled": "您好 {{customer_name}}，\n您在 {{salon_name}} 的预约已改期。\n原定：{{old_date}} {{old_time}}\n新的：{{new_date}} {{new_time}}\n服务：{{service_name}}\n员工：{{staff_name}}\n期待见到您！",
+      "appointment_cancelled": "您好 {{customer_name}}，\n您在 {{salon_name}} 的预约已取消。\n日期：{{appointment_date}}\n时间：{{appointment_time}}\n服务：{{service_name}}\n如果您想再预约，我们很乐意为您安排。",
+      "appointment_no_show": "您好 {{customer_name}}，\n您预约的 {{salon_name}} 服务，我们没有等到您。\n日期：{{appointment_date}}\n时间：{{appointment_time}}\n服务：{{service_name}}\n如果您仍想到店，请回复此消息，我们很乐意为您改期。",
+      "payment_received": "您好 {{customer_name}}，\n您在 {{salon_name}} 的账单 ¤{{amount}} 已成功支付。\n预约：{{appointment_date}}\n时间：{{appointment_time}}\n感谢您选择 {{salon_name}}——我们非常珍视您！",
+      "package_expiring_7d": "您好 {{customer_name}}，\n您的{{package_name}}将在 7 天后到期。\n到期日：{{expiry_date}}\n剩余次数：{{remaining_sessions}}\n别错过您剩余的次数！\n今天就预约您的下一次到访吧。",
+      "package_expiring_24h": "您好 {{customer_name}}，\n您的{{package_name}}将于明天到期。\n剩余次数：{{remaining_sessions}}\n到期日：{{expiry_date}}\n您还有时间使用剩余的次数。\n马上预约吧。",
+      "membership_expiring_7d": "您好 {{customer_name}}，\n您的{{membership_name}}会员资格将在 7 天后到期。\n到期日：{{expiry_date}}\n剩余余额：¤{{remaining_balance}}\n请在到期前充分利用您剩余的会员权益。",
+      "membership_expiring_24h": "您好 {{customer_name}}，\n您的{{membership_name}}会员资格将于明天到期。\n剩余余额：¤{{remaining_balance}}\n到期日：{{expiry_date}}\n别让您剩余的会员余额白白浪费。",
+      "package_session_used": "您好 {{customer_name}}，\n您的{{service_name}}服务已从{{package_name}}中成功兑换。\n已使用次数：1\n剩余次数：{{remaining_sessions}}\n剩余服务：{{remaining_services_breakdown}}\n感谢您光临 {{salon_name}}——我们非常珍视您！",
+      "membership_session_used": "您好 {{customer_name}}，\n您的{{service_name}}服务已从会员资格中成功兑换。\n已用金额：¤{{amount_used}}\n剩余余额：¤{{remaining_balance}}\n感谢您光临 {{salon_name}}——我们非常珍视您！",
+      "package_appointment_reminder_24h": "您好 {{customer_name}}，\n温馨提醒：您明天在 {{salon_name}} 有一个预约。\n日期：{{appointment_date}}\n时间：{{appointment_time}}\n服务：{{service_name}}\n此次预约将使用您{{package_name}}中的 1 次。\n明天见！",
+      "service_reminder_24h": "您好 {{customer_name}}，\n这是对您即将到来的 {{salon_name}} 预约的提醒。\n日期：{{appointment_date}}\n时间：{{appointment_time}}\n服务：{{service_name}}\n员工：{{staff_name}}\n期待见到您！",
+      "reward_points_earned": "您好 {{customer_name}}，\n您最近光临 {{salon_name}} 获得了 {{points_earned}} 个奖励积分。\n获得积分：{{points_earned}}\n积分总数：{{total_points}}\n继续光临，赚取更多奖励！",
+      "referral_reward": "您好 {{customer_name}}，\n好消息！您推荐的 {{referred_customer_name}} 已在 {{salon_name}} 完成了符合条件的到访。\n推荐奖励：{{reward}}\n您的奖励积分总数：{{total_points}}\n感谢您的口碑传播！",
+      "ewallet_used": "您好 {{customer_name}}，\n您在 {{salon_name}} 使用电子钱包完成了一笔付款。\n已用金额：¤{{amount_used}}\n剩余余额：¤{{remaining_balance}}\n感谢您选择 {{salon_name}}——我们非常珍视您！",
+      "referral_credit_used": "您好 {{customer_name}}，\n您在 {{salon_name}} 使用推荐余额完成了一笔付款。\n已用金额：¤{{amount_used}}\n剩余推荐余额：¤{{remaining_balance}}\n感谢您选择 {{salon_name}}——我们非常珍视您！",
+      "reward_points_used": "您好 {{customer_name}}，\n您在 {{salon_name}} 使用奖励积分完成了一笔付款。\n已用积分：{{points_used}}\n剩余积分：{{remaining_points}}\n感谢您选择 {{salon_name}}——我们非常珍视您！",
+      "birthday_wishes": "您好 {{customer_name}}，\n🎉 {{salon_name}} 全体同仁祝您生日快乐！\n祝您拥有美好的一天——我们很乐意陪您庆祝。欢迎尽快光临！",
+      "anniversary_wishes": "您好 {{customer_name}}，\n🎉 {{salon_name}} 全体同仁祝您纪念日快乐！\n祝您往后岁月更加美好——我们很乐意陪您庆祝。欢迎尽快光临！",
+      "service_redo_reminder": "您好 {{customer_name}}，\n距离您 {{last_visit_date}} 在 {{salon_name}} 做{{service_name}}已经有一段时间了。\n也许该做下一次了。回复此消息，我们将帮您预约时段。",
+      "cash_counter_opened": "*现金柜台已开启——{{salon_name}}*\n\n您的现金柜台已开启，可以开始今天的交易。\n\n日期：{{opening_date}}\n时间：{{opening_time}}\n期初现金：{{opening_amount}}\n\n祝您营业顺利！",
+      "cash_counter_closed": "*现金柜台已关闭——{{salon_name}}*\n\n您的现金柜台今日已关闭。以下是本次营业的收款汇总。\n\n日期：{{closing_date}}\n时间：{{closing_time}}\n\n*收款汇总*\n{{collection_breakdown}}\n━━━━━━━━━━━━━━\n*收款总额：{{total_collection}}*\n支出：{{expenses}}\n店内现金：{{in_store_cash}}\n\n感谢您核对今日的现金柜台。"
+    },
+    "sms": {
+      "client_welcome": "您好 {{customer_name}}，欢迎来到 {{salon_name}}！您的推荐码是 {{referral_code}}。",
+      "package_purchased": "您好 {{customer_name}}，感谢您购买{{package_name}}（{{total_sessions}}次，有效期至 {{expiry_date}}）。发票：{{invoice_number}}。",
+      "membership_purchased": "您好 {{customer_name}}，您的{{membership_name}}现已生效，有效期至 {{expiry_date}}。发票：{{invoice_number}}。",
+      "bill_receipt": "您好 {{customer_name}}，感谢您光临 {{salon_name}}！您的账单已结清。{{feedback_line}}",
+      "appointment_confirmation": "您好 {{customer_name}}，您在 {{salon_name}} 的预约已确认。日期：{{appointment_date}}，时间：{{appointment_time}}，服务：{{service_name}}。",
+      "appointment_rescheduled": "您好 {{customer_name}}，您在 {{salon_name}} 的预约已改到 {{new_date}} {{new_time}}（原为 {{old_date}} {{old_time}}）。",
+      "appointment_cancelled": "您好 {{customer_name}}，您在 {{salon_name}} 于 {{appointment_date}} {{appointment_time}} 的预约已取消。",
+      "appointment_no_show": "您好 {{customer_name}}，您在 {{salon_name}} 于 {{appointment_date}} {{appointment_time}} 的预约，我们没有等到您。回复即可改期。",
+      "payment_received": "您好 {{customer_name}}，您在 {{salon_name}} 的账单 ¤{{amount}} 已支付。谢谢！",
+      "package_expiring_7d": "您好 {{customer_name}}，您的{{package_name}}将于 {{expiry_date}} 到期（剩余 {{remaining_sessions}} 次）。马上预约！",
+      "package_expiring_24h": "您好 {{customer_name}}，您的{{package_name}}将于明天到期（剩余 {{remaining_sessions}} 次）。马上预约！",
+      "membership_expiring_7d": "您好 {{customer_name}}，您的{{membership_name}}会员资格将于 {{expiry_date}} 到期（剩余 ¤{{remaining_balance}}）。",
+      "membership_expiring_24h": "您好 {{customer_name}}，您的{{membership_name}}会员资格将于明天到期（剩余 ¤{{remaining_balance}}）。",
+      "package_session_used": "您好 {{customer_name}}，您{{package_name}}中的{{service_name}}已使用。剩余 {{remaining_sessions}} 次。",
+      "membership_session_used": "您好 {{customer_name}}，您的会员资格已为{{service_name}}扣除 ¤{{amount_used}}。余额：¤{{remaining_balance}}。",
+      "package_appointment_reminder_24h": "提醒：{{customer_name}}，您在 {{salon_name}} 的{{service_name}}预约在明天 {{appointment_time}}（将使用{{package_name}}中的 1 次）。",
+      "service_reminder_24h": "提醒：{{customer_name}}，您在 {{salon_name}} 的{{service_name}}预约在 {{appointment_date}} {{appointment_time}}。",
+      "reward_points_earned": "您好 {{customer_name}}，您在 {{salon_name}} 获得了 {{points_earned}} 个奖励积分！总计：{{total_points}}。",
+      "referral_reward": "您好 {{customer_name}}，您因 {{referred_customer_name}} 光临 {{salon_name}} 获得了推荐奖励！奖励：{{reward}}。",
+      "ewallet_used": "您好 {{customer_name}}，您在 {{salon_name}} 的电子钱包已扣除 ¤{{amount_used}}。余额：¤{{remaining_balance}}。",
+      "referral_credit_used": "您好 {{customer_name}}，您在 {{salon_name}} 的推荐余额已扣除 ¤{{amount_used}}。余额：¤{{remaining_balance}}。",
+      "reward_points_used": "您好 {{customer_name}}，您在 {{salon_name}} 使用了 {{points_used}} 个奖励积分。剩余：{{remaining_points}}。",
+      "birthday_wishes": "{{customer_name}}，生日快乐！{{salon_name}} 全体同仁祝您拥有美好的一天。欢迎尽快来和我们一起庆祝！",
+      "anniversary_wishes": "{{customer_name}}，纪念日快乐！{{salon_name}} 全体同仁祝您往后岁月更加美好。",
+      "service_redo_reminder": "您好 {{customer_name}}，距离您在 {{salon_name}} 做{{service_name}}（{{last_visit_date}}）已有一段时间。该做下一次了吗？回复即可预约。",
+      "cash_counter_opened": "现金柜台已开启 - {{salon_name}}。{{opening_date}} {{opening_time}}。期初现金：{{opening_amount}}。",
+      "cash_counter_closed": "现金柜台已关闭 - {{salon_name}}。{{closing_date}} {{closing_time}}。{{collection_breakdown}}。总额：{{total_collection}}。支出：{{expenses}}。店内现金：{{in_store_cash}}。"
+    },
+    "emailSubject": {
+      "client_welcome": "欢迎来到 {{salon_name}}！",
+      "package_purchased": "您购买的{{package_name}}已确认",
+      "membership_purchased": "您的{{membership_name}}会员资格已生效",
+      "bill_receipt": "感谢您光临 {{salon_name}}",
+      "appointment_confirmation": "预约已在 {{salon_name}} 确认——{{appointment_date}}",
+      "appointment_rescheduled": "您在 {{salon_name}} 的预约已改期",
+      "appointment_cancelled": "您的预约已取消——{{salon_name}}",
+      "appointment_no_show": "我们在 {{salon_name}} 没有等到您",
+      "payment_received": "您的预约收据——{{salon_name}}",
+      "package_expiring_7d": "您的{{package_name}}将在 7 天后到期",
+      "package_expiring_24h": "您的{{package_name}}将于明天到期",
+      "membership_expiring_7d": "您的{{membership_name}}会员资格将在 7 天后到期",
+      "membership_expiring_24h": "您的{{membership_name}}会员资格将于明天到期",
+      "package_session_used": "已使用一次——{{package_name}}",
+      "membership_session_used": "在 {{salon_name}} 使用了会员余额",
+      "package_appointment_reminder_24h": "提醒：您明天在 {{salon_name}} 的预约",
+      "service_reminder_24h": "提醒：您即将到来的 {{salon_name}} 预约",
+      "reward_points_earned": "您获得了 {{points_earned}} 个奖励积分！",
+      "referral_reward": "您的推荐奖励已到账",
+      "ewallet_used": "在 {{salon_name}} 使用了电子钱包",
+      "referral_credit_used": "在 {{salon_name}} 使用了推荐余额",
+      "reward_points_used": "在 {{salon_name}} 使用了奖励积分",
+      "birthday_wishes": "{{salon_name}} 祝您生日快乐！",
+      "anniversary_wishes": "{{salon_name}} 祝您纪念日快乐！",
+      "service_redo_reminder": "该在 {{salon_name}} 做下一次{{service_name}}了吗？",
+      "cash_counter_opened": "现金柜台已开启——{{salon_name}}",
+      "cash_counter_closed": "现金柜台已关闭——{{salon_name}}"
+    },
+    "emailBody": {
+      "client_welcome": "您好 {{customer_name}}，\n\n欢迎来到 {{salon_name}}！很高兴有您的加入。\n\n您的推荐码：{{referral_code}}\n\n感谢您选择我们——期待很快见到您。",
+      "package_purchased": "您好 {{customer_name}}，\n\n感谢您购买我们的{{package_name}}！\n\n套餐：{{package_name}}\n服务：{{services}}\n次数：{{total_sessions}}\n有效期至：{{expiry_date}}\n金额：¤{{package_value}}\n发票：{{invoice_number}}\n\n期待再次见到您。预约您的下一次到访吧！",
+      "membership_purchased": "您好 {{customer_name}}，\n\n您的{{membership_name}}现已生效！\n\n会员资格：{{membership_name}}\n权益：{{benefit}}\n开始日期：{{start_date}}\n有效期至：{{expiry_date}}\n会员价格：¤{{membership_price}}\n发票：{{invoice_number}}\n\n在今后的到访中尽享您的专属会员权益！",
+      "bill_receipt": "您好 {{customer_name}}，\n\n感谢您光临 {{salon_name}}。希望您有愉快的体验！您的账单已附在此邮件中。\n\n{{items}}\n\n{{feedback_line}}\n\n感谢您选择 {{salon_name}}——我们非常珍视您！",
+      "appointment_confirmation": "您好 {{customer_name}}，\n\n您的预约已成功确认。\n\n预约详情：\n沙龙：{{salon_name}}\n日期：{{appointment_date}}\n时间：{{appointment_time}}\n服务：{{service_name}}\n员工：{{staff_name}}\n预约编号：{{booking_id}}\n\n付款：\n总额：{{appointment_amount}}\n已付：{{paid_amount}}\n到店支付：{{remaining_amount}}\n\n我们的地址：\n{{salon_address}}\n{{google_maps_link}}\n\n需要更改吗？\n{{manage_booking_link}}\n\n{{cancellation_policy}}\n\n期待见到您！",
+      "appointment_rescheduled": "您好 {{customer_name}}，\n\n您在 {{salon_name}} 的预约已改期。\n\n原定：{{old_date}} {{old_time}}\n新的：{{new_date}} {{new_time}}\n服务：{{service_name}}\n员工：{{staff_name}}\n\n期待见到您！",
+      "appointment_cancelled": "您好 {{customer_name}}，\n\n您在 {{salon_name}} 的预约已取消。\n\n日期：{{appointment_date}}\n时间：{{appointment_time}}\n服务：{{service_name}}\n\n如需重新预约或有任何疑问，请联系我们。",
+      "appointment_no_show": "您好 {{customer_name}}，\n\n您预约的 {{salon_name}} 服务，我们没有等到您。\n\n日期：{{appointment_date}}\n时间：{{appointment_time}}\n服务：{{service_name}}\n\n如果您仍想到店，请回复此邮件或联系我们，我们很乐意为您改期。",
+      "payment_received": "您好 {{customer_name}}，\n\n感谢您光临 {{salon_name}}。这是您的收据：\n\n已付金额：¤{{amount}}\n预约：{{appointment_date}} {{appointment_time}}\n\n希望很快再次见到您！",
+      "package_expiring_7d": "您好 {{customer_name}}，\n\n您的{{package_name}}将在 7 天后到期。\n\n到期日：{{expiry_date}}\n剩余次数：{{remaining_sessions}}\n\n别错过您剩余的次数！今天就预约您的下一次到访吧。",
+      "package_expiring_24h": "您好 {{customer_name}}，\n\n您的{{package_name}}将于明天到期。\n\n剩余次数：{{remaining_sessions}}\n到期日：{{expiry_date}}\n\n您还有时间使用剩余的次数。马上预约吧。",
+      "membership_expiring_7d": "您好 {{customer_name}}，\n\n您的{{membership_name}}会员资格将在 7 天后到期。\n\n到期日：{{expiry_date}}\n剩余余额：¤{{remaining_balance}}\n\n请在到期前充分利用您剩余的会员权益。",
+      "membership_expiring_24h": "您好 {{customer_name}}，\n\n您的{{membership_name}}会员资格将于明天到期。\n\n剩余余额：¤{{remaining_balance}}\n到期日：{{expiry_date}}\n\n别让您剩余的会员余额白白浪费。",
+      "package_session_used": "您好 {{customer_name}}，\n\n您的{{service_name}}服务已从{{package_name}}中成功兑换。\n\n剩余次数：{{remaining_sessions}}\n剩余服务：{{remaining_services_breakdown}}\n\n感谢您光临 {{salon_name}}——我们非常珍视您！",
+      "membership_session_used": "您好 {{customer_name}}，\n\n您的{{service_name}}服务已从会员资格中成功兑换。\n\n已用金额：¤{{amount_used}}\n剩余余额：¤{{remaining_balance}}\n\n感谢您光临 {{salon_name}}——我们非常珍视您！",
+      "package_appointment_reminder_24h": "您好 {{customer_name}}，\n\n温馨提醒：您明天在 {{salon_name}} 有一个预约。\n\n日期：{{appointment_date}}\n时间：{{appointment_time}}\n服务：{{service_name}}\n\n此次预约将使用您{{package_name}}中的 1 次。明天见！",
+      "service_reminder_24h": "您好 {{customer_name}}，\n\n这是对您即将到来的 {{salon_name}} 预约的提醒。\n\n日期：{{appointment_date}}\n时间：{{appointment_time}}\n服务：{{service_name}}\n员工：{{staff_name}}\n\n期待见到您！",
+      "reward_points_earned": "您好 {{customer_name}}，\n\n您最近光临 {{salon_name}} 获得了 {{points_earned}} 个奖励积分。\n\n获得积分：{{points_earned}}\n积分总数：{{total_points}}\n\n继续光临，赚取更多奖励！",
+      "referral_reward": "您好 {{customer_name}}，\n\n好消息！您推荐的 {{referred_customer_name}} 已在 {{salon_name}} 完成了符合条件的到访。\n\n推荐奖励：{{reward}}\n您的奖励积分总数：{{total_points}}\n\n感谢您的口碑传播！",
+      "ewallet_used": "您好 {{customer_name}}，\n\n您在 {{salon_name}} 使用电子钱包完成了一笔付款。\n\n已用金额：¤{{amount_used}}\n剩余余额：¤{{remaining_balance}}\n\n感谢您选择 {{salon_name}}——我们非常珍视您！",
+      "referral_credit_used": "您好 {{customer_name}}，\n\n您在 {{salon_name}} 使用推荐余额完成了一笔付款。\n\n已用金额：¤{{amount_used}}\n剩余推荐余额：¤{{remaining_balance}}\n\n感谢您选择 {{salon_name}}——我们非常珍视您！",
+      "reward_points_used": "您好 {{customer_name}}，\n\n您在 {{salon_name}} 使用奖励积分完成了一笔付款。\n\n已用积分：{{points_used}}\n剩余积分：{{remaining_points}}\n\n感谢您选择 {{salon_name}}——我们非常珍视您！",
+      "birthday_wishes": "您好 {{customer_name}}，\n\n🎉 {{salon_name}} 全体同仁祝您生日快乐！\n\n祝您拥有美好的一天——我们很乐意陪您庆祝。欢迎尽快光临！",
+      "anniversary_wishes": "您好 {{customer_name}}，\n\n🎉 {{salon_name}} 全体同仁祝您纪念日快乐！\n\n祝您往后岁月更加美好——我们很乐意陪您庆祝。欢迎尽快光临！",
+      "service_redo_reminder": "您好 {{customer_name}}，\n\n距离您 {{last_visit_date}} 在 {{salon_name}} 做{{service_name}}已经有一段时间了。\n\n也许该做下一次了。回复此邮件或联系我们，我们将帮您预约时段。",
+      "cash_counter_opened": "现金柜台已开启——{{salon_name}}\n\n您的现金柜台已开启，可以开始今天的交易。\n\n日期：{{opening_date}}\n时间：{{opening_time}}\n期初现金：{{opening_amount}}\n\n祝您营业顺利！",
+      "cash_counter_closed": "现金柜台已关闭——{{salon_name}}\n\n您的现金柜台今日已关闭。以下是本次营业的收款汇总。\n\n日期：{{closing_date}}\n时间：{{closing_time}}\n\n收款汇总\n{{collection_breakdown}}\n\n收款总额：{{total_collection}}\n支出：{{expenses}}\n店内现金：{{in_store_cash}}\n\n感谢您核对今日的现金柜台。"
+    }
+  }
+}
