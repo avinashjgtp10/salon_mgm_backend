@@ -17,6 +17,15 @@ import { googleStartQuerySchema } from "./auth.validator";
 const readLanguage = (req: Request): string | undefined =>
   typeof req.body?.language === "string" ? req.body.language : undefined;
 
+// An explicit clientType (body or X-Client-Type header) wins. Without one,
+// browsers are web and native/React-Native HTTP clients are mobile.
+function resolveClientType(req: Request): "mobile" | "web" {
+  const explicit = String(req.body?.clientType ?? req.headers["x-client-type"] ?? "").toLowerCase();
+  if (explicit === "mobile" || explicit === "web") return explicit;
+  const ua = String(req.headers["user-agent"] || "");
+  return /okhttp|cfnetwork|darwin|expo|react-?native/i.test(ua) ? "mobile" : "web";
+}
+
 function redirectToFrontend(
   res: Response,
   accessToken: string,
@@ -94,14 +103,8 @@ export const authController = {
         );
       }
 
-      // An explicit clientType (body or X-Client-Type header) wins. Without one,
-      // browsers are web and native/React-Native HTTP clients are mobile.
-      const explicit = String(req.body?.clientType ?? req.headers["x-client-type"] ?? "").toLowerCase();
       const ua = String(req.headers["user-agent"] || "");
-      const clientType =
-        explicit === "mobile" || explicit === "web"
-          ? explicit
-          : /okhttp|cfnetwork|darwin|expo|react-?native/i.test(ua) ? "mobile" : "web";
+      const clientType = resolveClientType(req);
 
       const data = await authService.login({ email, password, clientType, ip, userAgent: ua });
 
@@ -151,6 +154,29 @@ export const authController = {
       }
 
       logger.error("Login error", { error, email, ip });
+      return next(error);
+    }
+  },
+
+  // ================= NATIVE GOOGLE LOGIN (mobile account picker) =================
+  async googleNativeLogin(req: Request, res: Response, next: NextFunction) {
+    const ip = String((req as any).ip || "");
+    try {
+      const idToken = String(req.body?.idToken || "").trim();
+      if (!idToken) {
+        throw new AppError(400, "idToken required", "VALIDATION_ERROR");
+      }
+
+      const data = await authService.loginWithGoogleIdToken({
+        idToken,
+        clientType: resolveClientType(req),
+        ip,
+        userAgent: String(req.headers["user-agent"] || ""),
+      });
+
+      logger.info("Google native login successful", { email: data.user.email, ip });
+      return sendSuccess(res, 200, data, "Login successful");
+    } catch (error) {
       return next(error);
     }
   },
