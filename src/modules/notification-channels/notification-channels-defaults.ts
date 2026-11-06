@@ -39,6 +39,8 @@ export const DEFAULT_SMS_TEMPLATES: Record<DefaultPurchaseEventType, string> = {
     "Hi {{customer_name}}, your {{salon_name}} appointment moved to {{new_date}} {{new_time}} (was {{old_date}} {{old_time}}).",
   appointment_cancelled:
     "Hi {{customer_name}}, your {{appointment_date}} {{appointment_time}} appointment at {{salon_name}} has been cancelled.",
+  appointment_no_show:
+    "Hi {{customer_name}}, we missed you at {{salon_name}} for your {{appointment_date}} {{appointment_time}} appointment. Reply to reschedule.",
   payment_received:
     "Hi {{customer_name}}, your bill of ¤{{amount}} at {{salon_name}} has been paid. Thank you!",
   package_expiring_7d:
@@ -56,7 +58,9 @@ export const DEFAULT_SMS_TEMPLATES: Record<DefaultPurchaseEventType, string> = {
   package_appointment_reminder_24h:
     "Reminder: {{customer_name}}, your {{service_name}} appointment at {{salon_name}} is tomorrow at {{appointment_time}} (uses 1 session from {{package_name}}).",
   service_reminder_24h:
-    "Reminder: {{customer_name}}, your {{service_name}} appointment at {{salon_name}} is tomorrow at {{appointment_time}}.",
+    "Reminder: {{customer_name}}, your {{service_name}} appointment at {{salon_name}} is on {{appointment_date}} at {{appointment_time}}.",
+  service_redo_reminder:
+    "Hi {{customer_name}}, it has been a while since your {{service_name}} at {{salon_name}} ({{last_visit_date}}). Time for your next one? Reply to book.",
   reward_points_earned:
     "Hi {{customer_name}}, you earned {{points_earned}} reward points at {{salon_name}}! Total: {{total_points}}.",
   referral_reward:
@@ -113,6 +117,10 @@ export const DEFAULT_EMAIL_TEMPLATES: Record<DefaultPurchaseEventType, { subject
     subject: "Your Appointment has been Cancelled — {{salon_name}}",
     body: "Hi {{customer_name}},\n\nYour appointment at {{salon_name}} has been cancelled.\n\nDate: {{appointment_date}}\nTime: {{appointment_time}}\nService: {{service_name}}\n\nPlease contact us if you'd like to rebook or if you have any questions.",
   },
+  appointment_no_show: {
+    subject: "We missed you at {{salon_name}}",
+    body: "Hi {{customer_name}},\n\nWe missed you at {{salon_name}} for your appointment.\n\nDate: {{appointment_date}}\nTime: {{appointment_time}}\nService: {{service_name}}\n\nIf you would still like to visit, please reply to this email or contact us and we will be happy to reschedule.",
+  },
   payment_received: {
     // Transcribed from email.service.ts's sendAppointmentCompletedEmail,
     // adapted to this event's actual variable set (that method's own params
@@ -149,8 +157,12 @@ export const DEFAULT_EMAIL_TEMPLATES: Record<DefaultPurchaseEventType, { subject
     body: "Hi {{customer_name}},\n\nJust a reminder that you have an appointment tomorrow at {{salon_name}}.\n\nDate: {{appointment_date}}\nTime: {{appointment_time}}\nService: {{service_name}}\n\nThis appointment will use 1 session from your {{package_name}}. See you tomorrow!",
   },
   service_reminder_24h: {
-    subject: "Reminder: Your appointment tomorrow at {{salon_name}}",
-    body: "Hi {{customer_name}},\n\nThis is a reminder for your appointment tomorrow at {{salon_name}}.\n\nDate: {{appointment_date}}\nTime: {{appointment_time}}\nService: {{service_name}}\nStaff: {{staff_name}}\n\nWe look forward to seeing you tomorrow!",
+    subject: "Reminder: Your upcoming appointment at {{salon_name}}",
+    body: "Hi {{customer_name}},\n\nThis is a reminder for your upcoming appointment at {{salon_name}}.\n\nDate: {{appointment_date}}\nTime: {{appointment_time}}\nService: {{service_name}}\nStaff: {{staff_name}}\n\nWe look forward to seeing you!",
+  },
+  service_redo_reminder: {
+    subject: "Time for your next {{service_name}} at {{salon_name}}?",
+    body: "Hi {{customer_name}},\n\nIt has been a while since your {{service_name}} at {{salon_name}} on {{last_visit_date}}.\n\nIt may be time for your next one. Reply to this email or contact us and we will help you book a slot.",
   },
   reward_points_earned: {
     subject: "You earned {{points_earned}} reward points!",

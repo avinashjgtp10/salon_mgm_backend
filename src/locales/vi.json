@@ -1,0 +1,462 @@
+{
+  "receipt": {
+    "salonFallback": "Salon",
+    "notBilled": "Chưa xuất hóa đơn",
+    "walkIn": "Khách vãng lai",
+    "phoneAbbr": "ĐT: {{phone}}",
+    "status": {
+      "paid": "Đã thanh toán",
+      "partial": "Một phần",
+      "unpaid": "Chưa thanh toán",
+      "cancelled": "Đã hủy"
+    },
+    "type": {
+      "service": "Dịch vụ",
+      "product": "Sản phẩm",
+      "membership": "Thẻ thành viên",
+      "package": "Gói",
+      "giftCard": "Thẻ quà tặng",
+      "quick": "Bán nhanh"
+    },
+    "method": {
+      "cash": "Tiền mặt",
+      "card": "Thẻ",
+      "upi": "UPI",
+      "ewallet": "Ví điện tử",
+      "giftCard": "Thẻ quà tặng",
+      "package": "Gói",
+      "membership": "Thẻ thành viên",
+      "posMachine": "Máy thanh toán",
+      "other": "Khác"
+    },
+    "tax": "Thuế",
+    "incl": "(đã gồm)",
+    "totalTax": "Tổng thuế",
+    "itemsTotal": "Tổng mục",
+    "itemDiscount": "Giảm giá mục",
+    "subtotal": "Tạm tính",
+    "coupon": "Phiếu giảm giá",
+    "couponWith": "Phiếu giảm giá ({{code}})",
+    "packageCovered": "Đã trừ vào gói",
+    "membershipDiscount": "Giảm giá thành viên",
+    "extraCharges": "Phụ phí",
+    "billDiscount": "Giảm giá hóa đơn",
+    "referralDiscount": "Giảm giá giới thiệu",
+    "rewardPointsUsed": "Điểm thưởng đã dùng",
+    "membershipWalletUsed": "Ví thành viên đã dùng",
+    "ewalletUsed": "Ví điện tử đã dùng",
+    "referralCreditUsed": "Tín dụng giới thiệu đã dùng",
+    "roundOff": "Làm tròn",
+    "grandTotal": "Tổng cộng",
+    "amountToPay": "Số tiền cần thanh toán",
+    "staffTipIncluded": "Tiền tip nhân viên (đã gồm ở trên)",
+    "staffTipIncl": "Tiền tip nhân viên (đã gồm)",
+    "paidVia": "Thanh toán qua {{method}}",
+    "totalAmountPaid": "Tổng số tiền đã thanh toán",
+    "amountPaid": "Số tiền đã thanh toán",
+    "totalPaid": "Tổng đã thanh toán",
+    "paid": "Đã thanh toán",
+    "balanceDue": "Số dư còn nợ",
+    "invoice": "Hóa đơn",
+    "taxInvoice": "Hóa đơn thuế",
+    "invoiceNo": "Số hóa đơn",
+    "bookingNo": "Mã đặt lịch #",
+    "date": "Ngày",
+    "time": "Giờ",
+    "billTo": "Xuất hóa đơn cho",
+    "name": "Tên",
+    "client": "Khách hàng",
+    "phone": "Điện thoại",
+    "email": "Email",
+    "membership": "Thẻ thành viên",
+    "yourReferralCode": "Mã giới thiệu của bạn",
+    "referralEarnings": "Thu nhập từ giới thiệu",
+    "apptDetails": "Chi tiết lịch hẹn",
+    "staff": "Nhân viên",
+    "staffName": "Nhân viên: {{name}}",
+    "paymentMethod": "Phương thức thanh toán",
+    "bookingStatus": "Trạng thái đặt lịch",
+    "paymentStatus": "Trạng thái thanh toán",
+    "servicesItems": "Dịch vụ & Mục",
+    "col": {
+      "itemName": "Tên mục",
+      "type": "Loại",
+      "staff": "Nhân viên",
+      "time": "Giờ",
+      "qty": "SL",
+      "rate": "Đơn giá",
+      "disc": "Giảm",
+      "tax": "Thuế",
+      "amount": "Thành tiền",
+      "item": "Mục"
+    },
+    "noItems": "Không có mục nào",
+    "notes": "Ghi chú",
+    "activePackages": "Gói đang dùng",
+    "sessionsLeft": "{{name}} — còn {{remaining}}/{{total}} buổi",
+    "activeMemberships": "Thẻ thành viên đang dùng",
+    "expires": "Hết hạn: {{date}}",
+    "paymentSummary": "Tóm tắt thanh toán",
+    "thankYouFor": "Cảm ơn bạn đã chọn {{name}}!",
+    "lookForward": "Rất mong được gặp lại bạn.",
+    "computerGenerated": "Đây là biên lai do máy tính tạo.",
+    "noSignature": "Không cần chữ ký.",
+    "poweredBy": "Cung cấp bởi Salonox",
+    "total": "TỔNG",
+    "thanks": "Cảm ơn bạn!",
+    "titleInvoice": "Hóa đơn {{no}} — {{name}}",
+    "titleReceipt": "Biên lai {{no}} — {{name}}",
+    "membershipLoyalty": "Ưu đãi thành viên",
+    "invoiceDate": "Ngày hóa đơn",
+    "staffAlert": "Cảnh báo nhân viên",
+    "tipIncl": "Tiền tip (đã gồm)"
+  },
+  "email": {
+    "automatedNotification": "Thông báo tự động.",
+    "common": {
+      "hiName": "Xin chào {{name}},",
+      "hiPlain": "Xin chào,",
+      "hiBold": "Xin chào <strong>{{name}}</strong>,",
+      "rights": "© {{year}} SalonOx. Bảo lưu mọi quyền.",
+      "footerAuto": "© {{year}} SalonOx. Thông báo tự động.",
+      "ref": "Mã tham chiếu: {{ref}}"
+    },
+    "label": {
+      "client": "Khách hàng",
+      "service": "Dịch vụ",
+      "date": "Ngày",
+      "time": "Giờ",
+      "name": "Tên",
+      "email": "Email",
+      "phone": "Điện thoại",
+      "method": "Phương thức",
+      "salon": "Salon",
+      "period": "Kỳ",
+      "netPay": "Lương thực nhận"
+    },
+    "otp": {
+      "subject": "Mã OTP xác minh email của bạn",
+      "title": "Xác minh email",
+      "intro": "Mã OTP của bạn là:",
+      "expiry": "Mã OTP này hết hạn sau {{minutes}} phút."
+    },
+    "resetOtp": {
+      "subject": "Yêu cầu đặt lại mật khẩu",
+      "title": "Xác minh đặt lại mật khẩu",
+      "intro": "Chúng tôi đã nhận được yêu cầu đặt lại mật khẩu của bạn. Đây là mã xác minh của bạn:",
+      "expiry": "Mã này hết hạn sau {{minutes}} phút. Nếu bạn không yêu cầu đặt lại mật khẩu, vui lòng bỏ qua email này."
+    },
+    "resetDone": {
+      "subject": "Mật khẩu SalonOx của bạn đã được đặt lại thành công",
+      "title": "Xác nhận đặt lại mật khẩu",
+      "body": "Mật khẩu tài khoản <strong>SalonOx</strong> của bạn đã được đặt lại thành công.",
+      "details": "Chi tiết đặt lại",
+      "loginNote": "Giờ đây bạn có thể đăng nhập tài khoản SalonOx bằng mật khẩu mới.",
+      "loginButton": "Đăng nhập ngay",
+      "securityTitle": "Thông báo bảo mật",
+      "securityBody": "Nếu bạn không yêu cầu đặt lại mật khẩu này, vui lòng liên hệ ngay đội hỗ trợ của chúng tôi — tài khoản của bạn có thể gặp rủi ro.",
+      "support": "Hỗ trợ:",
+      "footerAuto": "Đây là thông báo bảo mật tự động. Vui lòng không trả lời email này."
+    },
+    "welcome": {
+      "subject": "Chào mừng đến với SalonOx, {{name}}! 🎉",
+      "pageTitle": "Chào mừng đến với SalonOx",
+      "tagline": "Nền tảng quản lý salon",
+      "banner": "Chào mừng bạn, {{name}}!",
+      "bannerSub": "Tài khoản salon của bạn đã sẵn sàng.",
+      "intro": "Chúc mừng! Tài khoản SalonOx cho <strong>{{salon}}</strong> của bạn đã được tạo thành công. Chúng tôi rất vui khi có bạn đồng hành.",
+      "about": "SalonOx giúp bạn quản lý lịch hẹn, nhân viên, khách hàng và phát triển việc kinh doanh salon — tất cả trong một nơi.",
+      "stepsTitle": "Bắt đầu chỉ với 3 bước đơn giản:",
+      "step1": "Hoàn thiện hồ sơ salon của bạn",
+      "step1Body": "Thêm thông tin salon, logo và giờ làm việc.",
+      "step2": "Thêm dịch vụ &amp; nhân viên",
+      "step2Body": "Thiết lập menu dịch vụ và mời các thành viên trong nhóm.",
+      "step3": "Bắt đầu nhận đặt lịch",
+      "step3Body": "Chia sẻ liên kết đặt lịch và xem lịch hẹn đổ về.",
+      "footer": "Bạn nhận được email này vì bạn đã tạo tài khoản trên SalonOx."
+    },
+    "newAppointment": {
+      "subject": "Lịch hẹn mới — {{name}}",
+      "title": "Lịch hẹn mới",
+      "intro": "Có một lịch hẹn mới. Chi tiết như sau:",
+      "details": "Chi tiết lịch hẹn"
+    },
+    "cancelledOwner": {
+      "subject": "Lịch hẹn đã hủy — {{name}}",
+      "title": "Lịch hẹn đã hủy",
+      "intro": "Một lịch hẹn đã bị hủy. Chi tiết như sau:"
+    },
+    "newPayment": {
+      "subject": "Đã nhận thanh toán — {{amount}}",
+      "title": "Đã nhận thanh toán",
+      "intro": "Đã ghi nhận một khoản thanh toán cho <strong>{{client}}</strong>.",
+      "invoice": "Hóa đơn: {{id}}"
+    },
+    "newClient": {
+      "subject": "Đã thêm khách hàng mới — {{name}}",
+      "title": "Đã thêm khách hàng mới",
+      "intro": "Một khách hàng mới đã được thêm vào <strong>{{salon}}</strong>."
+    },
+    "staffLogin": {
+      "subject": "Cảnh báo đăng nhập của nhân viên — {{name}} đã đăng nhập",
+      "title": "Cảnh báo đăng nhập của nhân viên",
+      "intro": "Một thành viên trong nhóm đã đăng nhập vào <strong>{{salon}}</strong>.",
+      "note": "Nếu lần đăng nhập này không như dự kiến, vui lòng xem lại quyền truy cập của nhóm bạn."
+    },
+    "deactivated": {
+      "subject": "Tài khoản SalonOx của bạn đã bị vô hiệu hóa",
+      "title": "Tài khoản đã bị vô hiệu hóa",
+      "body": "{{greeting}} tài khoản của bạn đã bị vô hiệu hóa. Vui lòng liên hệ đội ngũ Salonox.",
+      "note": "Bạn sẽ không thể đăng nhập cho đến khi tài khoản được kích hoạt lại. Vui lòng liên hệ đội ngũ Salonox để được hỗ trợ."
+    },
+    "staffInvite": {
+      "subject": "Bạn được mời tham gia {{salon}}",
+      "title": "Lời mời nhân viên",
+      "body": "Bạn được mời tham gia <strong>{{salon}}</strong> với tư cách nhân viên trên nền tảng của chúng tôi. Nhấp vào nút bên dưới để thiết lập tài khoản và bắt đầu.",
+      "expiry": "Liên kết lời mời này sẽ hết hạn sau <strong>72 giờ</strong>.",
+      "button": "Chấp nhận lời mời",
+      "fallback": "Nếu nút không hoạt động, hãy sao chép và dán liên kết này vào trình duyệt:",
+      "ignore": "Nếu bạn không mong đợi lời mời này, bạn có thể bỏ qua email này."
+    },
+    "dailySummary": {
+      "subject": "Tóm tắt tiền mặt hằng ngày của salon - {{date}}",
+      "pageTitle": "Báo cáo tóm tắt hằng ngày",
+      "title": "Báo cáo tóm tắt quầy thu ngân hằng ngày",
+      "intro": "Dưới đây là tóm tắt tài chính của ca quầy thu ngân tiền mặt hôm nay:",
+      "opening": "Số dư đầu kỳ",
+      "cashRevenue": "Doanh thu tiền mặt",
+      "cashExpense": "Chi tiêu tiền mặt",
+      "closing": "Số dư cuối kỳ",
+      "inStore": "Tiền mặt tại cửa hàng",
+      "reconciliation": "Số tiền đối soát",
+      "upi": "Thanh toán UPI",
+      "card": "Thanh toán thẻ",
+      "remarks": "Ghi chú đóng quầy",
+      "footer": "© {{year}} SalonOx. Báo cáo tóm tắt hằng ngày tự động."
+    },
+    "salary": {
+      "subject": "Phiếu lương của bạn — {{salon}}",
+      "title": "Đã xử lý thanh toán lương",
+      "body": "Xin chào <strong>{{name}}</strong>, lương của bạn cho kỳ dưới đây đã được xử lý. Biên lai chi tiết được đính kèm dưới dạng PDF.",
+      "periodRange": "{{from}} đến {{to}}"
+    }
+  },
+  "notify": {
+    "walkIn": "Khách vãng lai",
+    "service": "Dịch vụ",
+    "invoiceNotGenerated": "Chưa xuất hóa đơn",
+    "status": {
+      "booked": "đã đặt",
+      "paid": "đã thanh toán",
+      "partial": "một phần",
+      "cancelled": "đã hủy",
+      "no-show": "không đến",
+      "deleted": "đã xóa",
+      "pending": "chờ xử lý",
+      "completed": "hoàn thành",
+      "in_progress": "đang thực hiện"
+    },
+    "yourTurn": {
+      "title": "Đến lượt bạn",
+      "body": "{{client}} đã sẵn sàng cho {{services}}"
+    },
+    "newAppointment": {
+      "title": "Lịch hẹn mới"
+    },
+    "appointmentUpdated": {
+      "title": "Lịch hẹn đã cập nhật"
+    },
+    "appointmentCancelled": {
+      "title": "Lịch hẹn đã hủy"
+    },
+    "appointmentLine": "{{client}} — {{date}} lúc {{time}}",
+    "paymentComplete": {
+      "title": "Thanh toán hoàn tất"
+    },
+    "newSale": {
+      "title": "Đã tạo giao dịch bán mới"
+    },
+    "newClient": {
+      "title": "Đã thêm khách hàng mới"
+    },
+    "attendance": {
+      "staffFallback": "Một nhân viên",
+      "checkedIn": {
+        "title": "Nhân viên đã check-in",
+        "body": "{{name}} đã check-in lúc {{clock}} ngày {{day}}."
+      },
+      "checkedOut": {
+        "title": "Nhân viên đã check-out",
+        "body": "{{name}} đã check-out lúc {{clock}} ngày {{day}}."
+      },
+      "breakStart": {
+        "title": "Nhân viên đang nghỉ",
+        "body": "{{name}} bắt đầu nghỉ lúc {{clock}} ngày {{day}} (đến {{until}}).{{note}}"
+      },
+      "breakEnd": {
+        "title": "Nhân viên đã nghỉ xong",
+        "body": "{{name}} đã quay lại sau giờ nghỉ lúc {{clock}} ngày {{day}}."
+      },
+      "breakNote": " Ghi chú: {{note}}",
+      "reminder": {
+        "title": "Bạn chưa check-in ({{date}})",
+        "body": "Ca làm của bạn bắt đầu lúc {{time}}. Hãy mở SalonOX và check-in."
+      }
+    },
+    "inventory": {
+      "outOfStock": {
+        "title": "Sản phẩm hết hàng",
+        "body": "{{name}} đã hết hàng (còn 0)."
+      },
+      "low": {
+        "title": "Cảnh báo sắp hết hàng",
+        "body": "{{name}} sắp hết hàng — {{remaining}}; mức cảnh báo là {{threshold}}."
+      },
+      "left": "Còn {{amount}}",
+      "leftBottle": "Còn {{amount}} (khoảng 1 chai)",
+      "leftBottles": "Còn {{amount}} (khoảng {{n}} chai)",
+      "expired": {
+        "title": "Sản phẩm hết hạn",
+        "body": "{{name}} đã hết hạn (ngày hết hạn: {{date}})."
+      },
+      "expiring": {
+        "title": "Sản phẩm sắp hết hạn"
+      },
+      "expiringOne": "{{name}} hết hạn vào {{date}} (còn 1 ngày).",
+      "expiringMany": "{{name}} hết hạn vào {{date}} (còn {{days}} ngày)."
+    },
+    "whatsapp": {
+      "formNotSent": {
+        "title": "Chưa gửi biểu mẫu đặt lịch",
+        "body": "Không thể tự động gửi biểu mẫu đặt lịch tới {{phone}}. Hãy mở cuộc trò chuyện và gửi thủ công."
+      },
+      "bookingRequest": {
+        "title": "Yêu cầu đặt lịch: {{name}}"
+      },
+      "message": {
+        "title": "WhatsApp: {{sender}}"
+      }
+    },
+    "spotlight": {
+      "title": "Đã thêm tính năng mới"
+    }
+  },
+  "messages": {
+    "wa": {
+      "client_welcome": "Xin chào {{customer_name}},\nChào mừng bạn đến với {{salon_name}}!\nChúng tôi rất vui khi có bạn đồng hành.\nMã giới thiệu của bạn: {{referral_code}}\nCảm ơn bạn đã chọn {{salon_name}} — chúng tôi rất trân trọng bạn!",
+      "package_purchased": "Xin chào {{customer_name}},\nCảm ơn bạn đã mua {{package_name}} của chúng tôi!\n\nGói: {{package_name}}\nDịch vụ: {{services}}\nSố buổi: {{total_sessions}}\nCó hiệu lực đến: {{expiry_date}}\nSố tiền: ¤{{package_value}}\nHóa đơn: {{invoice_number}}\n\nRất mong gặp lại bạn. Hãy đặt lịch lần tới ngay nhé!",
+      "membership_purchased": "Xin chào {{customer_name}},\n\n🎉 {{membership_name}} của bạn đã được kích hoạt!\n\nThẻ thành viên: {{membership_name}}\nQuyền lợi: {{benefit}}\nNgày bắt đầu: {{start_date}}\nCó hiệu lực đến: {{expiry_date}}\nGiá thẻ thành viên: ¤{{membership_price}}\nHóa đơn: {{invoice_number}}\n\nHãy tận hưởng các quyền lợi thành viên độc quyền trong những lần ghé sau!",
+      "bill_receipt": "Xin chào {{customer_name}},\nCảm ơn bạn đã ghé {{salon_name}}.\nChúng tôi hy vọng bạn đã có trải nghiệm tuyệt vời!\nHóa đơn của bạn được đính kèm trong tin nhắn này.\n{{items}}\n{{feedback_line}}\nCảm ơn bạn đã chọn {{salon_name}} — chúng tôi rất trân trọng bạn!",
+      "appointment_confirmation": "Xin chào {{customer_name}},\nLịch hẹn của bạn tại {{salon_name}} đã được xác nhận.\nNgày: {{appointment_date}}\nGiờ: {{appointment_time}}\nDịch vụ: {{service_name}}\nNhân viên: {{staff_name}}\nRất mong được gặp bạn!",
+      "appointment_rescheduled": "Xin chào {{customer_name}},\nLịch hẹn của bạn tại {{salon_name}} đã được đổi lịch.\nTrước đó: {{old_date}} lúc {{old_time}}\nMới: {{new_date}} lúc {{new_time}}\nDịch vụ: {{service_name}}\nNhân viên: {{staff_name}}\nRất mong được gặp bạn!",
+      "appointment_cancelled": "Xin chào {{customer_name}},\nLịch hẹn của bạn tại {{salon_name}} đã bị hủy.\nNgày: {{appointment_date}}\nGiờ: {{appointment_time}}\nDịch vụ: {{service_name}}\nNếu bạn muốn đặt lịch hẹn khác, chúng tôi sẵn lòng hỗ trợ.",
+      "appointment_no_show": "Xin chào {{customer_name}},\nChúng tôi đã không gặp được bạn tại {{salon_name}} trong lịch hẹn của bạn.\nNgày: {{appointment_date}}\nGiờ: {{appointment_time}}\nDịch vụ: {{service_name}}\nNếu bạn vẫn muốn ghé, vui lòng trả lời tin nhắn này và chúng tôi sẽ sẵn lòng đổi lịch.",
+      "payment_received": "Xin chào {{customer_name}},\nHóa đơn ¤{{amount}} của bạn tại {{salon_name}} đã được thanh toán thành công.\nLịch hẹn: {{appointment_date}}\nGiờ: {{appointment_time}}\nCảm ơn bạn đã chọn {{salon_name}} — chúng tôi rất trân trọng bạn!",
+      "package_expiring_7d": "Xin chào {{customer_name}},\n{{package_name}} của bạn sẽ hết hạn sau 7 ngày.\nNgày hết hạn: {{expiry_date}}\nSố buổi còn lại: {{remaining_sessions}}\nĐừng bỏ lỡ các buổi còn lại của bạn!\nHãy đặt lịch lần tới ngay hôm nay.",
+      "package_expiring_24h": "Xin chào {{customer_name}},\n{{package_name}} của bạn hết hạn vào ngày mai.\nSố buổi còn lại: {{remaining_sessions}}\nNgày hết hạn: {{expiry_date}}\nBạn vẫn còn thời gian để dùng các buổi còn lại.\nHãy đặt lịch ngay bây giờ.",
+      "membership_expiring_7d": "Xin chào {{customer_name}},\nThẻ thành viên {{membership_name}} của bạn sẽ hết hạn sau 7 ngày.\nNgày hết hạn: {{expiry_date}}\nSố dư còn lại: ¤{{remaining_balance}}\nHãy tận dụng các quyền lợi thành viên còn lại trước khi hết hạn.",
+      "membership_expiring_24h": "Xin chào {{customer_name}},\nThẻ thành viên {{membership_name}} của bạn hết hạn vào ngày mai.\nSố dư còn lại: ¤{{remaining_balance}}\nNgày hết hạn: {{expiry_date}}\nĐừng để số dư thẻ thành viên còn lại không được sử dụng.",
+      "package_session_used": "Xin chào {{customer_name}},\nDịch vụ {{service_name}} của bạn đã được trừ thành công từ {{package_name}}.\nSố buổi đã dùng: 1\nSố buổi còn lại: {{remaining_sessions}}\nDịch vụ còn lại: {{remaining_services_breakdown}}\nCảm ơn bạn đã ghé {{salon_name}} — chúng tôi rất trân trọng bạn!",
+      "membership_session_used": "Xin chào {{customer_name}},\nDịch vụ {{service_name}} của bạn đã được trừ thành công từ thẻ thành viên.\nSố tiền đã dùng: ¤{{amount_used}}\nSố dư còn lại: ¤{{remaining_balance}}\nCảm ơn bạn đã ghé {{salon_name}} — chúng tôi rất trân trọng bạn!",
+      "package_appointment_reminder_24h": "Xin chào {{customer_name}},\nNhắc bạn rằng ngày mai bạn có lịch hẹn tại {{salon_name}}.\nNgày: {{appointment_date}}\nGiờ: {{appointment_time}}\nDịch vụ: {{service_name}}\nLịch hẹn này sẽ dùng 1 buổi từ {{package_name}} của bạn.\nHẹn gặp bạn ngày mai!",
+      "service_reminder_24h": "Xin chào {{customer_name}},\nĐây là lời nhắc về lịch hẹn sắp tới của bạn tại {{salon_name}}.\nNgày: {{appointment_date}}\nGiờ: {{appointment_time}}\nDịch vụ: {{service_name}}\nNhân viên: {{staff_name}}\nRất mong được gặp bạn!",
+      "reward_points_earned": "Xin chào {{customer_name}},\nBạn đã nhận {{points_earned}} điểm thưởng từ lần ghé {{salon_name}} gần đây.\nĐiểm đã nhận: {{points_earned}}\nTổng điểm: {{total_points}}\nHãy tiếp tục ghé và tích lũy phần thưởng!",
+      "referral_reward": "Xin chào {{customer_name}},\nTin vui! Người bạn giới thiệu {{referred_customer_name}} đã hoàn tất lượt ghé đủ điều kiện tại {{salon_name}}.\nPhần thưởng giới thiệu: {{reward}}\nTổng điểm thưởng của bạn: {{total_points}}\nCảm ơn bạn đã giới thiệu!",
+      "ewallet_used": "Xin chào {{customer_name}},\nVí điện tử của bạn đã được dùng để thanh toán tại {{salon_name}}.\nSố tiền đã dùng: ¤{{amount_used}}\nSố dư còn lại: ¤{{remaining_balance}}\nCảm ơn bạn đã chọn {{salon_name}} — chúng tôi rất trân trọng bạn!",
+      "referral_credit_used": "Xin chào {{customer_name}},\nSố dư giới thiệu của bạn đã được dùng để thanh toán tại {{salon_name}}.\nSố tiền đã dùng: ¤{{amount_used}}\nSố dư giới thiệu còn lại: ¤{{remaining_balance}}\nCảm ơn bạn đã chọn {{salon_name}} — chúng tôi rất trân trọng bạn!",
+      "reward_points_used": "Xin chào {{customer_name}},\nĐiểm thưởng của bạn đã được dùng để thanh toán tại {{salon_name}}.\nĐiểm đã dùng: {{points_used}}\nĐiểm còn lại: {{remaining_points}}\nCảm ơn bạn đã chọn {{salon_name}} — chúng tôi rất trân trọng bạn!",
+      "birthday_wishes": "Xin chào {{customer_name}},\n🎉 Chúc mừng sinh nhật từ tất cả chúng tôi tại {{salon_name}}!\nChúc bạn một ngày tuyệt vời — chúng tôi rất muốn cùng bạn ăn mừng. Hãy ghé thăm chúng tôi sớm nhé!",
+      "anniversary_wishes": "Xin chào {{customer_name}},\n🎉 Chúc mừng ngày kỷ niệm từ tất cả chúng tôi tại {{salon_name}}!\nChúc bạn thêm nhiều năm tuyệt vời — chúng tôi rất muốn cùng bạn ăn mừng. Hãy ghé thăm chúng tôi sớm nhé!",
+      "service_redo_reminder": "Xin chào {{customer_name}},\nĐã khá lâu kể từ lần {{service_name}} của bạn tại {{salon_name}} vào {{last_visit_date}}.\nCó thể đã đến lúc làm lần tiếp theo. Hãy trả lời tin nhắn này và chúng tôi sẽ giúp bạn đặt lịch.",
+      "cash_counter_opened": "*Đã mở quầy tiền mặt — {{salon_name}}*\n\nQuầy tiền mặt của bạn đã được mở và sẵn sàng cho các giao dịch hôm nay.\n\nNgày: {{opening_date}}\nGiờ: {{opening_time}}\nSố tiền mặt đầu ca: {{opening_amount}}\n\nChúc bạn một ngày buôn bán thuận lợi!",
+      "cash_counter_closed": "*Đã đóng quầy tiền mặt — {{salon_name}}*\n\nQuầy tiền mặt của bạn đã đóng trong ngày. Đây là tóm tắt các khoản thu của ca này.\n\nNgày: {{closing_date}}\nGiờ: {{closing_time}}\n\n*Tóm tắt thu tiền*\n{{collection_breakdown}}\n━━━━━━━━━━━━━━\n*Tổng thu: {{total_collection}}*\nChi phí: {{expenses}}\nTiền mặt tại cửa hàng: {{in_store_cash}}\n\nCảm ơn bạn đã đối chiếu quầy tiền mặt hôm nay."
+    },
+    "sms": {
+      "client_welcome": "Xin chào {{customer_name}}, chào mừng bạn đến với {{salon_name}}! Mã giới thiệu của bạn là {{referral_code}}.",
+      "package_purchased": "Xin chào {{customer_name}}, cảm ơn bạn đã mua {{package_name}} ({{total_sessions}} buổi, có hiệu lực đến {{expiry_date}}). Hóa đơn: {{invoice_number}}.",
+      "membership_purchased": "Xin chào {{customer_name}}, {{membership_name}} của bạn đã được kích hoạt, có hiệu lực đến {{expiry_date}}. Hóa đơn: {{invoice_number}}.",
+      "bill_receipt": "Xin chào {{customer_name}}, cảm ơn bạn đã ghé {{salon_name}}! Hóa đơn của bạn đã được thanh toán. {{feedback_line}}",
+      "appointment_confirmation": "Xin chào {{customer_name}}, lịch hẹn của bạn tại {{salon_name}} đã được xác nhận. Ngày: {{appointment_date}}, Giờ: {{appointment_time}}, Dịch vụ: {{service_name}}.",
+      "appointment_rescheduled": "Xin chào {{customer_name}}, lịch hẹn {{salon_name}} của bạn đã chuyển sang {{new_date}} {{new_time}} (trước đó {{old_date}} {{old_time}}).",
+      "appointment_cancelled": "Xin chào {{customer_name}}, lịch hẹn lúc {{appointment_date}} {{appointment_time}} của bạn tại {{salon_name}} đã bị hủy.",
+      "appointment_no_show": "Xin chào {{customer_name}}, chúng tôi không gặp được bạn tại {{salon_name}} trong lịch hẹn {{appointment_date}} {{appointment_time}}. Trả lời để đổi lịch.",
+      "payment_received": "Xin chào {{customer_name}}, hóa đơn ¤{{amount}} của bạn tại {{salon_name}} đã được thanh toán. Cảm ơn bạn!",
+      "package_expiring_7d": "Xin chào {{customer_name}}, {{package_name}} của bạn hết hạn vào {{expiry_date}} (còn {{remaining_sessions}} buổi). Đặt lịch ngay!",
+      "package_expiring_24h": "Xin chào {{customer_name}}, {{package_name}} của bạn hết hạn vào ngày mai (còn {{remaining_sessions}} buổi). Đặt lịch ngay!",
+      "membership_expiring_7d": "Xin chào {{customer_name}}, thẻ thành viên {{membership_name}} của bạn hết hạn vào {{expiry_date}} (còn ¤{{remaining_balance}}).",
+      "membership_expiring_24h": "Xin chào {{customer_name}}, thẻ thành viên {{membership_name}} của bạn hết hạn vào ngày mai (còn ¤{{remaining_balance}}).",
+      "package_session_used": "Xin chào {{customer_name}}, buổi {{service_name}} từ {{package_name}} của bạn đã được dùng. Còn {{remaining_sessions}} buổi.",
+      "membership_session_used": "Xin chào {{customer_name}}, đã trừ ¤{{amount_used}} từ thẻ thành viên của bạn cho {{service_name}}. Số dư: ¤{{remaining_balance}}.",
+      "package_appointment_reminder_24h": "Nhắc nhở: {{customer_name}}, lịch hẹn {{service_name}} của bạn tại {{salon_name}} là ngày mai lúc {{appointment_time}} (dùng 1 buổi từ {{package_name}}).",
+      "service_reminder_24h": "Nhắc nhở: {{customer_name}}, lịch hẹn {{service_name}} của bạn tại {{salon_name}} vào {{appointment_date}} lúc {{appointment_time}}.",
+      "reward_points_earned": "Xin chào {{customer_name}}, bạn đã nhận {{points_earned}} điểm thưởng tại {{salon_name}}! Tổng: {{total_points}}.",
+      "referral_reward": "Xin chào {{customer_name}}, bạn nhận được phần thưởng giới thiệu cho lượt ghé {{salon_name}} của {{referred_customer_name}}! Phần thưởng: {{reward}}.",
+      "ewallet_used": "Xin chào {{customer_name}}, đã trừ ¤{{amount_used}} từ ví điện tử của bạn tại {{salon_name}}. Số dư: ¤{{remaining_balance}}.",
+      "referral_credit_used": "Xin chào {{customer_name}}, đã trừ ¤{{amount_used}} từ số dư giới thiệu của bạn tại {{salon_name}}. Số dư: ¤{{remaining_balance}}.",
+      "reward_points_used": "Xin chào {{customer_name}}, đã dùng {{points_used}} điểm thưởng tại {{salon_name}}. Còn lại: {{remaining_points}}.",
+      "birthday_wishes": "Chúc mừng sinh nhật {{customer_name}}! Chúc bạn một ngày tuyệt vời từ tất cả chúng tôi tại {{salon_name}}. Hãy đến ăn mừng cùng chúng tôi sớm nhé!",
+      "anniversary_wishes": "Chúc mừng ngày kỷ niệm {{customer_name}}! Chúc bạn thêm nhiều năm tuyệt vời từ tất cả chúng tôi tại {{salon_name}}.",
+      "service_redo_reminder": "Xin chào {{customer_name}}, đã khá lâu kể từ lần {{service_name}} của bạn tại {{salon_name}} ({{last_visit_date}}). Đến lúc làm lần tiếp theo chưa? Trả lời để đặt lịch.",
+      "cash_counter_opened": "Đã mở quầy tiền mặt - {{salon_name}}. {{opening_date}} {{opening_time}}. Tiền mặt đầu ca: {{opening_amount}}.",
+      "cash_counter_closed": "Đã đóng quầy tiền mặt - {{salon_name}}. {{closing_date}} {{closing_time}}. {{collection_breakdown}}. Tổng: {{total_collection}}. Chi phí: {{expenses}}. Tiền mặt tại cửa hàng: {{in_store_cash}}."
+    },
+    "emailSubject": {
+      "client_welcome": "Chào mừng bạn đến với {{salon_name}}!",
+      "package_purchased": "Đã xác nhận bạn mua {{package_name}}",
+      "membership_purchased": "Thẻ thành viên {{membership_name}} của bạn đã kích hoạt",
+      "bill_receipt": "Cảm ơn bạn đã ghé {{salon_name}}",
+      "appointment_confirmation": "Đã xác nhận lịch hẹn tại {{salon_name}} — {{appointment_date}}",
+      "appointment_rescheduled": "Lịch hẹn của bạn tại {{salon_name}} đã được đổi lịch",
+      "appointment_cancelled": "Lịch hẹn của bạn đã bị hủy — {{salon_name}}",
+      "appointment_no_show": "Chúng tôi không gặp được bạn tại {{salon_name}}",
+      "payment_received": "Biên lai lịch hẹn của bạn — {{salon_name}}",
+      "package_expiring_7d": "{{package_name}} của bạn hết hạn sau 7 ngày",
+      "package_expiring_24h": "{{package_name}} của bạn hết hạn vào ngày mai",
+      "membership_expiring_7d": "Thẻ thành viên {{membership_name}} của bạn hết hạn sau 7 ngày",
+      "membership_expiring_24h": "Thẻ thành viên {{membership_name}} của bạn hết hạn vào ngày mai",
+      "package_session_used": "Đã dùng một buổi — {{package_name}}",
+      "membership_session_used": "Đã dùng số dư thẻ thành viên tại {{salon_name}}",
+      "package_appointment_reminder_24h": "Nhắc nhở: Lịch hẹn ngày mai của bạn tại {{salon_name}}",
+      "service_reminder_24h": "Nhắc nhở: Lịch hẹn sắp tới của bạn tại {{salon_name}}",
+      "reward_points_earned": "Bạn đã nhận {{points_earned}} điểm thưởng!",
+      "referral_reward": "Phần thưởng giới thiệu của bạn đã được cộng",
+      "ewallet_used": "Đã dùng ví điện tử tại {{salon_name}}",
+      "referral_credit_used": "Đã dùng số dư giới thiệu tại {{salon_name}}",
+      "reward_points_used": "Đã dùng điểm thưởng tại {{salon_name}}",
+      "birthday_wishes": "Chúc mừng sinh nhật từ {{salon_name}}!",
+      "anniversary_wishes": "Chúc mừng ngày kỷ niệm từ {{salon_name}}!",
+      "service_redo_reminder": "Đến lúc làm {{service_name}} lần tiếp theo tại {{salon_name}} chưa?",
+      "cash_counter_opened": "Đã mở quầy tiền mặt — {{salon_name}}",
+      "cash_counter_closed": "Đã đóng quầy tiền mặt — {{salon_name}}"
+    },
+    "emailBody": {
+      "client_welcome": "Xin chào {{customer_name}},\n\nChào mừng bạn đến với {{salon_name}}! Chúng tôi rất vui khi có bạn đồng hành.\n\nMã giới thiệu của bạn: {{referral_code}}\n\nCảm ơn bạn đã chọn chúng tôi — rất mong sớm gặp lại bạn.",
+      "package_purchased": "Xin chào {{customer_name}},\n\nCảm ơn bạn đã mua {{package_name}} của chúng tôi!\n\nGói: {{package_name}}\nDịch vụ: {{services}}\nSố buổi: {{total_sessions}}\nCó hiệu lực đến: {{expiry_date}}\nSố tiền: ¤{{package_value}}\nHóa đơn: {{invoice_number}}\n\nRất mong gặp lại bạn. Hãy đặt lịch lần tới ngay nhé!",
+      "membership_purchased": "Xin chào {{customer_name}},\n\n{{membership_name}} của bạn đã được kích hoạt!\n\nThẻ thành viên: {{membership_name}}\nQuyền lợi: {{benefit}}\nNgày bắt đầu: {{start_date}}\nCó hiệu lực đến: {{expiry_date}}\nGiá thẻ thành viên: ¤{{membership_price}}\nHóa đơn: {{invoice_number}}\n\nHãy tận hưởng các quyền lợi thành viên độc quyền trong những lần ghé sau!",
+      "bill_receipt": "Xin chào {{customer_name}},\n\nCảm ơn bạn đã ghé {{salon_name}}. Chúng tôi hy vọng bạn đã có trải nghiệm tuyệt vời! Hóa đơn của bạn được đính kèm trong email này.\n\n{{items}}\n\n{{feedback_line}}\n\nCảm ơn bạn đã chọn {{salon_name}} — chúng tôi rất trân trọng bạn!",
+      "appointment_confirmation": "Xin chào {{customer_name}},\n\nLịch hẹn của bạn đã được xác nhận thành công.\n\nChi tiết lịch hẹn:\nSalon: {{salon_name}}\nNgày: {{appointment_date}}\nGiờ: {{appointment_time}}\nDịch vụ: {{service_name}}\nNhân viên: {{staff_name}}\nMã đặt lịch: {{booking_id}}\n\nThanh toán:\nTổng: {{appointment_amount}}\nĐã trả: {{paid_amount}}\nThanh toán tại salon: {{remaining_amount}}\n\nĐịa chỉ của chúng tôi:\n{{salon_address}}\n{{google_maps_link}}\n\nCần thay đổi?\n{{manage_booking_link}}\n\n{{cancellation_policy}}\n\nRất mong được gặp bạn!",
+      "appointment_rescheduled": "Xin chào {{customer_name}},\n\nLịch hẹn của bạn tại {{salon_name}} đã được đổi lịch.\n\nTrước đó: {{old_date}} lúc {{old_time}}\nMới: {{new_date}} lúc {{new_time}}\nDịch vụ: {{service_name}}\nNhân viên: {{staff_name}}\n\nRất mong được gặp bạn!",
+      "appointment_cancelled": "Xin chào {{customer_name}},\n\nLịch hẹn của bạn tại {{salon_name}} đã bị hủy.\n\nNgày: {{appointment_date}}\nGiờ: {{appointment_time}}\nDịch vụ: {{service_name}}\n\nVui lòng liên hệ chúng tôi nếu bạn muốn đặt lại hoặc có bất kỳ câu hỏi nào.",
+      "appointment_no_show": "Xin chào {{customer_name}},\n\nChúng tôi đã không gặp được bạn tại {{salon_name}} trong lịch hẹn của bạn.\n\nNgày: {{appointment_date}}\nGiờ: {{appointment_time}}\nDịch vụ: {{service_name}}\n\nNếu bạn vẫn muốn ghé, vui lòng trả lời email này hoặc liên hệ chúng tôi và chúng tôi sẽ sẵn lòng đổi lịch.",
+      "payment_received": "Xin chào {{customer_name}},\n\nCảm ơn bạn đã ghé {{salon_name}}. Đây là biên lai của bạn:\n\nSố tiền đã trả: ¤{{amount}}\nLịch hẹn: {{appointment_date}} lúc {{appointment_time}}\n\nHy vọng sớm gặp lại bạn!",
+      "package_expiring_7d": "Xin chào {{customer_name}},\n\n{{package_name}} của bạn sẽ hết hạn sau 7 ngày.\n\nNgày hết hạn: {{expiry_date}}\nSố buổi còn lại: {{remaining_sessions}}\n\nĐừng bỏ lỡ các buổi còn lại của bạn! Hãy đặt lịch lần tới ngay hôm nay.",
+      "package_expiring_24h": "Xin chào {{customer_name}},\n\n{{package_name}} của bạn hết hạn vào ngày mai.\n\nSố buổi còn lại: {{remaining_sessions}}\nNgày hết hạn: {{expiry_date}}\n\nBạn vẫn còn thời gian để dùng các buổi còn lại. Hãy đặt lịch ngay bây giờ.",
+      "membership_expiring_7d": "Xin chào {{customer_name}},\n\nThẻ thành viên {{membership_name}} của bạn sẽ hết hạn sau 7 ngày.\n\nNgày hết hạn: {{expiry_date}}\nSố dư còn lại: ¤{{remaining_balance}}\n\nHãy tận dụng các quyền lợi thành viên còn lại trước khi hết hạn.",
+      "membership_expiring_24h": "Xin chào {{customer_name}},\n\nThẻ thành viên {{membership_name}} của bạn hết hạn vào ngày mai.\n\nSố dư còn lại: ¤{{remaining_balance}}\nNgày hết hạn: {{expiry_date}}\n\nĐừng để số dư thẻ thành viên còn lại không được sử dụng.",
+      "package_session_used": "Xin chào {{customer_name}},\n\nDịch vụ {{service_name}} của bạn đã được trừ thành công từ {{package_name}}.\n\nSố buổi còn lại: {{remaining_sessions}}\nDịch vụ còn lại: {{remaining_services_breakdown}}\n\nCảm ơn bạn đã ghé {{salon_name}} — chúng tôi rất trân trọng bạn!",
+      "membership_session_used": "Xin chào {{customer_name}},\n\nDịch vụ {{service_name}} của bạn đã được trừ thành công từ thẻ thành viên.\n\nSố tiền đã dùng: ¤{{amount_used}}\nSố dư còn lại: ¤{{remaining_balance}}\n\nCảm ơn bạn đã ghé {{salon_name}} — chúng tôi rất trân trọng bạn!",
+      "package_appointment_reminder_24h": "Xin chào {{customer_name}},\n\nNhắc bạn rằng ngày mai bạn có lịch hẹn tại {{salon_name}}.\n\nNgày: {{appointment_date}}\nGiờ: {{appointment_time}}\nDịch vụ: {{service_name}}\n\nLịch hẹn này sẽ dùng 1 buổi từ {{package_name}} của bạn. Hẹn gặp bạn ngày mai!",
+      "service_reminder_24h": "Xin chào {{customer_name}},\n\nĐây là lời nhắc về lịch hẹn sắp tới của bạn tại {{salon_name}}.\n\nNgày: {{appointment_date}}\nGiờ: {{appointment_time}}\nDịch vụ: {{service_name}}\nNhân viên: {{staff_name}}\n\nRất mong được gặp bạn!",
+      "reward_points_earned": "Xin chào {{customer_name}},\n\nBạn đã nhận {{points_earned}} điểm thưởng từ lần ghé {{salon_name}} gần đây.\n\nĐiểm đã nhận: {{points_earned}}\nTổng điểm: {{total_points}}\n\nHãy tiếp tục ghé và tích lũy phần thưởng!",
+      "referral_reward": "Xin chào {{customer_name}},\n\nTin vui! Người bạn giới thiệu {{referred_customer_name}} đã hoàn tất lượt ghé đủ điều kiện tại {{salon_name}}.\n\nPhần thưởng giới thiệu: {{reward}}\nTổng điểm thưởng của bạn: {{total_points}}\n\nCảm ơn bạn đã giới thiệu!",
+      "ewallet_used": "Xin chào {{customer_name}},\n\nVí điện tử của bạn đã được dùng để thanh toán tại {{salon_name}}.\n\nSố tiền đã dùng: ¤{{amount_used}}\nSố dư còn lại: ¤{{remaining_balance}}\n\nCảm ơn bạn đã chọn {{salon_name}} — chúng tôi rất trân trọng bạn!",
+      "referral_credit_used": "Xin chào {{customer_name}},\n\nSố dư giới thiệu của bạn đã được dùng để thanh toán tại {{salon_name}}.\n\nSố tiền đã dùng: ¤{{amount_used}}\nSố dư giới thiệu còn lại: ¤{{remaining_balance}}\n\nCảm ơn bạn đã chọn {{salon_name}} — chúng tôi rất trân trọng bạn!",
+      "reward_points_used": "Xin chào {{customer_name}},\n\nĐiểm thưởng của bạn đã được dùng để thanh toán tại {{salon_name}}.\n\nĐiểm đã dùng: {{points_used}}\nĐiểm còn lại: {{remaining_points}}\n\nCảm ơn bạn đã chọn {{salon_name}} — chúng tôi rất trân trọng bạn!",
+      "birthday_wishes": "Xin chào {{customer_name}},\n\n🎉 Chúc mừng sinh nhật từ tất cả chúng tôi tại {{salon_name}}!\n\nChúc bạn một ngày tuyệt vời — chúng tôi rất muốn cùng bạn ăn mừng. Hãy ghé thăm chúng tôi sớm nhé!",
+      "anniversary_wishes": "Xin chào {{customer_name}},\n\n🎉 Chúc mừng ngày kỷ niệm từ tất cả chúng tôi tại {{salon_name}}!\n\nChúc bạn thêm nhiều năm tuyệt vời — chúng tôi rất muốn cùng bạn ăn mừng. Hãy ghé thăm chúng tôi sớm nhé!",
+      "service_redo_reminder": "Xin chào {{customer_name}},\n\nĐã khá lâu kể từ lần {{service_name}} của bạn tại {{salon_name}} vào {{last_visit_date}}.\n\nCó thể đã đến lúc làm lần tiếp theo. Hãy trả lời email này hoặc liên hệ chúng tôi và chúng tôi sẽ giúp bạn đặt lịch.",
+      "cash_counter_opened": "Đã mở quầy tiền mặt — {{salon_name}}\n\nQuầy tiền mặt của bạn đã được mở và sẵn sàng cho các giao dịch hôm nay.\n\nNgày: {{opening_date}}\nGiờ: {{opening_time}}\nSố tiền mặt đầu ca: {{opening_amount}}\n\nChúc bạn một ngày buôn bán thuận lợi!",
+      "cash_counter_closed": "Đã đóng quầy tiền mặt — {{salon_name}}\n\nQuầy tiền mặt của bạn đã đóng trong ngày. Đây là tóm tắt các khoản thu của ca này.\n\nNgày: {{closing_date}}\nGiờ: {{closing_time}}\n\nTóm tắt thu tiền\n{{collection_breakdown}}\n\nTổng thu: {{total_collection}}\nChi phí: {{expenses}}\nTiền mặt tại cửa hàng: {{in_store_cash}}\n\nCảm ơn bạn đã đối chiếu quầy tiền mặt hôm nay."
+    }
+  }
+}

@@ -54,7 +54,7 @@ const NO_SMS_PROVIDER = "No SMS provider configured"
 // particular preview. Named here (not positional), since Email/SMS templates
 // use named {{customer_name}} tokens directly, unlike Meta's {{1}}/{{2}}.
 const TEST_SAMPLE_VALUES: Record<string, string> = {
-  customer_name: "Priya Sharma", salon_name: "Bloom Salon",
+  customer_name: "Priya Sharma", salon_name: "Bloom Salon", last_visit_date: "12 Aug 2026",
   appointment_date: "12 Sep 2026", appointment_time: "3:30 PM",
   old_date: "10 Sep 2026", old_time: "2:00 PM", new_date: "12 Sep 2026", new_time: "3:30 PM",
   service_name: "Hair Cut", staff_name: "Anita", amount: "1,250",

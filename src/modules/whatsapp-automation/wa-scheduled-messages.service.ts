@@ -38,6 +38,12 @@ function nextOccurrence(dayMonth: string, timeZone: string, hour = 9): Date {
   return candidate
 }
 
+// How long before the visit the plain service reminder goes out. The package-linked
+// reminder keeps its own 24h lead. Salon-local time doesn't matter here: it is an offset
+// from the appointment instant.
+export const SERVICE_REMINDER_LEAD_HOURS = 5
+const PACKAGE_REMINDER_LEAD_HOURS = 24
+
 export const waScheduledMessagesService = {
 
   // ── List / read ──────────────────────────────────────────────────────────
@@ -118,8 +124,11 @@ export const waScheduledMessagesService = {
   }): Promise<void> {
     const apptTime = new Date(params.scheduledAt)
     if (isNaN(apptTime.getTime())) return
-    const reminderAt = new Date(apptTime.getTime() - 24 * 3600_000)
-    if (reminderAt.getTime() <= Date.now()) return // already <24h out — the old-instant-fire path (removed) would've caught this; skip here
+    const leadHours = params.packageLinked ? PACKAGE_REMINDER_LEAD_HOURS : SERVICE_REMINDER_LEAD_HOURS
+    const reminderAt = new Date(apptTime.getTime() - leadHours * 3600_000)
+    // Booked closer to the visit than the lead time: the reminder moment has already passed, and the
+    // booking confirmation just went out, so there is nothing useful to remind about.
+    if (reminderAt.getTime() <= Date.now()) return
 
     const eventType: AutomationEventType = params.packageLinked ? 'package_appointment_reminder_24h' : 'service_reminder_24h'
     const dateStr = formatDateIST(apptTime, await getSalonTimezone(params.salonId), await getSalonDateLocale(params.salonId))
@@ -135,6 +144,56 @@ export const waScheduledMessagesService = {
       messagePreview: `Appointment reminder — ${params.serviceName} on ${dateStr} ${timeStr}`,
       isPreview: false,
     })
+  },
+
+  // ── Service "time to redo" reminders ────────────────────────────────────────
+  // services.reminder_after_days used to be saved and never read, so no reminder
+  // ever went out. This sweep (run hourly by the automation scheduler) finds
+  // service lines of recently PAID appointments whose service has a reminder
+  // configured and schedules the message N days after the day it was paid, at
+  // 10:00 in the salon's timezone. Looking at paid appointments (rather than
+  // hooking each checkout path) covers Calendar checkout, a payment on an
+  // appointment and Quick Sale alike. A reminder whose date is already past is
+  // skipped, never sent late.
+  async seedServiceRedoReminders(): Promise<number> {
+    const lines = await waScheduledMessagesRepository.findPaidServiceLinesForRedo()
+    let scheduled = 0
+    for (const l of lines) {
+      try {
+        const tz = await getSalonTimezone(l.salon_id)
+        const [y, m, d] = new Date(l.paid_at).toLocaleDateString('en-CA', { timeZone: tz }).split('-').map(Number)
+        const due = new Date(Date.UTC(y, m - 1, d + Number(l.reminder_after_days)))
+        const sendAt = buildUtcForSalon(due.getUTCFullYear(), due.getUTCMonth() + 1, due.getUTCDate(), 10, tz)
+        const preview = `Redo ${l.service_name} reminder`
+        const base = {
+          salonId: l.salon_id, clientId: l.client_id, phone: l.phone, countryCode: l.country_code,
+          eventType: 'service_redo_reminder' as AutomationEventType, referenceId: l.row_id, referenceType: 'appointment_service',
+          scheduledAt: sendAt, isPreview: false,
+        }
+        if (sendAt.getTime() <= Date.now()) {
+          // Record it as skipped so a past-dated reminder is not re-evaluated every hour for two days.
+          const row = await waScheduledMessagesRepository.upsertScheduled({ ...base, variables: {}, messagePreview: preview })
+          await waScheduledMessagesRepository.markSkipped(row.id, 'The reminder date had already passed when the visit was paid')
+          continue
+        }
+        await waScheduledMessagesRepository.cancelPendingRedoForClientService(l.salon_id, l.client_id, preview, l.row_id)
+        await waScheduledMessagesRepository.upsertScheduled({
+          ...base,
+          variables: {
+            '1': l.client_name ?? 'Valued Customer',
+            '2': l.salon_name ?? 'our salon',
+            '3': l.service_name,
+            '4': formatDateIST(l.paid_at, tz, await getSalonDateLocale(l.salon_id)),
+          },
+          messagePreview: preview,
+        })
+        scheduled++
+      } catch (err: any) {
+        logger.error('[WA-SCHED] service_redo_reminder schedule failed', { appointmentId: l.appointment_id, rowId: l.row_id, error: err?.message })
+      }
+    }
+    if (scheduled > 0) logger.info(`[WA-SCHED] Scheduled ${scheduled} service redo reminder(s)`)
+    return scheduled
   },
 
   async scheduleBirthday(params: {
@@ -331,7 +390,7 @@ export const waScheduledMessagesService = {
     // (claimDue/claimById's UPDATE ... WHERE status = ... RETURNING) that
     // ran before this — only one caller can ever move a given row off
     // SCHEDULED/FAILED at a time.
-    await whatsappAutomationService.trigger({
+    const outcome = await whatsappAutomationService.trigger({
       salonId: row.salon_id, eventType: row.event_type, clientId: row.client_id,
       phone: row.phone_number, countryCode: row.phone_country_code,
       variables: row.variables, referenceId: row.id, referenceType: 'scheduled_message',
@@ -345,7 +404,7 @@ export const waScheduledMessagesService = {
     } else if (log) {
       await waScheduledMessagesRepository.markFailed(row.id, log.failure_reason ?? 'Send failed')
     } else {
-      await waScheduledMessagesRepository.markSkipped(row.id, 'No approved template, WhatsApp not configured, or client opted out')
+      await waScheduledMessagesRepository.markSkipped(row.id, outcome.skippedReason ?? 'Nothing was sent (no send attempt was recorded)')
     }
 
     // Birthday/Anniversary self-perpetuate: on a successful send, schedule

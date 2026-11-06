@@ -64,6 +64,10 @@ async function runScheduledJobs(): Promise<void> {
   const hour   = getISTHour()
   const minute = getISTMinute()
 
+  // Hourly: schedule the "time to redo this service" reminder for newly paid visits.
+  await waScheduledMessagesService.seedServiceRedoReminders().catch(err =>
+    logger.error('[WA-AUTO-SCHEDULER] service redo seed failed:', err?.message))
+
   logger.info(`[WA-AUTO-SCHEDULER] Tick — IST ${String(hour).padStart(2,'0')}:${String(minute).padStart(2,'0')}`)
 
   // ── 9:00 AM IST daily jobs ─────────────────────────────────────────────────
