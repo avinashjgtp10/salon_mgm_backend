@@ -7,11 +7,19 @@ const router = Router();
 
 // ── Salon user routes (any authenticated user) ─────────────────────────────
 router.post("/",     authMiddleware, supportController.submitTicket);
+router.post("/callback", authMiddleware, supportController.requestCallback);
 router.get("/my",    authMiddleware, supportController.getMyTickets);
 router.patch("/:id/read", authMiddleware, supportController.markReplyRead);
 
 // ── Super admin routes ──────────────────────────────────────────────────────
 router.get("/attention", authMiddleware, superAdminMiddleware, supportController.getAttention);
+router.get("/assignees", authMiddleware, superAdminMiddleware, supportController.listAssignees);
+router.get("/notifications", authMiddleware, superAdminMiddleware, supportController.listNotifications);
+router.post("/notifications/read-all", authMiddleware, superAdminMiddleware, supportController.markAllNotificationsRead);
+router.patch("/notifications/:id/read", authMiddleware, superAdminMiddleware, supportController.markNotificationRead);
+router.post("/admin", authMiddleware, superAdminMiddleware, supportController.createForSalon);
+router.patch("/:id/assign", authMiddleware, superAdminMiddleware, supportController.assign);
+router.post("/:id/notes", authMiddleware, superAdminMiddleware, supportController.addNote);
 router.get("/stats", authMiddleware, superAdminMiddleware, supportController.getStats);
 router.get("/",      authMiddleware, superAdminMiddleware, supportController.getAllTickets);
 router.patch("/:id/reply",  authMiddleware, superAdminMiddleware, supportController.replyToTicket);
