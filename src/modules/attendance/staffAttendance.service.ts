@@ -10,19 +10,21 @@ import { attendanceRepository } from "./attendance.repository";
 import { assertNoOpenPreviousSession, notifyAttendanceBreak, notifyAttendancePunch } from "./attendance.service";
 import { salonDate, shiftWindow, type Shift } from "./staffAttendance.rules";
 
+async function assignedShift(staffId: string, date: string, db: Pick<PoolClient, "query"> = pool): Promise<Shift | null> {
+  const { rows } = await db.query<Shift>(`SELECT start_time::text, end_time::text, is_available FROM staff_schedules
+    WHERE staff_id = $1 AND (date = $2::date OR (date IS NULL AND day_of_week = EXTRACT(DOW FROM $2::date)))
+    ORDER BY date NULLS LAST LIMIT 1`, [staffId, date]);
+  return rows[0] ?? null;
+}
+
 export async function staffAttendanceState(userId: string, salonId: string, now = new Date()) {
   const staffId = await ownStaffId(userId, salonId);
   if (!staffId) throw new AppError(403, "Your account is not linked to an active staff member.", "STAFF_NOT_LINKED");
   const tz = await getSalonTimezone(salonId);
   let date = salonDate(now, tz);
+  const today = date;
   const yesterday = salonDate(new Date(now.getTime() - 86400000), tz);
-  async function schedule(day: string): Promise<Shift | null> {
-    const { rows } = await pool.query<Shift>(
-      `SELECT start_time::text, end_time::text, is_available FROM staff_schedules
-       WHERE staff_id = $1 AND (date = $2::date OR (date IS NULL AND day_of_week = EXTRACT(DOW FROM $2::date)))
-       ORDER BY date NULLS LAST LIMIT 1`, [staffId, day]);
-    return rows[0] ?? null;
-  }
+  const schedule = (day: string) => assignedShift(staffId, day);
   const [todayShift, priorShift] = await Promise.all([schedule(date), schedule(yesterday)]);
   let shift = todayShift;
   let window = shiftWindow(date, shift, tz);
@@ -30,17 +32,20 @@ export async function staffAttendanceState(userId: string, salonId: string, now 
   if (priorWindow && now >= priorWindow.start && now < priorWindow.end) {
     date = yesterday; shift = priorShift; window = priorWindow;
   }
-  const { rows: open } = await pool.query(`SELECT date::text FROM attendance a WHERE salon_id = $1 AND staff_id = $2 AND check_in IS NOT NULL AND check_out IS NULL AND (date >= $3::date OR EXISTS (SELECT 1 FROM attendance_breaks b WHERE b.attendance_id = a.id AND b.actual_end IS NULL)) ORDER BY date LIMIT 1`, [salonId, staffId, yesterday]);
+  const { rows: open } = await pool.query(`SELECT date::text FROM attendance a WHERE salon_id = $1 AND staff_id = $2 AND check_in IS NOT NULL AND check_out IS NULL AND date <= $3::date ORDER BY date LIMIT 1`, [salonId, staffId, today]);
   if (open[0]) { date = open[0].date; window = shiftWindow(date, await schedule(date), tz); }
   const record = await attendanceRepository.findByStaffAndDate(staffId, date);
   const activity = attendanceActivity(record, record?.breaks ?? [], now);
+  const pending = Boolean(record?.check_in && !record.check_out && date < today && (!window || now >= window.end));
+  const pendingReason = pending && !window ? "No assigned schedule is available for this attendance day. Ask your manager to correct the schedule." : null;
   return {
-    staff_id: staffId, date, server_time: now.toISOString(),
+    staff_id: staffId, date, today_date: today, server_time: now.toISOString(),
+    pending_checkout: pending ? { attendance_id: record!.id, date, check_in: record!.check_in, scheduled_end: window?.end.toISOString() ?? null, blocked_reason: pendingReason } : null,
     shift_start: record?.scheduled_start ?? window?.start.toISOString() ?? null, shift_end: record?.scheduled_end ?? window?.end.toISOString() ?? null,
     reminder_at: window?.reminderAt.toISOString() ?? null,
     ...activity,
-    can_check_in: activity.current_status === "NOT_CHECKED_IN" || activity.current_status === "ON_BREAK",
-    blocked_reason: activity.current_status === "CHECKED_OUT" ? "Your shift is complete." : null,
+    can_check_in: !pending && (activity.current_status === "NOT_CHECKED_IN" || activity.current_status === "ON_BREAK"),
+    blocked_reason: pending ? pendingReason ?? "Complete the pending checkout before checking in for today." : activity.current_status === "CHECKED_OUT" ? "Your shift is complete." : null,
     checked_in: Boolean(record?.check_in), record: record ?? null,
   };
 }
@@ -48,7 +53,7 @@ export async function staffAttendanceState(userId: string, salonId: string, now 
 // Serialize transitions, including the first punch when no attendance row exists.
 // afterCommit starts owner notifications as soon as the punch is saved, so the
 // push does not also wait for the state reload below.
-async function transition(userId: string, salonId: string, now: Date, action: (client: PoolClient, state: Awaited<ReturnType<typeof staffAttendanceState>>, record: Attendance | null, breaks: AttendanceBreak[]) => Promise<void>, afterCommit?: () => void) {
+async function transition(userId: string, salonId: string, now: Date, action: (client: PoolClient, state: Awaited<ReturnType<typeof staffAttendanceState>>, record: Attendance | null, breaks: AttendanceBreak[]) => Promise<void>, afterCommit?: () => void, recordId?: string) {
   const staffId = await ownStaffId(userId, salonId);
   if (!staffId) throw new AppError(403, "Staff profile not found", "STAFF_NOT_LINKED");
   const client = await pool.connect();
@@ -56,7 +61,7 @@ async function transition(userId: string, salonId: string, now: Date, action: (c
     await client.query("BEGIN");
     await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [salonId + ":" + staffId]);
     const state = await staffAttendanceState(userId, salonId, now);
-    const { rows } = await client.query<Attendance>("SELECT * FROM attendance WHERE salon_id = $1 AND staff_id = $2 AND date = $3::date FOR UPDATE", [salonId, staffId, state.date]);
+    const { rows } = await client.query<Attendance>(`SELECT *, date::text AS date FROM attendance WHERE salon_id = $1 AND staff_id = $2 AND ${recordId ? "id = $3" : "date = $3::date"} FOR UPDATE`, [salonId, staffId, recordId ?? state.date]);
     const record = rows[0] ?? null;
     const breaks = record ? (await client.query<AttendanceBreak>("SELECT * FROM attendance_breaks WHERE attendance_id = $1 ORDER BY actual_start", [record.id])).rows : [];
     await action(client, state, record, breaks);
@@ -73,6 +78,7 @@ async function transition(userId: string, salonId: string, now: Date, action: (c
 export async function staffSelfCheckIn(userId: string, salonId: string, now = new Date(), location: string | null = null) {
   let resumed: { record: Attendance; brk: AttendanceBreak } | null = null;
   const next = await transition(userId, salonId, now, async (client, state, record, breaks) => {
+    if (state.pending_checkout) throw new AppError(409, "Complete the pending checkout before checking in for today.", "PREVIOUS_CHECKOUT_PENDING", state.pending_checkout);
     if (record?.check_out) throw new AppError(409, "This attendance day is complete.", "ALREADY_CHECKED_OUT");
     const active = breaks.find(item => !item.actual_end);
     if (active) {
@@ -123,6 +129,7 @@ export async function staffSelfStartBreak(userId: string, salonId: string, body:
 
 export async function staffSelfCheckOut(userId: string, salonId: string, now = new Date(), location: string | null = null) {
   const next = await transition(userId, salonId, now, async (client, _state, record, breaks) => {
+    if (_state.pending_checkout) throw new AppError(409, "Confirm the pending checkout to use the previous day's assigned schedule end.", "PENDING_CHECKOUT_CONFIRMATION_REQUIRED");
     if (!record?.check_in) throw new AppError(400, "You have not checked in.", "NOT_CHECKED_IN");
     if (record.check_out) throw new AppError(409, "This attendance day is complete.", "ALREADY_CHECKED_OUT");
     if (breaks.some(item => !item.actual_end)) throw new AppError(409, "Check in from your break before final checkout.", "ON_BREAK");
@@ -133,4 +140,35 @@ export async function staffSelfCheckOut(userId: string, salonId: string, now = n
   });
   if (next.record) void notifyAttendancePunch(next.record, "out");
   return next;
+}
+
+// Explicit staff action only. The client supplies an identity, never a checkout
+// timestamp: the server re-reads this staff member's assigned schedule under lock.
+export async function staffSelfCompletePendingCheckOut(userId: string, salonId: string, attendanceId: string, now = new Date()) {
+  return transition(userId, salonId, now, async (client, state, record, breaks) => {
+    if (!record?.check_in) throw new AppError(404, "Pending attendance record not found.", "NOT_FOUND");
+    if (record.check_out) return; // Safe retry; never overwrite an existing punch.
+    const date = record.date;
+    if (date >= state.today_date) throw new AppError(409, "This attendance day is not a pending previous shift.", "NOT_PENDING_CHECKOUT");
+    const tz = await getSalonTimezone(salonId);
+    const window = shiftWindow(date, await assignedShift(state.staff_id, date, client), tz);
+    if (!window) throw new AppError(409, "No assigned schedule is available for this attendance day. Ask your manager to correct the schedule.", "SCHEDULE_REQUIRED");
+    const end = window.end;
+    if (end > now) throw new AppError(409, "This overnight shift has not ended yet.", "SHIFT_NOT_ENDED");
+    if (end <= new Date(record.check_in) || breaks.some(b => new Date(b.actual_end ?? b.actual_start) > end)) {
+      throw new AppError(409, "The assigned schedule ends before a recorded punch. Ask your manager to correct this attendance day.", "INVALID_CHECKOUT");
+    }
+    const next = await client.query<{ check_in: string }>("SELECT check_in FROM attendance WHERE salon_id = $1 AND staff_id = $2 AND date > $3::date AND check_in IS NOT NULL ORDER BY check_in LIMIT 1", [salonId, state.staff_id, date]);
+    if (next.rows[0] && end > new Date(next.rows[0].check_in)) throw new AppError(409, "Scheduled checkout overlaps the next check-in. Ask your manager to correct this attendance day.", "OVERLAPPING_SESSION");
+    // The staff member's explicit final checkout also ends an unfinished break.
+    for (const brk of breaks.filter(b => !b.actual_end)) {
+      await client.query("UPDATE attendance_breaks SET actual_end = $2, updated_at = NOW() WHERE id = $1 AND actual_end IS NULL", [brk.id, end.toISOString()]);
+      brk.actual_end = end.toISOString();
+    }
+    const activity = attendanceActivity(record, breaks, end);
+    await client.query(`UPDATE attendance SET check_out = $2, hours_worked = $3,
+      note = concat_ws(E'\n', NULLIF(note, ''), 'Pending checkout completed by staff using the assigned schedule end.'), updated_at = NOW()
+      WHERE id = $1 AND salon_id = $4 AND staff_id = $5 AND check_out IS NULL`,
+      [record.id, end.toISOString(), Number((activity.total_worked_seconds / 3600).toFixed(2)), salonId, state.staff_id]);
+  }, undefined, attendanceId);
 }
