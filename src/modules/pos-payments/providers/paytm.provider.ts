@@ -22,24 +22,12 @@ export type PaytmCredentials = {
   merchantKey: string;
 };
 
-// Paytm EDC ECR API (Sale, Status Enquiry, Abort). URLs exactly as provided
-// by Paytm for this integration. Staging is securegw-stage.paytm.in for all
-// three (Sale per Paytm's C# staging sample). Production hosts are not
-// uniform — Abort uses securegw-edc.paytm.com, Sale/Status use
-// securegw-edc.paytmpayments.in; confirm with Paytm that this is intended.
+// Staging-only Paytm EDC integration. Sale/Status use the supplied staging
+// documentation host; Abort retains its existing staging endpoint.
 const ECR_ENDPOINTS = {
-  sale: {
-    sandbox: 'https://securegw-stage.paytm.in/ecr/payment/request',
-    production: 'https://securegw-edc.paytmpayments.in/ecr/payment/request',
-  },
-  status: {
-    sandbox: 'https://securegw-stage.paytm.in/ecr/V2/payment/status',
-    production: 'https://securegw-edc.paytmpayments.in/ecr/V2/payment/status',
-  },
-  abort: {
-    sandbox: 'https://securegw-stage.paytm.in/ecr/abort/txn',
-    production: 'https://securegw-edc.paytm.com/ecr/abort/txn',
-  },
+  sale: 'https://securegw-stage.paytmpayments.in/ecr/payment/request',
+  status: 'https://securegw-stage.paytmpayments.in/ecr/V2/payment/status',
+  abort: 'https://securegw-stage.paytm.in/ecr/abort/txn',
 };
 const ECR_CHANNEL_ID = 'EDC';
 const ECR_VERSION = '3.1';
@@ -268,11 +256,10 @@ export function interpretConnectionProbe(data: any, tid: string): { ok: boolean;
 }
 
 export class PaytmProvider implements PaymentProvider {
-  private readonly environment: 'sandbox' | 'production';
   private readonly ecrUrls: { sale: string; status: string; abort: string };
   private readonly creds: PaytmCredentials;
 
-  constructor(credentials: ProviderCredentials, environment: 'sandbox' | 'production') {
+  constructor(credentials: ProviderCredentials) {
     const mid = String(credentials.mid ?? '').trim();
     const merchantKey = String(credentials.merchantKey ?? '');
     if (!mid || !merchantKey) {
@@ -288,9 +275,7 @@ export class PaytmProvider implements PaymentProvider {
       throw new Error('Paytm merchantKey must be exactly 16 characters');
     }
     this.creds = { mid, merchantKey };
-    this.environment = environment === 'production' ? 'production' : 'sandbox';
-    const ecrEnv = this.environment;
-    this.ecrUrls = { sale: ECR_ENDPOINTS.sale[ecrEnv], status: ECR_ENDPOINTS.status[ecrEnv], abort: ECR_ENDPOINTS.abort[ecrEnv] };
+    this.ecrUrls = ECR_ENDPOINTS;
   }
 
   /**
@@ -318,6 +303,7 @@ export class PaytmProvider implements PaymentProvider {
     return axios.post(url, payload, {
       headers: { 'Content-Type': 'application/json' },
       timeout: ECR_TIMEOUT_MS,
+      maxRedirects: 0,
     });
   }
 
@@ -504,7 +490,7 @@ export class PaytmProvider implements PaymentProvider {
    * is online, and the message says so.
    */
   async testConnection(options: { terminalProviderIds?: string[] } = {}): Promise<{ ok: boolean; message: string }> {
-    const mode = this.environment === 'production' ? 'Live' : 'Test (sandbox)';
+    const mode = 'Test (sandbox)';
     const tids = [...new Set((options.terminalProviderIds ?? []).map((t) => t.trim()).filter(Boolean))].slice(0, 5);
     if (tids.length === 0) {
       return { ok: false, message: 'Add an active terminal with its TID first — Paytm can only be tested against a real TID.' };
