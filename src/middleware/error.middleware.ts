@@ -124,13 +124,15 @@ export const errorHandler = (
     };
     const referencingTable = (err as any).table as string | undefined;
     const friendly = referencingTable ? FRIENDLY_TABLE_NAMES[referencingTable] : undefined;
+    // Which table and constraint blocked it: without this the response only says "other records depend on it".
+    logger.warn('Foreign-key violation blocked a delete', { requestId, url: req.path, table: referencingTable, constraint: (err as any).constraint, detail: (err as any).detail });
     return res.status(409).json({
       success: false,
       error: {
         code: 'REFERENCED_ELSEWHERE',
         message: friendly
           ? `This can't be deleted — it's still in use by ${friendly}. Remove it from there first.`
-          : "This can't be deleted because other records still depend on it.",
+          : `This can't be deleted because other records still depend on it${referencingTable ? ` (${referencingTable})` : ''}.`,
       },
     });
   }
