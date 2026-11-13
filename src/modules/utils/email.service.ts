@@ -15,6 +15,19 @@ export const transporter = nodemailer.createTransport({
   requireTLS: true,
 });
 
+// Payment / invoice / expiry-reminder mail. Gmail (and most SMTP providers) only let an account send as its own address, so to
+// really send from the billing address (EMAIL_FROM_BILLING) give it its own login via SMTP_BILLING_USER / SMTP_BILLING_PASS.
+// Without them the main account is used, and the provider may replace the From address with that account's own.
+export const billingTransporter = config.smtp.billingUser && config.smtp.billingPass
+  ? nodemailer.createTransport({
+      host: config.smtp.host,
+      port: config.smtp.port,
+      secure: false,
+      auth: { user: config.smtp.billingUser, pass: config.smtp.billingPass },
+      requireTLS: true,
+    })
+  : transporter;
+
 /**
  * The language an email is written in: an explicit one (what the person's screen shows when nothing is known about a salon yet —
  * registration, forgotten password), else the salon's own (salons.language), else English. English output is unchanged.
@@ -564,8 +577,8 @@ export const emailService = {
         <td style="padding:7px 0;color:#111827;font-size:14px;font-weight:600;vertical-align:top;word-break:break-word;">${e(value)}</td>
       </tr>`;
 
-    await transporter.sendMail({
-      from: config.smtp.from,
+    await billingTransporter.sendMail({
+      from: config.smtp.billingFrom,
       to: params.to,
       subject: days === 0
         ? `Your SalonOx ${params.planName} subscription expires today`
@@ -666,8 +679,8 @@ export const emailService = {
     const closing = `<p style="margin:0 0 18px;color:#374151;font-size:15px;line-height:1.7;">Your SalonOx account is ready. You can log in and start using all the features included in your subscription.</p>`;
     const ctaLabel = "Login Now";
 
-    await transporter.sendMail({
-      from: config.smtp.from,
+    await billingTransporter.sendMail({
+      from: config.smtp.billingFrom,
       to: params.to,
       subject: "Payment Successful – Your SalonOx Subscription is Active!",
       html: `
@@ -763,8 +776,8 @@ export const emailService = {
         <td style="padding:7px 0;color:#111827;font-size:14px;font-weight:600;vertical-align:top;word-break:break-word;">${e(value)}</td>
       </tr>`;
 
-    await transporter.sendMail({
-      from: config.smtp.from,
+    await billingTransporter.sendMail({
+      from: config.smtp.billingFrom,
       to: params.to,
       subject: "Payment Received – Complete Your SalonOx Setup",
       html: `
@@ -2107,8 +2120,8 @@ export const emailService = {
         <td style="padding:8px 0;${last ? "" : "border-bottom:1px solid #e5e7eb;"}color:#111827;font-size:13px;font-weight:600;text-align:right;">${value}</td>
       </tr>`;
 
-    await transporter.sendMail({
-      from: config.smtp.from,
+    await billingTransporter.sendMail({
+      from: config.smtp.billingFrom,
       to,
       subject: `Your SalonoX Subscription Invoice ${escapeHtml(invoiceNo)}`,
       html: `
@@ -2193,8 +2206,8 @@ export const emailService = {
         <td style="padding:8px 0;${last ? "" : "border-bottom:1px solid #e5e7eb;"}color:#111827;font-size:13px;font-weight:600;text-align:right;">${value}</td>
       </tr>`;
 
-    await transporter.sendMail({
-      from: config.smtp.from,
+    await billingTransporter.sendMail({
+      from: config.smtp.billingFrom,
       to,
       subject: "Payment received - your SalonoX subscription is active",
       html: `

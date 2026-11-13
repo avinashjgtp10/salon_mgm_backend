@@ -62,6 +62,11 @@ interface Config {
     user: string;
     pass: string;
     from: string;
+    // Sender of payment and invoice emails (Razorpay payments, GST invoices).
+    billingFrom: string;
+    // Optional own SMTP login for billing mail (the mailbox the billing sender belongs to). Empty = use the main SMTP account.
+    billingUser: string;
+    billingPass: string;
   };
 
   otp: {
@@ -151,6 +156,9 @@ const config: Config = {
     user: required('SMTP_USER'),
     pass: required('SMTP_PASS'),
     from: required('EMAIL_FROM'),
+    billingFrom: process.env.EMAIL_FROM_BILLING || 'SalonOx Billing <info@salonox.com>',
+    billingUser: process.env.SMTP_BILLING_USER || '',
+    billingPass: process.env.SMTP_BILLING_PASS || '',
   },
 
   otp: {
