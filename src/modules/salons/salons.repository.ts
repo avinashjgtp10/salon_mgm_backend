@@ -25,6 +25,15 @@ function assertUuid(value: string): string {
 // blind forever though: it must be re-checked the same way whenever a new
 // salon-scoped table is added, since a table added after this list was last
 // verified will silently orphan data exactly like the ones below used to.
+// Super Admin "Client Activity Management" history (meetings, training, activity, follow-up tasks, attachments, audit trail).
+// Their salon_id FKs are ON DELETE RESTRICT (create_client_activity_management_tables.sql), so they block deleting the salon
+// ("REFERENCED_ELSEWHERE ... client_followup_tasks"). They are removed only when the salon itself is deleted — Clear Data
+// keeps this CRM history. Children first.
+const SALON_DELETE_ONLY_TABLES = [
+  "client_activity_attachments", "client_activity_audit_logs", "meeting_attendees", "client_meetings",
+  "client_training_progress", "client_activity_logs", "client_followup_tasks",
+];
+
 const SALON_ORPHAN_RISK_TABLES = [
   // Confirmed on live DB: salon_id column present, NO FK to salons at all.
   "ai_agent_logs", "ai_customer_memory", "ai_token_usage", "appointments",
@@ -96,7 +105,7 @@ export async function purgeSalon(client: PoolClient, salonId: string): Promise<{
   // One lookup for which of these tables exist (a table not yet migrated in
   // some environment is skipped, not a hard failure), then one batched script
   // — see clearSalonData for why per-table round trips are avoided.
-  const wanted = [...SALON_ORPHAN_RISK_TABLES, "roles", "permission_audit_log"];
+  const wanted = [...SALON_ORPHAN_RISK_TABLES, ...SALON_DELETE_ONLY_TABLES, "roles", "permission_audit_log"];
   const { rows: present } = await client.query(
     `SELECT table_name FROM information_schema.tables
      WHERE table_schema = 'public' AND table_name = ANY($1::text[])`,
@@ -105,6 +114,9 @@ export async function purgeSalon(client: PoolClient, salonId: string): Promise<{
   const existing = new Set((present as { table_name: string }[]).map((r) => r.table_name));
   const id = assertUuid(salonId);
   const stmts: string[] = [];
+  for (const table of SALON_DELETE_ONLY_TABLES) {
+    if (existing.has(table)) stmts.push(`DELETE FROM ${table} WHERE salon_id = '${id}'`);
+  }
   for (const table of SALON_ORPHAN_RISK_TABLES) {
     if (existing.has(table)) stmts.push(`DELETE FROM ${table} WHERE salon_id = '${id}'`);
   }
