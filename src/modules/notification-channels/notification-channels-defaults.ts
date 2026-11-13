@@ -79,6 +79,10 @@ export const DEFAULT_SMS_TEMPLATES: Record<DefaultPurchaseEventType, string> = {
     "Cash Counter Opened - {{salon_name}}. {{opening_date}} {{opening_time}}. Opening Cash: {{opening_amount}}.",
   cash_counter_closed:
     "Cash Counter Closed - {{salon_name}}. {{closing_date}} {{closing_time}}. {{collection_breakdown}}. Total: {{total_collection}}. Expenses: {{expenses}}. In-Store Cash: {{in_store_cash}}.",
+  cash_counter_opened_updated:
+    "Cash Counter Updated - {{salon_name}}. Opening details updated. {{opening_date}} {{opening_time}}. Opening Cash: {{opening_amount}}.",
+  cash_counter_closed_updated:
+    "Cash Counter Updated - {{salon_name}}. Closing details updated. {{closing_date}} {{closing_time}}. {{collection_breakdown}}. Total: {{total_collection}}. Expenses: {{expenses}}. In-Store Cash: {{in_store_cash}}.",
 }
 
 export const DEFAULT_EMAIL_TEMPLATES: Record<DefaultPurchaseEventType, { subject: string; body: string }> = {
@@ -199,6 +203,14 @@ export const DEFAULT_EMAIL_TEMPLATES: Record<DefaultPurchaseEventType, { subject
   cash_counter_closed: {
     subject: "Cash Counter Closed — {{salon_name}}",
     body: "Cash Counter Closed — {{salon_name}}\n\nYour cash counter has been closed for the day. Here is the collection summary for this session.\n\nDate: {{closing_date}}\nTime: {{closing_time}}\n\nCollection Summary\n{{collection_breakdown}}\n\nTotal Collection: {{total_collection}}\nExpenses: {{expenses}}\nIn-Store Cash: {{in_store_cash}}\n\nThank you for reconciling today's cash counter.",
+  },
+  cash_counter_opened_updated: {
+    subject: "Cash Counter Updated — {{salon_name}}",
+    body: "Cash Counter Updated — {{salon_name}}\n\nYour cash counter opening details have been updated successfully.\n\nDate: {{opening_date}}\nTime: {{opening_time}}\nOpening Cash Amount: {{opening_amount}}\n\nThank you!",
+  },
+  cash_counter_closed_updated: {
+    subject: "Cash Counter Updated — {{salon_name}}",
+    body: "Cash Counter Updated — {{salon_name}}\n\nYour cash counter closing details have been updated successfully.\n\nDate: {{closing_date}}\nTime: {{closing_time}}\n\nUpdated Collection Summary\n{{collection_breakdown}}\n\nTotal Collection: {{total_collection}}\nExpenses: {{expenses}}\nIn-Store Cash: {{in_store_cash}}\n\nThank you for reconciling today's cash counter.",
   },
 }
 

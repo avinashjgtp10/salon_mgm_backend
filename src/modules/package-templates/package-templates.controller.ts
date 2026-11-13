@@ -81,8 +81,10 @@ export const packageTemplatesController = {
       const rows = (name.endsWith(".xlsx") || name.endsWith(".xls"))
         ? parseExcelBuffer(file.buffer)
         : await parseCSVBuffer(file.buffer);
-      const data = await packageTemplatesImport.importPackages({ rows, salonId });
-      return sendSuccess(res, 200, data, "Import completed");
+      // dry_run=true: run every check but save nothing (the import screen validates first, then asks the user to confirm).
+      const dryRun = String(req.body?.dry_run ?? req.query?.dry_run ?? "").toLowerCase() === "true";
+      const data = await packageTemplatesImport.importPackages({ rows, salonId, dryRun });
+      return sendSuccess(res, 200, data, dryRun ? "Dry run complete — no changes saved" : "Import completed");
     } catch (e) { return next(e); }
   },
 };
