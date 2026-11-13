@@ -1051,6 +1051,107 @@ export const cashManagementRepository = {
     }
   },
 
+  // Edit an opened or closed counter. Runs in one transaction with the row locked, writes an audit row
+  // (cash_management_edits: old/new values + who) and returns the LATEST saved row. Nothing is returned (and so nothing
+  // is announced by WhatsApp) unless the whole transaction committed.
+  //  - open:   opening_balance only; revenue/expense/closing are re-derived from the live payments/expenses.
+  //  - closed: opening_balance, in_store_cash, remarks. A closed counter's revenue/expense are frozen at close, so closing
+  //            balance = new opening + frozen cash revenue - frozen cash expense, and reconciliation = in-store - closing.
+  async editCounter(params: {
+    salonId: string;
+    cashManagementId: string;
+    editedBy: string;
+    changes: { openingBalance?: number; inStoreCash?: number; remarks?: string | null };
+  }) {
+    const { salonId, cashManagementId, editedBy, changes } = params;
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+
+      const { rows: lockRows } = await client.query<CashManagementRecord>(
+        `SELECT * FROM cash_management WHERE id = $1 AND salon_id = $2 FOR UPDATE`,
+        [cashManagementId, salonId],
+      );
+      const before = lockRows[0];
+      if (!before) throw new AppError(404, "Cash counter not found", "CASH_COUNTER_NOT_FOUND");
+
+      const isClosed = before.status === "closed";
+      if (!isClosed && (changes.inStoreCash !== undefined || changes.remarks !== undefined)) {
+        throw new AppError(400, "In-store cash and remarks can only be edited once the counter is closed.", "VALIDATION_ERROR");
+      }
+
+      const openingBalance = changes.openingBalance ?? parseFloat(before.opening_balance ?? "0");
+      let after: CashManagementRecord;
+
+      if (!isClosed) {
+        await client.query(
+          `UPDATE cash_management SET opening_balance = $2, updated_at = NOW() WHERE id = $1`,
+          [cashManagementId, openingBalance.toFixed(2)],
+        );
+        after = await recalculateCounterById(client, cashManagementId, salonId);
+      } else {
+        const inStoreCash = changes.inStoreCash ?? (before.in_store_cash === null ? 0 : parseFloat(before.in_store_cash));
+        const closingBalance =
+          openingBalance + parseFloat(before.cash_revenue ?? "0") - parseFloat(before.cash_expense ?? "0");
+        const remarks = changes.remarks !== undefined ? changes.remarks?.toString().trim() || null : before.remarks;
+        const { rows } = await client.query<CashManagementRecord>(
+          `UPDATE cash_management
+           SET opening_balance = $2,
+               closing_balance = $3,
+               in_store_cash = $4,
+               reconciliation_amount = $5,
+               remarks = $6,
+               updated_at = NOW()
+           WHERE id = $1
+           RETURNING *`,
+          [
+            cashManagementId,
+            openingBalance.toFixed(2),
+            closingBalance.toFixed(2),
+            inStoreCash.toFixed(2),
+            (inStoreCash - closingBalance).toFixed(2),
+            remarks,
+          ],
+        );
+        after = rows[0];
+      }
+
+      const snapshot = (r: CashManagementRecord) => ({
+        status: r.status,
+        opening_balance: r.opening_balance,
+        cash_revenue: r.cash_revenue,
+        cash_expense: r.cash_expense,
+        closing_balance: r.closing_balance,
+        in_store_cash: r.in_store_cash,
+        reconciliation_amount: r.reconciliation_amount,
+        remarks: r.remarks,
+      });
+      await client.query(
+        `INSERT INTO cash_management_edits (cash_management_id, salon_id, edited_by, old_values, new_values)
+         VALUES ($1, $2, $3, $4::jsonb, $5::jsonb)`,
+        [cashManagementId, salonId, editedBy, JSON.stringify(snapshot(before)), JSON.stringify(snapshot(after))],
+      );
+
+      // Cash/Card/UPI for the WhatsApp summary: same service-date-bounded totals the original close message used.
+      let methodCounts: Awaited<ReturnType<typeof getServiceDateBoundedPaymentTotals>> | null = null;
+      if (isClosed) {
+        const openedDate = await client.query<{ ist_date: string }>(
+          `SELECT (date_trunc('day', $1::timestamptz AT TIME ZONE $2))::date AS ist_date`,
+          [after.opened_at, await getSalonTimezone(salonId)],
+        );
+        methodCounts = await getServiceDateBoundedPaymentTotals(client, salonId, openedDate.rows[0].ist_date);
+      }
+
+      await client.query("COMMIT");
+      return { ...after, ...(methodCounts ?? {}) };
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  },
+
   // Dashboard > Overall Collection's "Resend to WhatsApp" action (Yesterday
   // only) — finds the counter whose OPEN date matches the requested date,
   // same anchor closeCounter() itself uses for that day's message. Most

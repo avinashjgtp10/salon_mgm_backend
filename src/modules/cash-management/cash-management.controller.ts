@@ -8,6 +8,7 @@ import { cashManagementService } from "./cash-management.service";
 import { checkDashboardSubPermission, redactFinancialSummaryFields } from "../salon-dashboard/salon-dashboard.controller";
 import type {
   CloseCounterBody,
+  EditCounterBody,
   CreateExpenseBody,
   OpenCounterBody,
   SummaryBundleBody,
@@ -231,6 +232,20 @@ export const cashManagementController = {
       });
 
       return sendSuccess(res, 200, result, "Cash counter closed successfully");
+    } catch (error) {
+      return next(error);
+    }
+  },
+
+  async editCounter(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const result = await cashManagementService.editCounter(
+        getSalonId(req),
+        getUserId(req),
+        String(req.params.id || ""),
+        (req.body ?? {}) as EditCounterBody,
+      );
+      return sendSuccess(res, 200, result, "Cash counter updated successfully");
     } catch (error) {
       return next(error);
     }

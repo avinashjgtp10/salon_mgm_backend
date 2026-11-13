@@ -469,7 +469,8 @@ function validateRow(row: ImportRow, todayIso: string): {
 async function getOrCreateBrand(
     brandName: string,
     salonId: string,
-    cache?: Map<string, string>
+    cache?: Map<string, string>,
+    dryRun = false
 ): Promise<string> {
     if (!brandName || !brandName.trim()) {
         return "";
@@ -490,6 +491,13 @@ async function getOrCreateBrand(
         if (existing) {
             cache?.set(cacheKey, existing.id);
             return existing.id;
+        }
+
+        if (dryRun) {
+            // Validation run: note that the brand would be created, save nothing.
+            const virtualId = `dry-run:brand:${brandName.trim().toLowerCase()}`;
+            cache?.set(cacheKey, virtualId);
+            return virtualId;
         }
 
         const newBrand =
@@ -516,7 +524,8 @@ async function getOrCreateCategory(
     categoryName: string,
     salonId: string,
     cache?: Map<string, string>,
-    createdNames?: Set<string>
+    createdNames?: Set<string>,
+    dryRun = false
 ): Promise<string> {
     if (!categoryName || !categoryName.trim()) {
         return "";
@@ -539,6 +548,13 @@ async function getOrCreateCategory(
             return existing.id;
         }
 
+        if (dryRun) {
+            const virtualId = `dry-run:category:${trimmedName.toLowerCase()}`;
+            cache?.set(cacheKey, virtualId);
+            createdNames?.add(trimmedName);
+            return virtualId;
+        }
+
         const newCategory = await categoriesRepository.create(salonId, {
             name: trimmedName,
             type: "product",
@@ -556,7 +572,8 @@ async function getOrCreateCategory(
 async function getOrCreateSupplier(
     supplierName: string,
     salonId: string,
-    cache?: Map<string, string>
+    cache?: Map<string, string>,
+    dryRun = false
 ): Promise<string> {
     if (!supplierName || !supplierName.trim()) {
         return "";
@@ -573,6 +590,12 @@ async function getOrCreateSupplier(
         if (existing) {
             cache?.set(cacheKey, existing.id);
             return existing.id;
+        }
+
+        if (dryRun) {
+            const virtualId = `dry-run:supplier:${supplierName.trim().toLowerCase()}`;
+            cache?.set(cacheKey, virtualId);
+            return virtualId;
         }
 
         const newSupplier = await suppliersRepository.create(
@@ -597,6 +620,8 @@ export const productsImportService = {
         requesterUserId: string;
         requesterRole?: string;
         updateExisting?: boolean;
+        /** Validate everything (including duplicates) but write nothing. */
+        dryRun?: boolean;
     }): Promise<ImportResult> {
         const {
             file,
@@ -605,6 +630,7 @@ export const productsImportService = {
             requesterUserId,
             updateExisting,
         } = params;
+        const dryRun = params.dryRun === true;
 
         logger.info(
             "productsImportService.importProducts called",
@@ -725,7 +751,8 @@ export const productsImportService = {
                             await getOrCreateBrand(
                                 row.brand,
                                 salonId,
-                                brandCache
+                                brandCache,
+                                dryRun
                             );
 
                         if (brandId) {
@@ -738,7 +765,7 @@ export const productsImportService = {
                     // blank cell) — if resolving/creating it still comes back
                     // empty (a DB error), the row must fail rather than
                     // silently save with no category at all.
-                    const categoryId = await getOrCreateCategory(row.category!, salonId, categoryCache, createdCategoryNames);
+                    const categoryId = await getOrCreateCategory(row.category!, salonId, categoryCache, createdCategoryNames, dryRun);
                     if (!categoryId) {
                         result.issues.push({
                             row: rowIndex,
@@ -753,7 +780,7 @@ export const productsImportService = {
                     productData.category_id = categoryId;
 
                     if (row.supplier) {
-                        const supplierId = await getOrCreateSupplier(row.supplier, salonId, supplierCache);
+                        const supplierId = await getOrCreateSupplier(row.supplier, salonId, supplierCache, dryRun);
                         if (supplierId) {
                             productData.supplier_id = supplierId;
                         }
@@ -787,11 +814,13 @@ export const productsImportService = {
 
                     if (existingProduct) {
                         if (updateExisting) {
-                            await productsRepository.update(
-                                existingProduct.id,
-                                productData,
-                                salonId
-                            );
+                            if (!dryRun) {
+                                await productsRepository.update(
+                                    existingProduct.id,
+                                    productData,
+                                    salonId
+                                );
+                            }
 
                             // Keep the in-memory maps current — a later row in
                             // the same file may reference this same barcode or
@@ -822,10 +851,19 @@ export const productsImportService = {
                             result.skipped++;
                         }
                     } else {
-                        const created = await productsRepository.create(
-                            productData,
-                            salonId
-                        );
+                        // A validation run registers a stand-in so later rows of the same file are still caught as duplicates.
+                        const created = dryRun
+                            ? ({
+                                id: "dry-run:product",
+                                name: productData.name,
+                                barcode: productData.barcode ?? null,
+                                brand_id: productData.brand_id ?? null,
+                                category_id: productData.category_id ?? null,
+                            } as any)
+                            : await productsRepository.create(
+                                productData,
+                                salonId
+                            );
 
                         // Register the newly created product so a later row in
                         // the same file that references the same barcode or

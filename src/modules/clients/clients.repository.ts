@@ -565,6 +565,7 @@ export const clientsRepository = {
             else if (k === "pronouns") add("pronouns", patch.pronouns ?? null);
             else if (k === "address") add("address", patch.address ?? null);
             else if (k === "client_source") add("client_source", patch.client_source ?? null);
+            else if (k === "source_asked") { if (patch.source_asked) setParts.push("source_asked_at = NOW()"); }
             else if (k === "referred_by_client_id") add("referred_by_client_id", patch.referred_by_client_id ?? null);
             else if (k === "preferred_language") add("preferred_language", patch.preferred_language ?? null);
             else if (k === "occupation") add("occupation", patch.occupation ?? null);

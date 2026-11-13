@@ -12,7 +12,6 @@ import { appointmentsService } from "../appointments/appointments.service";
 import { appointmentsRepository } from "../appointments/appointments.repository";
 import { blockedTimesRepository } from "../blocked_times/blocked_times.repository";
 import { PublicBookingRequest } from "./bookings.types";
-import { bookingEmailOtpService } from "./booking-email-otp.service";
 import { loadStaffPresence } from "../attendance/attendance.presence";
 import logger from "../../config/logger";
 import { formatMoney, getSalonDateLocale } from "../../config/currency";
@@ -586,15 +585,6 @@ export const bookingsService = {
     },
 
     async createBooking(body: PublicBookingRequest) {
-        // Cheapest check first: reject before touching the DB at all if the
-        // client's email hasn't been through POST /bookings/email-otp/verify.
-        // validateCreateBooking already rejected a missing/malformed address;
-        // this is the actual proof of ownership.
-        const emailVerified = await bookingEmailOtpService.isVerified(body.client_email);
-        if (!emailVerified) {
-            throw new AppError(403, "Please verify your email before booking.", "EMAIL_NOT_VERIFIED");
-        }
-
         // findSalonById already excludes inactive/unpublished salons — reject
         // up front instead of letting an unpublished salon still take bookings
         // via a direct link (the marketplace Unpublish toggle must actually work).

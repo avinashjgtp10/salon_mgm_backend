@@ -204,6 +204,7 @@ export const validateUpdateClient = (req: Request, _res: Response, next: NextFun
             "sms_marketing",
             "whatsapp_marketing",
             "has_whatsapp",
+            "source_asked",
         ] as const;
 
         for (const f of optionalStringFields) {

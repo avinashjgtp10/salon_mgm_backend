@@ -243,8 +243,12 @@ export const servicesService = {
   },
 
   // ─── Import ───────────────────────────────────────────────────────────────────
-  async importServices(params: { rows: any[]; salonId: string }) {
+  async importServices(params: { rows: any[]; salonId: string; dry_run?: boolean }) {
     const { rows, salonId } = params;
+    const dryRun = params.dry_run === true;
+    // Dry run only: what the file itself would create, so later rows see earlier ones the way a real import does.
+    const pendingCategories = new Set<string>();
+    const pendingServices = new Set<string>();
     type ImportRowIssue = string | { row: number; name: string; status: "skipped" | "failed"; reason: string };
     const result = { total_rows: rows.length, imported: 0, skipped: 0, errors: [] as ImportRowIssue[] };
 
@@ -334,14 +338,20 @@ export const servicesService = {
         if (categoryMap[catName.toLowerCase()]) {
           category_id = categoryMap[catName.toLowerCase()];
         } else {
-          // Create category
+          // Create category (a dry run only notes that it would be created)
           try {
-            const newCat = await db.query(
-              "INSERT INTO service_categories (salon_id, name, type) VALUES ($1, $2, 'service') RETURNING id",
-              [salonId, catName]
-            );
-            category_id = newCat.rows[0].id;
-            categoryMap[catName.toLowerCase()] = category_id!;
+            if (dryRun) {
+              category_id = `dry-run:${catName.toLowerCase()}`;
+              categoryMap[catName.toLowerCase()] = category_id;
+              pendingCategories.add(catName.toLowerCase());
+            } else {
+              const newCat = await db.query(
+                "INSERT INTO service_categories (salon_id, name, type) VALUES ($1, $2, 'service') RETURNING id",
+                [salonId, catName]
+              );
+              category_id = newCat.rows[0].id;
+              categoryMap[catName.toLowerCase()] = category_id!;
+            }
           } catch {
             result.skipped++;
             result.errors.push(`Row ${rowNum}: failed to create category "${catName}"`);
@@ -374,15 +384,18 @@ export const servicesService = {
       // Duration + Price), plus Category, since an import row additionally
       // carries a category and two same-priced services in different
       // categories are legitimately different offerings.
+      const dupKey = `${name.toLowerCase()}|${body.duration ?? 30}|${body.price ?? 0}|${category_id ?? ""}`;
       const duplicate = await servicesRepository.findDuplicate(name, body.duration ?? 30, body.price ?? 0, salonId);
-      if (duplicate && ((duplicate as any).category_id ?? null) === (category_id ?? null)) {
+      // In a dry run nothing is saved, so an earlier row of the same file is the "existing" service a real import would find.
+      if ((duplicate && ((duplicate as any).category_id ?? null) === (category_id ?? null)) || (dryRun && pendingServices.has(dupKey))) {
         result.skipped++;
         result.errors.push({ row: rowNum, name, status: "skipped", reason: "Duplicate Service Name" });
         continue;
       }
 
       try {
-        await servicesRepository.create(body, salonId);
+        if (dryRun) pendingServices.add(dupKey);
+        else await servicesRepository.create(body, salonId);
         result.imported++;
       } catch (err: any) {
         result.skipped++;
