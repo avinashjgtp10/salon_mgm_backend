@@ -111,6 +111,8 @@ export type ListServicesQuery = {
   status?: "active" | "inactive";
   type?: "single" | "bundle";
   staff_id?: string;
+  /** unisex | female | male, or several comma-separated. */
+  gender_preference?: string;
   online_booking?: "enabled" | "disabled" | "all";
   commissions?: "enabled" | "disabled" | "all";
   resource_requirements?: "required" | "not_required" | "all";

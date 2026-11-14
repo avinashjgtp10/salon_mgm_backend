@@ -259,7 +259,7 @@ export const servicesService = {
     const REQUIRED_COLUMNS = ["Name", "Category", "Description", "Price / Retail Price", "Duration (min)"];
     // Extra columns the importer already knows how to use beyond the
     // required template — allowed without tripping an "unexpected column" error.
-    const OPTIONAL_KNOWN_COLUMNS = ["Price Type", "Online Booking", "Commission", "Resource Required"];
+    const OPTIONAL_KNOWN_COLUMNS = ["Price Type", "Online Booking", "Commission", "Resource Required", "Gender"];
     const ALLOWED_COLUMNS = new Set([...REQUIRED_COLUMNS, ...OPTIONAL_KNOWN_COLUMNS]);
     // Common near-miss headers → the exact column name they were probably
     // meant to be, so a rename typo gets a precise fix instead of a vague
@@ -366,9 +366,25 @@ export const servicesService = {
       const priceType = (["fixed", "from", "free"].includes(priceTypeRaw) ? priceTypeRaw : "fixed") as "fixed" | "from" | "free";
       const onlineBooking = ["yes", "true", "1"].includes(String(r["Online Booking"] ?? r.online_booking ?? "yes").toLowerCase());
 
+      // Gender is optional: blank means Unisex. Anything other than Unisex / Female / Male (or Men / Women) fails the row clearly
+      // instead of being silently saved as Unisex.
+      const genderRaw = String(r.Gender ?? r.gender ?? "").trim().toLowerCase();
+      const GENDER_WORDS: Record<string, "unisex" | "female" | "male"> = {
+        "": "unisex", unisex: "unisex", all: "unisex", any: "unisex", both: "unisex",
+        female: "female", women: "female", woman: "female", ladies: "female", f: "female",
+        male: "male", men: "male", man: "male", gents: "male", m: "male",
+      };
+      const genderPreference = GENDER_WORDS[genderRaw];
+      if (!genderPreference) {
+        result.skipped++;
+        result.errors.push({ row: rowNum, name, status: "skipped", reason: `Gender must be Unisex, Female or Male (found "${String(r.Gender ?? r.gender).trim()}")` });
+        continue;
+      }
+
       const body: CreateServiceBody = {
         name,
         category_id: category_id!,
+        gender_preference: genderPreference,
         description: String(r.Description ?? r.description ?? "").trim() || undefined,
         price_type: priceType,
         price: parseFloat(priceRaw) || 0,

@@ -92,6 +92,11 @@ const buildServiceWhere = (q: ListServicesQuery, salonId: string) => {
     else if (ids.length > 1) add(`s.category_id::text = ANY(?::text[])`, ids);
   }
   if (q.search) add(`LOWER(s.name) LIKE LOWER(?)`, `%${q.search}%`);
+  if (q.gender_preference) {
+    // One value or several comma-separated (the Gender filter is a multi-select). Unknown values are ignored.
+    const genders = String(q.gender_preference).split(",").map((x) => x.trim().toLowerCase()).filter((x) => x === "unisex" || x === "female" || x === "male");
+    if (genders.length > 0) add(`s.gender_preference = ANY(?::text[])`, genders);
+  }
   if (q.status === "active") where.push(`s.is_active = true`);
   if (q.status === "inactive") where.push(`s.is_active = false`);
   if (q.online_booking && q.online_booking !== "all")
