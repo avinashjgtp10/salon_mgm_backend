@@ -8,7 +8,7 @@ import { AssistantUser, ChatTurn, LlmMessage } from "../ai-assistant.types";
 import { dataTools, findDataTool } from "./data.tools";
 import { todayIn } from "./periods";
 import { dateLocale } from "../../../config/currency";
-import { hasProtocolContent } from "../reply-validation";
+import { hasProtocolContent, isDegenerateReply, stripCurrencyFromCounts } from "../reply-validation";
 
 const MAX_TOOL_ITERATIONS = 5;
 const HISTORY_LIMIT = 6;
@@ -26,6 +26,7 @@ Rules — never break these:
 - Pick the 'period' value that matches the question (e.g. "last month" → last_month). Never work out dates yourself; use period=custom only for exact dates the user gave.
 - In your answer always say which dates you used and any filter applied (e.g. "Facial: <amount> received from 1–30 Sep"). If a filter matched several services or categories, say which ones were included.
 - Money: use the exact formatted amounts the tool returns. "money received" is what was actually collected; "total billed" is the bill total. If the user just says "earned"/"revenue", give money received and mention total billed only if it differs.
+- Counts are NOT money: clients, bills, visits, appointments, no-shows and every other count is a plain number with no currency symbol or code (write "12 new clients", never "₹12" or "AED 12"). Only fields a tool returned as formatted amounts (money_received, total_billed, its_own_total_billed, spent_while_they_were_active…) are money; copy those exactly as given and never put a currency symbol on any other number.
 - If a tool returns not_found, say so and offer the closest names it listed. If it says the user lacks permission or a module is locked, say you can't show that data to them and don't try another way.
 - For "top / best / which" questions, call getSalesReport with a breakdown. In a ranking, quote each row's OWN amount (its_own_total_billed) next to its name — never use the period totals (money_received, total_billed) as a single item's figure.
 - money_received is the Sales Summary "Received Amount" (cash actually collected); total_billed is its "Grand Total".
@@ -41,6 +42,9 @@ Rules — never break these:
 - Only suggest things SalonOx really has, and point to the right screen: WhatsApp campaigns and templates = Marketing > Campaigns / Templates; membership plans = Catalog > Memberships (create the plan first, then message clients about it); referral and reward points = Clients > Referral & rewards. Do NOT design a loyalty scheme with invented rules (no "1 point per 100 spent", no thresholds, no "10% discount", no fixed rewards) — say the manager sets the amounts.
 - Give at most ONE product-bundle suggestion in a conversation; the rest should be about clients (win-back, rebooking, membership, referral, welcome, birthday, seasonal), with a DIFFERENT lever each time.
 - Keep an advice answer under about 150 words.
+- Charts: when the manager asks about a chart AND wants its details, the full or complete table, or the underlying data ("show me the table for this chart", "where can I see all of it"), call getReportForChart and reply with the navigation path it returns (for example "Reports > Sales > Sales Summary Report"), plus one line on switching that report to Table View. Do not rebuild the chart, and do not print a long table of the full data yourself. Give a path ONLY in this case: not for ordinary number questions, and never invent a path. If getReportForChart finds nothing, say you can't tell which report holds it.
+- Festivals: for "any festival coming up", "what should I promote", or the date of a festival, call getUpcomingFestivals and use ONLY what it returns (name, date, days left, launch-by date, ideas). Never state a festival date from memory. Say the date is for the salon's own region, mention a note if it returned one, and offer to write the message script and plan.
+- If the manager asks you to SEND a campaign or message ("send them a campaign", "message last month's clients"): say clearly that you can't send messages yourself, then offer what you CAN do and offer it in the same reply: "I can write the message script and give you a step-by-step plan to run the campaign yourself." If they say yes (or already asked for the script/plan), give (1) a short ready-to-use message script (friendly, with {{name}}-style placeholders only where natural, no invented discount, price or date), and (2) a numbered plan: who to target (the real group and its real count from a tool, never invented), then in SalonOx: create the WhatsApp template under Marketing > Templates and wait for its approval, create the campaign under Marketing > Campaigns, choose that approved template and the audience, review, and launch. End with one line that nothing is sent until they launch it themselves.
 - You can only read data. You cannot change anything or predict the future.
 
 ${SECURITY_RULES}
@@ -65,6 +69,7 @@ export const dataAssistantService = {
             { role: "user", content: body.message },
         ];
         const toolsUsed: string[] = [];
+        let retriedGarbage = false;
 
         for (let i = 0; i < MAX_TOOL_ITERATIONS; i++) {
             let response: LlmMessage;
@@ -74,7 +79,16 @@ export const dataAssistantService = {
                 logger.error("[ai-assistant] ask-data LLM unavailable", { error: err?.message });
                 return { reply: FALLBACK, toolsUsed };
             }
-            if (!response.tool_calls?.length) return { reply: response.content?.trim() || FALLBACK, toolsUsed };
+            if (!response.tool_calls?.length) {
+                const text = response.content?.trim() ?? "";
+                // A stuck model ("!!!!!…") is not an answer: ask once more, then give the plain fallback.
+                if (isDegenerateReply(text)) {
+                    logger.warn("[ai-assistant] ask-data model returned a degenerate reply", { userId: user.userId, retried: retriedGarbage });
+                    if (!retriedGarbage) { retriedGarbage = true; continue; }
+                    return { reply: FALLBACK, toolsUsed };
+                }
+                return { reply: stripCurrencyFromCounts(text) || FALLBACK, toolsUsed };
+            }
 
             messages.push(response);
             for (const call of response.tool_calls) {

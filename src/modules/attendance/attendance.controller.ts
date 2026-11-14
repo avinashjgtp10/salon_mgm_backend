@@ -87,6 +87,34 @@ export const attendanceController = {
         } catch (err) { return next(err); }
     },
 
+    // Manager/owner starts or ends a break on a staff member's behalf (web Calendar). Staff on the
+    // mobile app use their own /mobile-staff break flow, so this is web-only.
+    async startBreak(req: AuthRequest, res: Response, next: NextFunction) {
+        try {
+            const salonId = req.user?.salonId;
+            if (!salonId) throw new AppError(403, "Salon context required", "NO_SALON_CONTEXT");
+            if (isMobileStaffRequest(req)) throw new AppError(403, "Use the staff app to take a break", "FORBIDDEN");
+            const staffId = String(req.body?.staff_id || "");
+            if (!staffId) throw new AppError(400, "staff_id is required", "VALIDATION_ERROR");
+            await assertStaffScope(req, staffId);
+            const record = await attendanceService.startBreakForStaff(salonId, staffId, Number(req.body?.minutes), req.body?.note);
+            return sendSuccess(res, 200, record, "Break started");
+        } catch (err) { return next(err); }
+    },
+
+    async endBreak(req: AuthRequest, res: Response, next: NextFunction) {
+        try {
+            const salonId = req.user?.salonId;
+            if (!salonId) throw new AppError(403, "Salon context required", "NO_SALON_CONTEXT");
+            if (isMobileStaffRequest(req)) throw new AppError(403, "Use the staff app to end a break", "FORBIDDEN");
+            const staffId = String(req.body?.staff_id || "");
+            if (!staffId) throw new AppError(400, "staff_id is required", "VALIDATION_ERROR");
+            await assertStaffScope(req, staffId);
+            const record = await attendanceService.endBreakForStaff(salonId, staffId);
+            return sendSuccess(res, 200, record, "Break ended");
+        } catch (err) { return next(err); }
+    },
+
     // Completes a forgotten check-out on an earlier day (see attendanceService.completeMissedCheckOut).
     async completeMissedCheckOut(req: AuthRequest, res: Response, next: NextFunction) {
         try {

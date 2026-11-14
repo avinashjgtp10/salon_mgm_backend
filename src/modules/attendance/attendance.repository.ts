@@ -75,6 +75,59 @@ export const attendanceRepository = {
         return rows.map((r: any) => ({ staff_id: String(r.staff_id), since: new Date(r.since).toISOString(), until: new Date(r.until).toISOString() }));
     },
 
+    async findTodayShifts(salonId: string, date: string): Promise<{ staff_id: string; check_in: string; shift_end: string | null; break_seconds: number }[]> {
+        try {
+            const { rows } = await pool.query(
+                `SELECT a.staff_id, a.check_in, a.scheduled_end,
+                        COALESCE((SELECT SUM(EXTRACT(EPOCH FROM (b.actual_end - b.actual_start))) FROM attendance_breaks b
+                                  WHERE b.attendance_id = a.id AND b.actual_end IS NOT NULL), 0) AS break_seconds
+                 FROM attendance a
+                 WHERE a.salon_id = $1 AND a.date = $2::date AND a.check_in IS NOT NULL AND a.check_out IS NULL`,
+                [salonId, date]
+            );
+            return rows.map((r: any) => ({ staff_id: String(r.staff_id), check_in: new Date(r.check_in).toISOString(), shift_end: r.scheduled_end ? new Date(r.scheduled_end).toISOString() : null, break_seconds: Math.round(Number(r.break_seconds) || 0) }));
+        } catch (err: any) {
+            if (err?.code === "42703" || err?.code === "42P01") return [];   // scheduled_end / attendance_breaks not migrated yet
+            throw err;
+        }
+    },
+
+    async findAssignedShift(staffId: string, date: string): Promise<{ start_time: string | null; end_time: string | null; is_available: boolean } | null> {
+        const { rows } = await pool.query(
+            `SELECT start_time::text, end_time::text, is_available FROM staff_schedules
+             WHERE staff_id = $1 AND (date = $2::date OR (date IS NULL AND day_of_week = EXTRACT(DOW FROM $2::date)))
+             ORDER BY date NULLS LAST LIMIT 1`,
+            [staffId, date]
+        );
+        return rows[0] ?? null;
+    },
+
+    async setScheduledWindow(attendanceId: string, start: string, end: string): Promise<void> {
+        await pool.query(
+            `UPDATE attendance SET scheduled_start = $2, scheduled_end = $3, updated_at = NOW()
+             WHERE id = $1 AND scheduled_start IS NULL AND scheduled_end IS NULL`,
+            [attendanceId, start, end]
+        );
+    },
+
+    async insertBreak(attendanceId: string, plannedStart: string, plannedEnd: string, note: string | null): Promise<any> {
+        const { rows } = await pool.query(
+            `INSERT INTO attendance_breaks (attendance_id, request_id, planned_start, planned_end, actual_start, note)
+             VALUES ($1, gen_random_uuid()::text, $2, $3, $2, $4) RETURNING *`,
+            [attendanceId, plannedStart, plannedEnd, note]
+        );
+        return rows[0];
+    },
+
+    async endActiveBreak(attendanceId: string, at: string): Promise<any | null> {
+        const { rows } = await pool.query(
+            `UPDATE attendance_breaks SET actual_end = $2, updated_at = NOW()
+             WHERE attendance_id = $1 AND actual_end IS NULL AND actual_start < $2 RETURNING *`,
+            [attendanceId, at]
+        );
+        return rows[0] ?? null;
+    },
+
     async isCheckinVisibilityEnabled(salonId: string): Promise<boolean> {
         try {
             const { rows } = await pool.query(

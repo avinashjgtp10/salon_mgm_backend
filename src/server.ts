@@ -10,6 +10,7 @@ import { startCampaignScheduler, stopCampaignScheduler } from './modules/marketi
 import { startAutomationScheduler, stopAutomationScheduler } from './modules/whatsapp-automation/whatsapp-automation.scheduler'
 import { startWaLimitSyncScheduler, stopWaLimitSyncScheduler } from './modules/marketing/whatsapp/config/wa-limit-sync.scheduler'
 import { startAttendanceReminderScheduler, stopAttendanceReminderScheduler } from './modules/attendance/staffAttendance.scheduler'
+import { startFestivalReminderScheduler, stopFestivalReminderScheduler } from './modules/festivals/festival-reminder.scheduler'
 import { startCallbackDeadlineScheduler, stopCallbackDeadlineScheduler } from './modules/support/support.callbackScheduler'
 import { startNoShowScheduler, stopNoShowScheduler } from './modules/appointments/appointments.scheduler'
 import { startPushReceiptScheduler, stopPushReceiptScheduler } from './modules/notifications/pushNotification.service'
@@ -56,6 +57,8 @@ httpServer.listen(PORT, () => {
   // Auto-flip overdue unpaid appointments to no-show
   startNoShowScheduler()
   startAttendanceReminderScheduler()
+  // Upcoming-festival reminders to each salon owner (in-app bell, once per festival)
+  startFestivalReminderScheduler()
   // Support callbacks: due-soon / overdue notifications for the Super Admin
   startCallbackDeadlineScheduler()
 
@@ -101,6 +104,7 @@ process.on('SIGTERM', () => {
   stopWaLimitSyncScheduler()
   stopNoShowScheduler()
   stopAttendanceReminderScheduler()
+  stopFestivalReminderScheduler()
   stopCallbackDeadlineScheduler()
   stopPushReceiptScheduler()
   stopBotQuestionsCleanupScheduler()

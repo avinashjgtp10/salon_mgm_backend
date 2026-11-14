@@ -62,6 +62,19 @@ const REGIONAL_DEFAULTS: Record<string, { timezone: string; currency: string }> 
 const COUNTRY_NAME_TO_CODE: Record<string, string> = {
     "united arab emirates": "AE",
     "uae": "AE",
+    // Other names the Settings country picker can have saved as free text. Callers compare against "AE" only, so adding
+    // names never changes India/UAE behaviour; the festival calendar uses them to find the right country.
+    "india": "IN",
+    "united states": "US",
+    "united states of america": "US",
+    "usa": "US",
+    "united kingdom": "GB",
+    "uk": "GB",
+    "canada": "CA",
+    "australia": "AU",
+    "saudi arabia": "SA",
+    "singapore": "SG",
+    "malaysia": "MY",
 };
 
 // "AE" / "ae" / "United Arab Emirates" -> "AE". Only the countries listed above are recognised by name.
