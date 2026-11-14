@@ -36,8 +36,9 @@ const norm = (s: unknown) => String(s ?? "").trim().toLowerCase();
 const num = (v: unknown): number => Number(String(v ?? "").replace(/[^0-9.\-]/g, ""));
 
 export const packageTemplatesImport = {
-  async importPackages(params: { rows: any[]; salonId: string }) {
+  async importPackages(params: { rows: any[]; salonId: string; dryRun?: boolean }) {
     const { salonId } = params;
+    const dryRun = params.dryRun === true;
     const issues: Issue[] = [];
     const servicesAdded: { name: string; category: string; price: number; duration: number }[] = [];
     const result = { total_rows: params.rows.length, imported: 0, skipped: 0, failed: 0, issues, services_added: servicesAdded };
@@ -164,6 +165,12 @@ export const packageTemplatesImport = {
     const ensureCategory = async (name: string): Promise<string> => {
       const hit = categoryByName.get(norm(name));
       if (hit) return hit;
+      if (dryRun) {
+        // Validation run: the category would be created, nothing is saved.
+        const virtualId = `dry-run:${norm(name)}`;
+        categoryByName.set(norm(name), virtualId);
+        return virtualId;
+      }
       const created = await pool.query(
         "INSERT INTO service_categories (salon_id, name, type) VALUES ($1, $2, 'service') RETURNING id",
         [salonId, name],
@@ -230,15 +237,17 @@ export const packageTemplatesImport = {
         for (const l of g.lines) {
           if (!l.isNew || serviceByName.has(norm(l.serviceName))) continue;
           const categoryId = await ensureCategory(l.category);
-          await servicesRepository.create(
-            { name: l.serviceName, category_id: categoryId, price_type: "fixed", price: l.servicePrice ?? 0, duration: l.duration } as any,
-            salonId,
-          );
+          if (!dryRun) {
+            await servicesRepository.create(
+              { name: l.serviceName, category_id: categoryId, price_type: "fixed", price: l.servicePrice ?? 0, duration: l.duration } as any,
+              salonId,
+            );
+          }
           serviceByName.set(norm(l.serviceName), { name: l.serviceName, price: l.servicePrice ?? 0 });
           servicesAdded.push({ name: l.serviceName, category: l.category, price: l.servicePrice ?? 0, duration: l.duration });
         }
 
-        await packageTemplatesRepository.create(salonId, {
+        if (!dryRun) await packageTemplatesRepository.create(salonId, {
           name: g.name,
           description: g.lines.find((l) => l.description)?.description ?? null,
           basePrice: head.packagePrice,

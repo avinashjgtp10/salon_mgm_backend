@@ -44,6 +44,7 @@ export const servicesController = {
         status: q.status,
         type: q.type,
         staff_id: q.staff_id,
+        gender_preference: q.gender_preference,
         online_booking: q.online_booking,
         commissions: q.commissions,
         resource_requirements: q.resource_requirements,
@@ -332,8 +333,10 @@ export const servicesImportController = {
                 ? parseExcelBuffer(file.buffer)
                 : await parseCSVBuffer(file.buffer);
 
-            const result = await servicesService.importServices({ rows, salonId });
-            return sendSuccess(res, 200, result, "Import completed");
+            // dry_run=true: run every check but save nothing (the import screen validates first, then asks the user to confirm).
+            const dry_run = String(req.body?.dry_run ?? req.query?.dry_run ?? "").toLowerCase() === "true";
+            const result = await servicesService.importServices({ rows, salonId, dry_run });
+            return sendSuccess(res, 200, result, dry_run ? "Dry run complete — no changes saved" : "Import completed");
         } catch (e) {
             return next(e);
         }

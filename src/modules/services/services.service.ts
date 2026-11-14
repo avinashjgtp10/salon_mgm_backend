@@ -243,8 +243,12 @@ export const servicesService = {
   },
 
   // ─── Import ───────────────────────────────────────────────────────────────────
-  async importServices(params: { rows: any[]; salonId: string }) {
+  async importServices(params: { rows: any[]; salonId: string; dry_run?: boolean }) {
     const { rows, salonId } = params;
+    const dryRun = params.dry_run === true;
+    // Dry run only: what the file itself would create, so later rows see earlier ones the way a real import does.
+    const pendingCategories = new Set<string>();
+    const pendingServices = new Set<string>();
     type ImportRowIssue = string | { row: number; name: string; status: "skipped" | "failed"; reason: string };
     const result = { total_rows: rows.length, imported: 0, skipped: 0, errors: [] as ImportRowIssue[] };
 
@@ -255,7 +259,7 @@ export const servicesService = {
     const REQUIRED_COLUMNS = ["Name", "Category", "Description", "Price / Retail Price", "Duration (min)"];
     // Extra columns the importer already knows how to use beyond the
     // required template — allowed without tripping an "unexpected column" error.
-    const OPTIONAL_KNOWN_COLUMNS = ["Price Type", "Online Booking", "Commission", "Resource Required"];
+    const OPTIONAL_KNOWN_COLUMNS = ["Price Type", "Online Booking", "Commission", "Resource Required", "Gender"];
     const ALLOWED_COLUMNS = new Set([...REQUIRED_COLUMNS, ...OPTIONAL_KNOWN_COLUMNS]);
     // Common near-miss headers → the exact column name they were probably
     // meant to be, so a rename typo gets a precise fix instead of a vague
@@ -334,14 +338,20 @@ export const servicesService = {
         if (categoryMap[catName.toLowerCase()]) {
           category_id = categoryMap[catName.toLowerCase()];
         } else {
-          // Create category
+          // Create category (a dry run only notes that it would be created)
           try {
-            const newCat = await db.query(
-              "INSERT INTO service_categories (salon_id, name, type) VALUES ($1, $2, 'service') RETURNING id",
-              [salonId, catName]
-            );
-            category_id = newCat.rows[0].id;
-            categoryMap[catName.toLowerCase()] = category_id!;
+            if (dryRun) {
+              category_id = `dry-run:${catName.toLowerCase()}`;
+              categoryMap[catName.toLowerCase()] = category_id;
+              pendingCategories.add(catName.toLowerCase());
+            } else {
+              const newCat = await db.query(
+                "INSERT INTO service_categories (salon_id, name, type) VALUES ($1, $2, 'service') RETURNING id",
+                [salonId, catName]
+              );
+              category_id = newCat.rows[0].id;
+              categoryMap[catName.toLowerCase()] = category_id!;
+            }
           } catch {
             result.skipped++;
             result.errors.push(`Row ${rowNum}: failed to create category "${catName}"`);
@@ -356,9 +366,25 @@ export const servicesService = {
       const priceType = (["fixed", "from", "free"].includes(priceTypeRaw) ? priceTypeRaw : "fixed") as "fixed" | "from" | "free";
       const onlineBooking = ["yes", "true", "1"].includes(String(r["Online Booking"] ?? r.online_booking ?? "yes").toLowerCase());
 
+      // Gender is optional: blank means Unisex. Anything other than Unisex / Female / Male (or Men / Women) fails the row clearly
+      // instead of being silently saved as Unisex.
+      const genderRaw = String(r.Gender ?? r.gender ?? "").trim().toLowerCase();
+      const GENDER_WORDS: Record<string, "unisex" | "female" | "male"> = {
+        "": "unisex", unisex: "unisex", all: "unisex", any: "unisex", both: "unisex",
+        female: "female", women: "female", woman: "female", ladies: "female", f: "female",
+        male: "male", men: "male", man: "male", gents: "male", m: "male",
+      };
+      const genderPreference = GENDER_WORDS[genderRaw];
+      if (!genderPreference) {
+        result.skipped++;
+        result.errors.push({ row: rowNum, name, status: "skipped", reason: `Gender must be Unisex, Female or Male (found "${String(r.Gender ?? r.gender).trim()}")` });
+        continue;
+      }
+
       const body: CreateServiceBody = {
         name,
         category_id: category_id!,
+        gender_preference: genderPreference,
         description: String(r.Description ?? r.description ?? "").trim() || undefined,
         price_type: priceType,
         price: parseFloat(priceRaw) || 0,
@@ -374,15 +400,18 @@ export const servicesService = {
       // Duration + Price), plus Category, since an import row additionally
       // carries a category and two same-priced services in different
       // categories are legitimately different offerings.
+      const dupKey = `${name.toLowerCase()}|${body.duration ?? 30}|${body.price ?? 0}|${category_id ?? ""}`;
       const duplicate = await servicesRepository.findDuplicate(name, body.duration ?? 30, body.price ?? 0, salonId);
-      if (duplicate && ((duplicate as any).category_id ?? null) === (category_id ?? null)) {
+      // In a dry run nothing is saved, so an earlier row of the same file is the "existing" service a real import would find.
+      if ((duplicate && ((duplicate as any).category_id ?? null) === (category_id ?? null)) || (dryRun && pendingServices.has(dupKey))) {
         result.skipped++;
         result.errors.push({ row: rowNum, name, status: "skipped", reason: "Duplicate Service Name" });
         continue;
       }
 
       try {
-        await servicesRepository.create(body, salonId);
+        if (dryRun) pendingServices.add(dupKey);
+        else await servicesRepository.create(body, salonId);
         result.imported++;
       } catch (err: any) {
         result.skipped++;

@@ -69,7 +69,12 @@ export const paymentSettingsService = {
     if (!ok) throw new AppError(404, 'Terminal not found', 'NOT_FOUND');
   },
 
-  listProviderConfigs: (salonId: string) => paymentSettingsRepository.listProviderConfigs(salonId),
+  async listProviderConfigs(salonId: string) {
+    const configs = await paymentSettingsRepository.listProviderConfigs(salonId);
+    return configs.map((config) => config.provider === 'paytm'
+      ? { ...config, environment: 'sandbox' as const }
+      : config);
+  },
 
   async upsertProviderConfig(data: UpsertProviderConfigBody) {
     if (!data.provider) throw new AppError(400, 'provider is required', 'VALIDATION_ERROR');
@@ -78,6 +83,12 @@ export const paymentSettingsService = {
     }
     if (data.environment !== undefined && !ENVIRONMENTS.includes(data.environment)) {
       throw new AppError(400, 'environment must be "sandbox" or "production"', 'VALIDATION_ERROR');
+    }
+    if (data.provider === 'paytm') {
+      if (data.environment === 'production') {
+        throw new AppError(400, 'Paytm supports staging only. Use environment "sandbox".', 'PAYTM_STAGING_ONLY');
+      }
+      data = { ...data, environment: 'sandbox' };
     }
 
     // The settings form starts with empty fields (stored secrets are never
@@ -116,7 +127,7 @@ export const paymentSettingsService = {
         throw new AppError(400, 'Enter both the Merchant ID (MID) and Merchant Key to enable Paytm', 'VALIDATION_ERROR');
       }
       try {
-        new PaytmProvider(effective, (data.environment ?? existing?.environment) === 'production' ? 'production' : 'sandbox');
+        new PaytmProvider(effective);
       } catch (err: any) {
         throw new AppError(400, err?.message ?? 'Invalid Paytm credentials', 'VALIDATION_ERROR');
       }
@@ -142,7 +153,7 @@ export const paymentSettingsService = {
       case 'paytm': {
         let paytm: PaytmProvider;
         try {
-          paytm = new PaytmProvider(config.credentials ?? {}, config.environment === 'production' ? 'production' : 'sandbox');
+          paytm = new PaytmProvider(config.credentials ?? {});
         } catch (err: any) {
           // Bad saved credentials (missing MID/Key, wrong key length) — report, don't 500.
           result = { ok: false, message: err?.message ?? 'Invalid Paytm credentials' };

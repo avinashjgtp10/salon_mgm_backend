@@ -3,7 +3,7 @@ import { AppError } from "../../middleware/error.middleware";
 import { sendSuccess } from "../utils/response.util";
 import { appointmentsService } from "../appointments/appointments.service";
 import { attendanceService } from "../attendance/attendance.service";
-import { staffAttendanceState, staffSelfCheckIn, staffSelfCheckOut, staffSelfStartBreak } from "../attendance/staffAttendance.service";
+import { staffAttendanceState, staffSelfCheckIn, staffSelfCheckOut, staffSelfStartBreak, staffSelfCompletePendingCheckOut } from "../attendance/staffAttendance.service";
 import { notificationsService } from "../notifications/notifications.service";
 import {
   staffService, staffAddressService, staffEmergencyContactService,
@@ -238,7 +238,13 @@ export const mobileStaffController = {
   async checkOut(req: MobileStaffRequest, res: Response, next: NextFunction) {
     try {
       const { userId, salonId } = getStaff(req);
-      const state = await staffSelfCheckOut(userId, salonId, new Date(), punchLocation(req.body));
+      const pendingId = req.body?.pending_attendance_id;
+      if (pendingId !== undefined && (typeof pendingId !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(pendingId))) {
+        throw new AppError(400, "A valid pending attendance id is required.", "VALIDATION_ERROR");
+      }
+      const state = pendingId
+        ? await staffSelfCompletePendingCheckOut(userId, salonId, pendingId)
+        : await staffSelfCheckOut(userId, salonId, new Date(), punchLocation(req.body));
       return sendSuccess(res, 200, { self_attendance: state }, "Checked out successfully");
     } catch (err) { return next(err); }
   },

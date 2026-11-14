@@ -19,6 +19,7 @@ import {
     StaffPresence,
 } from "./attendance.types";
 import { loadStaffPresence } from "./attendance.presence";
+import { shiftWindow, zonedInstant } from "./staffAttendance.rules";
 import { getIO, salonRoom, salonStaffRoom } from "../../config/socket";
 import { getSalonDateLocale } from "../../config/currency";
 import { salonTranslator } from "../../config/i18n";
@@ -252,17 +253,72 @@ export const attendanceService = {
     // today are simply absent from the list; callers treat that as not checked in.
     async getStaffPresence(salonId: string): Promise<StaffPresence> {
         const date = await todayInSalon(salonId);
-        const [presence, breaks] = await Promise.all([
+        const [presence, breaks, shifts] = await Promise.all([
             loadStaffPresence(salonId, date),
             attendanceRepository.findActiveBreaks(salonId, date),
+            attendanceRepository.findTodayShifts(salonId, date),
         ]);
-        if (!presence) return { enabled: false, date, staff: [], breaks };
+        if (!presence) return { enabled: false, date, staff: [], breaks, shifts };
         return {
             enabled: true,
             date,
             staff: Array.from(presence, ([staff_id, state]) => ({ staff_id, state })),
             breaks,
+            shifts,
         };
+    },
+
+    // ── Manager-driven breaks (Calendar staff menu) ───────────────────────────
+
+    async startBreakForStaff(salonId: string, staffId: string, minutes: number, note?: string): Promise<Attendance> {
+        if (!Number.isFinite(minutes) || minutes < 1 || minutes > 240) throw new AppError(400, "Break length must be between 1 and 240 minutes", "INVALID_BREAK");
+        const date = await todayInSalon(salonId);
+        const existing = await attendanceRepository.findByStaffAndDate(staffId, date);
+        if (!existing?.check_in) throw new AppError(400, "Staff has not checked in yet", "NOT_CHECKED_IN");
+        if (existing.check_out) throw new AppError(400, "Staff has already checked out", "ALREADY_CHECKED_OUT");
+        if (existing.active_break) throw new AppError(409, "Staff is already on a break", "ALREADY_ON_BREAK");
+        const now = new Date();
+        const plannedEnd = new Date(now.getTime() + minutes * 60_000);
+        const trimmed = typeof note === "string" ? note.trim().slice(0, 500) || null : null;
+
+        // The database only accepts a break inside the attendance row's scheduled shift. A manager
+        // check-in leaves that window empty, so fill it from the staff member's assigned schedule.
+        let winStart = existing.scheduled_start ? new Date(existing.scheduled_start) : null;
+        let winEnd = existing.scheduled_end ? new Date(existing.scheduled_end) : null;
+        if (!winStart || !winEnd) {
+            const tz = await getSalonTimezone(salonId);
+            const win = shiftWindow(date, await attendanceRepository.findAssignedShift(staffId, date), tz);
+            // No assigned hours today: fall back to check-in .. end of the salon day so a manager can
+            // still record a break for someone who was checked in without a scheduled shift.
+            const start = win?.start ?? new Date(existing.check_in!);
+            const end = win?.end ?? zonedInstant(date, "23:59:59", tz);
+            await attendanceRepository.setScheduledWindow(existing.id, start.toISOString(), end.toISOString());
+            winStart = start; winEnd = end;
+        }
+        if (now < winStart || now >= winEnd) throw new AppError(400, "A break can only be taken during the scheduled shift.", "OUTSIDE_SHIFT");
+        if (plannedEnd > winEnd) throw new AppError(400, "The break would end after the scheduled shift ends. Choose an earlier return time.", "BREAK_PAST_SHIFT");
+
+        let brk;
+        try {
+            brk = await attendanceRepository.insertBreak(existing.id, now.toISOString(), plannedEnd.toISOString(), trimmed);
+        } catch (err: any) {
+            if (err?.code === "23505") throw new AppError(409, "Staff is already on a break", "ALREADY_ON_BREAK");
+            throw err;
+        }
+        logger.info("attendance.breakStart", { salonId, staffId, date, minutes });
+        void notifyAttendanceBreak(existing, brk, "start");
+        return existing;
+    },
+
+    async endBreakForStaff(salonId: string, staffId: string): Promise<Attendance> {
+        const date = await todayInSalon(salonId);
+        const existing = await attendanceRepository.findByStaffAndDate(staffId, date);
+        if (!existing?.active_break) throw new AppError(400, "Staff is not on a break", "NOT_ON_BREAK");
+        const brk = await attendanceRepository.endActiveBreak(existing.id, new Date().toISOString());
+        if (!brk) throw new AppError(409, "This break cannot be ended yet", "INVALID_RETURN");
+        logger.info("attendance.breakEnd", { salonId, staffId, date });
+        void notifyAttendanceBreak(existing, brk, "end");
+        return existing;
     },
 
     // ── Check In ──────────────────────────────────────────────────────────────

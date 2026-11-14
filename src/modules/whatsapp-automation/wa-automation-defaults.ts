@@ -26,7 +26,8 @@ export const DEFAULT_PURCHASE_TEMPLATES: Record<
     | "membership_session_used" | "package_appointment_reminder_24h" | "service_reminder_24h"
     | "reward_points_earned" | "referral_reward" | "ewallet_used" | "referral_credit_used" | "reward_points_used"
     | "birthday_wishes" | "anniversary_wishes" | "service_redo_reminder"
-    | "cash_counter_opened" | "cash_counter_closed",
+    | "cash_counter_opened" | "cash_counter_closed"
+    | "cash_counter_opened_updated" | "cash_counter_closed_updated",
     {
         label: string;
         category: "UTILITY" | "MARKETING";
@@ -229,6 +230,19 @@ export const DEFAULT_PURCHASE_TEMPLATES: Record<
         language: "en",
         bodyText: "*Cash Counter Closed — {{salon_name}}*\n\nYour cash counter has been closed for the day. Here is the collection summary for this session.\n\nDate: {{closing_date}}\nTime: {{closing_time}}\n\n*Collection Summary*\n{{collection_breakdown}}\n━━━━━━━━━━━━━━\n*Total Collection: {{total_collection}}*\nExpenses: {{expenses}}\nIn-Store Cash: {{in_store_cash}}\n\nThank you for reconciling today's cash counter.",
     },
+    // Sent to the owner after an EDIT of an opened / closed counter is saved — carries the latest saved values.
+    cash_counter_opened_updated: {
+        label: "Cash Counter Updated (Opening)",
+        category: "UTILITY",
+        language: "en",
+        bodyText: "*Cash Counter Updated — {{salon_name}}*\n\nYour cash counter opening details have been updated successfully.\n\nDate: {{opening_date}}\nTime: {{opening_time}}\nOpening Cash Amount: {{opening_amount}}\n\nThank you!",
+    },
+    cash_counter_closed_updated: {
+        label: "Cash Counter Updated (Closing)",
+        category: "UTILITY",
+        language: "en",
+        bodyText: "*Cash Counter Updated — {{salon_name}}*\n\nYour cash counter closing details have been updated successfully.\n\nDate: {{closing_date}}\nTime: {{closing_time}}\n\n*Updated Collection Summary*\n{{collection_breakdown}}\n━━━━━━━━━━━━━━\n*Total Collection: {{total_collection}}*\nExpenses: {{expenses}}\nIn-Store Cash: {{in_store_cash}}\n\nThank you for reconciling today's cash counter.",
+    },
 };
 
 export type DefaultPurchaseEventType = keyof typeof DEFAULT_PURCHASE_TEMPLATES;
@@ -268,6 +282,8 @@ export const EVENT_VARIABLE_NAMES: Record<DefaultPurchaseEventType, string[]> = 
   service_redo_reminder: ["customer_name", "salon_name", "service_name", "last_visit_date"],
   cash_counter_opened:  ["salon_name", "opening_date", "opening_time", "opening_amount"],
   cash_counter_closed:  ["salon_name", "closing_date", "closing_time", "collection_breakdown", "total_collection", "expenses", "in_store_cash"],
+  cash_counter_opened_updated: ["salon_name", "opening_date", "opening_time", "opening_amount"],
+  cash_counter_closed_updated: ["salon_name", "closing_date", "closing_time", "collection_breakdown", "total_collection", "expenses", "in_store_cash"],
 };
 
 // Converts a salon's named-placeholder wording into Meta's required

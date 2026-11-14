@@ -49,6 +49,8 @@ export type AutomationEventType =
   // since the owner may not be inside Meta's 24h customer-service window.
   | 'cash_counter_opened'
   | 'cash_counter_closed'
+  | 'cash_counter_opened_updated'
+  | 'cash_counter_closed_updated'
   // Legacy global (admin-managed, salon_id IS NULL) events, untouched by the
   // trigger-template rework.
   | 'pending_payment_reminder'
@@ -94,6 +96,8 @@ export const PURCHASE_EVENTS: AutomationEventType[] = [
   'service_redo_reminder',
   'cash_counter_opened',
   'cash_counter_closed',
+  'cash_counter_opened_updated',
+  'cash_counter_closed_updated',
 ]
 
 // PURCHASE_EVENTS members that skip Meta template submission entirely (sent

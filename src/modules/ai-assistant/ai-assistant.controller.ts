@@ -13,6 +13,7 @@ import { explainReport, isReportKey, REPORT_PERMISSIONS } from "./report-insight
 import { userCanUse } from "./ai-assistant.service";
 import { explainCampaign, suggestInboxReplies, writeTemplateCopy } from "./marketing-ai.service";
 import { aiAssistantRepository } from "./ai-assistant.repository";
+import { festivalMessageDrafts, upcomingForSalon } from "../festivals/festivals.service";
 
 type AuthRequest = Request & { user?: { userId: string; role?: string; salonId?: string | null } };
 
@@ -99,6 +100,33 @@ export const aiAssistantController = {
             return sendSuccess(res, 200, result, "OK");
         } catch (err) {
             logger.error("POST /ai-assistant/template-copy error", { err });
+            return next(err);
+        }
+    },
+
+    // GET /api/v1/ai-assistant/festivals — festivals coming up for THIS salon's country/state, in the salon's own time zone
+    async festivals(req: AuthRequest, res: Response, next: NextFunction) {
+        try {
+            const user = req.user;
+            if (!user?.userId || !user.salonId) throw new AppError(403, "Salon context required", "NO_SALON_CONTEXT");
+            const days = Math.min(365, Math.max(1, Math.round(Number(req.query.days)) || 90));
+            return sendSuccess(res, 200, { festivals: await upcomingForSalon(user.salonId, days) }, "OK");
+        } catch (err) {
+            return next(err);
+        }
+    },
+
+    // POST /api/v1/ai-assistant/festival-copy  { key } — three WhatsApp drafts for one upcoming festival; nothing is sent
+    async festivalCopy(req: AuthRequest, res: Response, next: NextFunction) {
+        try {
+            const user = req.user;
+            if (!user?.userId || !user.salonId) throw new AppError(403, "Salon context required", "NO_SALON_CONTEXT");
+            const key = String(req.body?.key ?? "").trim();
+            if (!/^[a-z_]{2,40}$/.test(key)) throw new AppError(400, "festival key is required", "VALIDATION_ERROR");
+            const result = await festivalMessageDrafts({ userId: user.userId, role: user.role, salonId: user.salonId }, key);
+            return sendSuccess(res, 200, result, "OK");
+        } catch (err) {
+            logger.error("POST /ai-assistant/festival-copy error", { err });
             return next(err);
         }
     },

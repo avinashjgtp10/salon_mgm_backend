@@ -45,6 +45,14 @@ export type CloseCounterBody = {
   remarks?: string;
 };
  
+// Edit of an already opened or closed counter. Open counters take opening_balance only; closed counters also take
+// in_store_cash and remarks. Every field is optional — only what is sent is changed.
+export type EditCounterBody = {
+  opening_balance?: number;
+  in_store_cash?: number;
+  remarks?: string | null;
+};
+
 export type CreateExpenseBody = {
   cash_management_id: string;
   expense_type: string;

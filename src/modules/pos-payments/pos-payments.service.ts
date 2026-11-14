@@ -97,7 +97,7 @@ export const posPaymentsService = {
       if (!config?.is_enabled) {
         throw new AppError(400, 'The payment machine is turned off in Settings — choose "Payment collected elsewhere" or another method.', 'PROVIDER_NOT_CONFIGURED');
       }
-      environment = config.environment === 'production' ? 'production' : 'sandbox';
+      environment = 'sandbox';
       if (!params.terminalId) throw new AppError(400, 'Choose which payment machine to use', 'TERMINAL_REQUIRED');
     }
 

@@ -19,7 +19,7 @@ export const REPORT_KEYS_BY_CATEGORY = {
     sales: ["report_sales_summary", "report_daily_sheet", "report_service_sale", "report_taxes", "report_reward", "report_ewallet"],
     payments: ["report_payment_collection", "report_pending_payment", "report_cash_management"],
     customers: ["report_all_clients", "report_client_revenue", "report_customer_frequency", "report_lost_customers", "report_customer_spend", "report_service_frequency", "report_referral_report", "report_client_source", "report_client_rating", "report_enquiry_report"],
-    staff: ["report_staff_sales", "report_staff_performance", "report_staff_item_sales", "report_commission_report", "report_tip_report", "report_attendance_report", "report_payroll_history", "report_rebooking_rate"],
+    staff: ["report_staff_sales", "report_staff_performance", "report_staff_item_sales", "report_commission_report", "report_tip_report", "report_attendance_report", "report_staff_leave_report", "report_payroll_history", "report_rebooking_rate"],
     appointments: ["report_appointment_detail", "report_online_appointment", "report_upcoming_appointments", "report_no_show_recovery"],
     inventory: ["report_product_inventory", "report_slow_moving_products", "report_fast_moving_products", "report_brand_performance", "report_purchase_vs_sales", "report_consumable_usage", "report_consumable_analytics", "report_supplier_report", "report_purchase_history", "report_stock_movement", "report_product_sale_inventory", "report_product_margin_inventory"],
     packages: ["report_package_sale", "report_package_history", "report_member_sale", "report_membership_history"],
