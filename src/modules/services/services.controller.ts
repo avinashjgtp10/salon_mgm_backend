@@ -44,6 +44,7 @@ export const servicesController = {
         status: q.status,
         type: q.type,
         staff_id: q.staff_id,
+        gender_preference: q.gender_preference,
         online_booking: q.online_booking,
         commissions: q.commissions,
         resource_requirements: q.resource_requirements,
