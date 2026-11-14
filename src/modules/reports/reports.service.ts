@@ -1345,11 +1345,16 @@ async getSalesSummaryReport(
     salonId: string,
     filters: SalesSummaryReportFilters
 ): Promise<SalesSummaryReportResponse> {
-    const [statsRaw, rowsResult, filtersAvailable] = await Promise.all([
+    const [statsRaw, rowsResult, filtersAvailable, byItemType] = await Promise.all([
         reportsRepository.getSalesSummaryReportStats(salonId, filters),
         reportsRepository.getSalesSummaryReportRows(salonId, filters),
         reportsRepository.getSalesSummaryFiltersAvailable(salonId),
+        // Same date range + filters as the table/stats, split by what was sold (sale_items.item_type).
+        reportsRepository.getSalesSummaryByItemType(salonId, filters),
     ]);
+    // With an Item Type filter, only the chosen kinds count (a bill that mixes a product and a service would otherwise show its service line too).
+    const wantedTypes = (filters as any).item_types as string[] | undefined;
+    const soldBy = (type: string) => (wantedTypes?.length && !wantedTypes.includes(type) ? 0 : byItemType.find((r) => r.item_type === type)?.total_sale ?? 0);
 
     const bill_average = statsRaw.total_bill > 0
         ? statsRaw.total_sale / statsRaw.total_bill
@@ -1358,7 +1363,11 @@ async getSalesSummaryReport(
     return {
         rows: rowsResult.items,
         pagination: rowsResult.pagination,
-        stats: { ...statsRaw, bill_average },
+        stats: {
+            ...statsRaw, bill_average,
+            service_sale: soldBy("service"), product_sale: soldBy("product"),
+            package_sale: soldBy("package"), membership_sale: soldBy("membership"),
+        },
         filters_available: filtersAvailable,
     };
 },
