@@ -24,9 +24,16 @@ export type PaytmCredentials = {
 
 // Staging-only Paytm EDC integration. Sale/Status use the supplied staging
 // documentation host; Abort retains its existing staging endpoint.
+// All three live on securegw-stage.paytm.in — the host Paytm supplied with the
+// staging credentials. The paytmpayments.in host these first two used answers
+// a bare HTTP 404 on both paths (verified 2026-11-14): no ECR envelope, no
+// resultInfo, so testConnection reported "could not reach Paytm (HTTP 404)"
+// and every sale would have failed the same way. Not to be confused with
+// Paytm's own result code 0404 ("transaction doesn't exist"), which arrives
+// inside a 200 body and is the expected answer to a connection probe.
 const ECR_ENDPOINTS = {
-  sale: 'https://securegw-stage.paytmpayments.in/ecr/payment/request',
-  status: 'https://securegw-stage.paytmpayments.in/ecr/V2/payment/status',
+  sale: 'https://securegw-stage.paytm.in/ecr/payment/request',
+  status: 'https://securegw-stage.paytm.in/ecr/V2/payment/status',
   abort: 'https://securegw-stage.paytm.in/ecr/abort/txn',
 };
 const ECR_CHANNEL_ID = 'EDC';
