@@ -24,9 +24,16 @@ export type PaytmCredentials = {
 
 // Staging-only Paytm EDC integration. Sale/Status use the supplied staging
 // documentation host; Abort retains its existing staging endpoint.
+// All three live on securegw-stage.paytm.in — the host Paytm supplied with the
+// staging credentials. The paytmpayments.in host these first two used answers
+// a bare HTTP 404 on both paths (verified 2026-11-14): no ECR envelope, no
+// resultInfo, so testConnection reported "could not reach Paytm (HTTP 404)"
+// and every sale would have failed the same way. Not to be confused with
+// Paytm's own result code 0404 ("transaction doesn't exist"), which arrives
+// inside a 200 body and is the expected answer to a connection probe.
 const ECR_ENDPOINTS = {
-  sale: 'https://securegw-stage.paytmpayments.in/ecr/payment/request',
-  status: 'https://securegw-stage.paytmpayments.in/ecr/V2/payment/status',
+  sale: 'https://securegw-stage.paytm.in/ecr/payment/request',
+  status: 'https://securegw-stage.paytm.in/ecr/V2/payment/status',
   abort: 'https://securegw-stage.paytm.in/ecr/abort/txn',
 };
 const ECR_CHANNEL_ID = 'EDC';
@@ -289,6 +296,18 @@ export class PaytmProvider implements PaymentProvider {
     return this.ecrPayload(bodyJson, checksum);
   }
 
+  /** signedEcrPayload + the one logged POST, for the APIs that sign the serialized body. */
+  private async sendSignedEcr(args: {
+    api: string;
+    url: string;
+    body: Record<string, unknown>;
+    merchantTransactionId: string;
+    tid: string;
+  }) {
+    const payload = await this.signedEcrPayload(args.body);
+    return this.postEcr({ ...args, payload });
+  }
+
   private ecrPayload(bodyJson: string, checksum: string): string {
     const head = {
       requestTimeStamp: formatPaytmDateTime(new Date()),
@@ -299,12 +318,76 @@ export class PaytmProvider implements PaymentProvider {
     return `{"head":${JSON.stringify(head)},"body":${bodyJson}}`;
   }
 
-  private postEcr(url: string, payload: string) {
-    return axios.post(url, payload, {
-      headers: { 'Content-Type': 'application/json' },
-      timeout: ECR_TIMEOUT_MS,
-      maxRedirects: 0,
-    });
+  /**
+   * Every ECR request goes through here, so each Paytm call leaves exactly one
+   * structured log line carrying both sides of the exchange: the request body,
+   * the response, the HTTP status, Paytm's result code/status and the latency.
+   * The POS screen only ever shows "approved" or "declined" — this is the only
+   * place that sees what Paytm actually received and returned, and it's what
+   * Paytm's integration checklist asks to see.
+   *
+   * merchantTransactionId is the trace id: it is generated once per sale and
+   * reused verbatim by every Status Enquiry and the Abort for that sale, so
+   * grepping one id pulls a complete transaction out of the logs. No separate
+   * uuid is minted — a second id would have to be threaded through the
+   * scheduler and the database to survive a restart, and this one already is.
+   *
+   * Never logged: the Merchant Key, the generated checksum (stripChecksums
+   * removes it from both directions), or err.config, which carries the signed
+   * payload. Paytm returns card numbers already masked and we store them that
+   * way — a full PAN in a log is a PCI problem even on staging.
+   */
+  private async postEcr(args: {
+    api: string;
+    url: string;
+    payload: string;
+    body: Record<string, unknown>;
+    merchantTransactionId: string;
+    tid: string;
+  }) {
+    const context = {
+      api: args.api,
+      traceId: args.merchantTransactionId,
+      merchantTransactionId: args.merchantTransactionId,
+      mid: this.creds.mid,
+      tid: args.tid,
+      url: args.url,
+      request: stripChecksums(args.body),
+    };
+    const startedAt = Date.now();
+    try {
+      const response = await axios.post(args.url, args.payload, {
+        headers: { 'Content-Type': 'application/json' },
+        timeout: ECR_TIMEOUT_MS,
+        maxRedirects: 0,
+      });
+      const info = (response.data as any)?.body?.resultInfo;
+      logger.info('[pos-payments/paytm] ECR call', {
+        ...context,
+        httpStatus: response.status,
+        latencyMs: Date.now() - startedAt,
+        resultCodeId: info?.resultCodeId ?? null,
+        resultCode: info?.resultCode ?? null,
+        resultStatus: info?.resultStatus ?? null,
+        resultMsg: info?.resultMsg ?? null,
+        response: stripChecksums(response.data),
+      });
+      return response;
+    } catch (err: any) {
+      const info = err?.response?.data?.body?.resultInfo;
+      logger.warn('[pos-payments/paytm] ECR call failed', {
+        ...context,
+        httpStatus: err?.response?.status ?? null,
+        latencyMs: Date.now() - startedAt,
+        code: err?.code ?? null,
+        message: err?.message,
+        resultCodeId: info?.resultCodeId ?? null,
+        resultCode: info?.resultCode ?? null,
+        resultStatus: info?.resultStatus ?? null,
+        response: stripChecksums(err?.response?.data),
+      });
+      throw err;
+    }
   }
 
   // Paytm's Sale, Status Enquiry and Abort APIs all identify the transaction
@@ -349,7 +432,14 @@ export class PaytmProvider implements PaymentProvider {
     const payload = this.ecrPayload(JSON.stringify(body), checksum);
 
     try {
-      const { data } = await this.postEcr(this.ecrUrls.sale, payload);
+      const { data } = await this.postEcr({
+        api: 'SALE',
+        url: this.ecrUrls.sale,
+        payload,
+        body,
+        merchantTransactionId,
+        tid: paytmTid,
+      });
       return interpretSaleResponse(data, merchantTransactionId);
     } catch (err: any) {
       return this.handleSaleTransportError(err, merchantTransactionId);
@@ -405,16 +495,21 @@ export class PaytmProvider implements PaymentProvider {
   async getPaymentStatus(ctx: ProviderTxnContext): Promise<ProviderStatusResult> {
     const paytmTid = this.requireTid(ctx.terminalProviderId, 'status enquiry');
     const merchantTransactionId = toPaytmMerchantTxnId(ctx.reference);
-    const payload = await this.signedEcrPayload({
-      paytmMid: this.creds.mid,
-      paytmTid,
-      transactionDateTime: formatPaytmDateTime(ctx.requestedAt),
-      merchantTransactionId,
-    });
 
     let data: unknown;
     try {
-      ({ data } = await this.postEcr(this.ecrUrls.status, payload));
+      ({ data } = await this.sendSignedEcr({
+        api: 'STATUS',
+        url: this.ecrUrls.status,
+        body: {
+          paytmMid: this.creds.mid,
+          paytmTid,
+          transactionDateTime: formatPaytmDateTime(ctx.requestedAt),
+          merchantTransactionId,
+        },
+        merchantTransactionId,
+        tid: paytmTid,
+      }));
     } catch (err: any) {
       // Never logs err.config — it carries the signed payload and checksum.
       logger.warn('[pos-payments/paytm] status enquiry failed — outcome unknown, no status change', {
@@ -441,15 +536,20 @@ export class PaytmProvider implements PaymentProvider {
   async cancelPayment(ctx: ProviderTxnContext): Promise<ProviderCancelResult> {
     const paytmTid = this.requireTid(ctx.terminalProviderId, 'abort');
     const merchantTransactionId = toPaytmMerchantTxnId(ctx.reference);
-    const payload = await this.signedEcrPayload({
-      paytmMid: this.creds.mid,
-      paytmTid,
-      merchantTransactionId,
-      transactionDateTime: formatPaytmDateTime(ctx.requestedAt),
-    });
 
     try {
-      const { data } = await this.postEcr(this.ecrUrls.abort, payload);
+      const { data } = await this.sendSignedEcr({
+        api: 'ABORT',
+        url: this.ecrUrls.abort,
+        body: {
+          paytmMid: this.creds.mid,
+          paytmTid,
+          merchantTransactionId,
+          transactionDateTime: formatPaytmDateTime(ctx.requestedAt),
+        },
+        merchantTransactionId,
+        tid: paytmTid,
+      });
       return interpretAbortResponse(data, merchantTransactionId);
     } catch (err: any) {
       // A structured Paytm body on an HTTP error (e.g. 0012) is still a
@@ -500,14 +600,19 @@ export class PaytmProvider implements PaymentProvider {
     for (const tid of tids) {
       const requestedAt = new Date();
       const merchantTransactionId = `SXTEST${requestedAt.getTime()}`;
-      const payload = await this.signedEcrPayload({
-        paytmMid: this.creds.mid,
-        paytmTid: tid,
-        transactionDateTime: formatPaytmDateTime(requestedAt),
-        merchantTransactionId,
-      });
       try {
-        const { data } = await this.postEcr(this.ecrUrls.status, payload);
+        const { data } = await this.sendSignedEcr({
+          api: 'STATUS_PROBE',
+          url: this.ecrUrls.status,
+          body: {
+            paytmMid: this.creds.mid,
+            paytmTid: tid,
+            transactionDateTime: formatPaytmDateTime(requestedAt),
+            merchantTransactionId,
+          },
+          merchantTransactionId,
+          tid,
+        });
         results.push(interpretConnectionProbe(data, tid));
       } catch (err: any) {
         if (err?.response?.data?.body?.resultInfo) {

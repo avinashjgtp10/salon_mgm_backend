@@ -30,10 +30,10 @@ it('uses staging for sale, status, abort and connection probes even with an old 
   await provider.cancelPayment(ctx);
   await provider.testConnection({ terminalProviderIds: [ctx.terminalProviderId] });
   expect((axios.post as jest.Mock).mock.calls.map(([url]) => url)).toEqual([
-    'https://securegw-stage.paytmpayments.in/ecr/payment/request',
-    'https://securegw-stage.paytmpayments.in/ecr/V2/payment/status',
+    'https://securegw-stage.paytm.in/ecr/payment/request',
+    'https://securegw-stage.paytm.in/ecr/V2/payment/status',
     'https://securegw-stage.paytm.in/ecr/abort/txn',
-    'https://securegw-stage.paytmpayments.in/ecr/V2/payment/status',
+    'https://securegw-stage.paytm.in/ecr/V2/payment/status',
   ]);
   for (const [, , options] of (axios.post as jest.Mock).mock.calls) {
     expect(options.maxRedirects).toBe(0);
