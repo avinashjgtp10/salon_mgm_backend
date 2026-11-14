@@ -118,6 +118,8 @@ export type StaffPresence = {
     // Everyone on a break right now, regardless of the check-in-visibility
     // setting — the Calendar warns before booking someone who is on break.
     breaks: { staff_id: string; since: string; until: string }[];
+    // Today's punch-in and assigned shift end per working staff member (feeds the Calendar shift timer).
+    shifts: { staff_id: string; check_in: string; shift_end: string | null; break_seconds: number }[];
 };
 
 export type DailySummary = {

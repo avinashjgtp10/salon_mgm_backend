@@ -4,7 +4,7 @@ import logger from "../../config/logger";
 import { aiAssistantRepository } from "./ai-assistant.repository";
 import { requireSalonAiCredentials } from "../ai-credentials/ai-credentials.service";
 import { LlmMessage, Tool } from "./ai-assistant.types";
-import { hasProtocolContent, InvalidLlmReplyError } from "./reply-validation";
+import { hasProtocolContent, InvalidLlmReplyError, isDegenerateReply } from "./reply-validation";
 
 // Cloudflare Workers AI exposes an OpenAI-compatible chat-completions endpoint, including tool calling and JSON mode.
 const cfUrl = (accountId: string) => `https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(accountId)}/ai/v1/chat/completions`;
@@ -26,6 +26,7 @@ export const llmClient = {
         // The salon's own Cloudflare key (set by Super Admin). No key = LUNOX is locked for this salon.
         const { accountId, apiToken } = await requireSalonAiCredentials(params.salonId);
         let lastErr: any;
+        let stuck = false;
 
         for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
             try {
@@ -44,7 +45,9 @@ export const llmClient = {
                                   tool_choice: "auto",
                               }
                             : {}),
-                        temperature: params.temperature ?? 0.3,
+                        // A retry after a stuck reply ("!!!!…") runs warmer: very low temperatures are what let a model fall into
+                        // repeating one token, and a different sample is enough to break out of it.
+                        temperature: attempt > 0 && stuck ? Math.max(params.temperature ?? 0.3, 0.6) : (params.temperature ?? 0.3),
                         // gpt-oss models spend part of this budget on hidden reasoning; too small a cap
                         // truncates the answer (or breaks JSON mode), so keep it roomy and the reasoning short.
                         max_tokens: params.maxTokens ?? 2000,
@@ -74,6 +77,11 @@ export const llmClient = {
                 // Retry malformed provider output; never interpret tool commands
                 // embedded in plain text or expose that text as an answer.
                 if (!message.tool_calls?.length && hasProtocolContent(message.content)) {
+                    throw new InvalidLlmReplyError();
+                }
+                // A reply that is just one repeated character is a stuck model, not an answer: retry (warmer) like any bad output.
+                if (!message.tool_calls?.length && isDegenerateReply(message.content)) {
+                    stuck = true;
                     throw new InvalidLlmReplyError();
                 }
                 if (hasProtocolContent(message.content)) message.content = null;
