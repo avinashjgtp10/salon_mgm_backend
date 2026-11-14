@@ -249,6 +249,21 @@ export const posPaymentsService = {
     if (live.status === 'SUCCESS') {
       return posPaymentsService.finalizeSuccess(request, live.providerTransactionId, live.amount ?? request.amount, live.raw);
     }
+    // A poll that resolved nothing still has to leave a trace. Paytm's
+    // integration checklist asks how we treat their in-progress codes (0010,
+    // 0030, 0404) and their unknown answers: these rows are the evidence that
+    // each one was read as "still pending" and the request was never finalised
+    // early. interpretStatusResponse marks exactly those two shapes, so an
+    // ordinary "still processing" answer doesn't write a row on every poll —
+    // the frontend polls far too often for that, and the per-call log line in
+    // logs/ already carries every single exchange with its result code.
+    const rawDetail = (live.raw ?? {}) as { retryable?: boolean; outcomeUnknown?: boolean; reason?: string };
+    if (rawDetail.retryable || rawDetail.outcomeUnknown) {
+      await posPaymentsRepository
+        .addEvent(request.id, rawDetail.retryable ? 'STATUS_PENDING_RETRYABLE' : 'STATUS_OUTCOME_UNKNOWN', request.status, request.status, live.raw)
+        .catch((err: any) => logger.warn('[pos-payments] could not record the poll result', { requestId: request.id, message: err?.message }));
+    }
+
     if (live.status === request.status) return request; // no change
     if (['FAILED', 'CANCELLED', 'EXPIRED'].includes(live.status)) {
       const resolved = resolvedUnknownOutcomePatch(request, live.status);
