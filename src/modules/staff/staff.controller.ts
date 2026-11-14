@@ -923,6 +923,17 @@ export const staffSchedulesController = {
 // ─── Leaves ───────────────────────────────────────────────────────────────────
 
 export const staffLeavesController = {
+  // GET /staff/leaves/report?start_date&end_date — every staff leave of the salon (Staff Leave Report).
+  async report(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const data = await staffLeavesService.report(
+        getSalonId(req),
+        req.query.start_date ? String(req.query.start_date) : undefined,
+        req.query.end_date ? String(req.query.end_date) : undefined,
+      );
+      return sendSuccess(res, 200, data, "Leave report fetched successfully");
+    } catch (err) { return next(err); }
+  },
   async list(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const data = await staffLeavesService.list(

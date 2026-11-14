@@ -639,6 +639,11 @@ export interface SalesSummaryReportStats {
     total_referral: number;
     total_discount: number;
     total_gst: number;
+    // Sales split by what was sold (sale_items.item_type), for the same date range and filters.
+    service_sale?: number;
+    product_sale?: number;
+    package_sale?: number;
+    membership_sale?: number;
 }
 
 export interface SalesSummaryReportPagination {
