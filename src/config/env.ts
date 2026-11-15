@@ -92,7 +92,6 @@ interface Config {
   };
 
   aiAssistant: {
-    monthlyTokenCapPerSalon: number;
     requestsPerMinutePerUser: number;
     imagesPerDayPerSalon: number;
   };
@@ -183,7 +182,6 @@ const config: Config = {
   },
 
   aiAssistant: {
-    monthlyTokenCapPerSalon: Number(process.env.AI_ASSISTANT_MONTHLY_TOKEN_CAP) || 2_000_000,
     requestsPerMinutePerUser: Number(process.env.AI_ASSISTANT_RPM) || 15,
     imagesPerDayPerSalon: Number(process.env.AI_ASSISTANT_IMAGES_PER_DAY) || 10,
   },

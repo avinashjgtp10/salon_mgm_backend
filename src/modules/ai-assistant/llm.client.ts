@@ -1,6 +1,7 @@
 import axios from "axios";
 import config from "../../config/env";
 import logger from "../../config/logger";
+import { AppError } from "../../middleware/error.middleware";
 import { aiAssistantRepository } from "./ai-assistant.repository";
 import { requireSalonAiCredentials } from "../ai-credentials/ai-credentials.service";
 import { LlmMessage, Tool } from "./ai-assistant.types";
@@ -10,6 +11,18 @@ import { hasProtocolContent, InvalidLlmReplyError, isDegenerateReply } from "./r
 const cfUrl = (accountId: string) => `https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(accountId)}/ai/v1/chat/completions`;
 const MAX_RETRIES = 2;
 const RETRY_DELAY_MS = 2000;
+
+export const QUOTA_MESSAGE = "LUNOX has reached its daily AI limit for this salon. It will work again once the daily allowance resets — please try again later.";
+
+function isCloudflareQuotaError(err: any): boolean {
+    const data = err?.response?.data;
+    if (!data) return false;
+    const errors = Array.isArray(data.errors) ? data.errors : [];
+    if (errors.some((e: any) => Number(e?.code) === 4006)) return true;
+    let text = "";
+    try { text = typeof data === "string" ? data : JSON.stringify(data); } catch { /* ignore */ }
+    return /daily free allocation|neurons/i.test(text) && err?.response?.status === 429;
+}
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
@@ -90,6 +103,12 @@ export const llmClient = {
             } catch (err: any) {
                 lastErr = err;
                 const status = err?.response?.status;
+                // The salon's Cloudflare account has used up its daily allowance (code 4006 on the free plan): retrying
+                // cannot help, so stop now with a message the user can act on.
+                if (isCloudflareQuotaError(err)) {
+                    logger.warn("[ai-assistant] Cloudflare daily allowance used up", { salonId: params.salonId });
+                    throw new AppError(429, QUOTA_MESSAGE, "AI_QUOTA_EXCEEDED");
+                }
                 logger.error("[ai-assistant] LLM call failed", { attempt, status, error: err?.response?.data?.error ?? err?.message });
                 const retryable = err instanceof InvalidLlmReplyError || status === 429 || (status && status >= 500);
                 if (!retryable || attempt === MAX_RETRIES) break;

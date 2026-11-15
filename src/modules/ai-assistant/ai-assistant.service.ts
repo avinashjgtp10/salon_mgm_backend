@@ -32,15 +32,11 @@ export async function assertWithinLimits(user: AssistantUser) {
     // LUNOX is switched on per salon by Super Admin saving that salon's Cloudflare key; without it, stop before any work.
     await requireSalonAiCredentials(user.salonId);
     try {
-        const [perMinute, monthTokens] = await Promise.all([
-            aiAssistantRepository.requestsInLastMinute(user.userId),
-            aiAssistantRepository.tokensThisMonth(user.salonId),
-        ]);
+        // No token cap of our own: the salon's Cloudflare account enforces its own daily allowance, and llm.client turns
+        // that provider error into AI_QUOTA_EXCEEDED. Only the per-user rate limit is checked here.
+        const perMinute = await aiAssistantRepository.requestsInLastMinute(user.userId);
         if (perMinute >= config.aiAssistant.requestsPerMinutePerUser) {
             throw new AppError(429, "Too many requests. Please wait a moment.", "RATE_LIMITED");
-        }
-        if (monthTokens >= config.aiAssistant.monthlyTokenCapPerSalon) {
-            throw new AppError(429, "This salon's monthly AI usage limit has been reached.", "AI_QUOTA_EXCEEDED");
         }
     } catch (err) {
         if (err instanceof AppError) throw err;
@@ -86,6 +82,7 @@ export const aiAssistantService = {
                 response = await llmClient.chat({ messages, tools: assistantTools, salonId: user.salonId, userId: user.userId });
             } catch (err: any) {
                 logger.error("[ai-assistant] LLM unavailable", { error: err?.message });
+                if (err instanceof AppError && err.code === "AI_QUOTA_EXCEEDED") return { reply: err.message, sources: [], toolsUsed };
                 return { reply: FALLBACK_REPLY, sources: [], toolsUsed };
             }
 

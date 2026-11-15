@@ -1235,10 +1235,50 @@ export const appointmentsService = {
             patch.staff_id !== existing.staff_id &&
             (existing.status === "paid" || existing.status === "partial")
         ) {
-            salesRepository.reassignStaffForAppointment(appointmentId, patch.staff_id)
-                .catch(err => logger.warn("Sale staff reassignment failed (non-fatal)", {
+            // Awaited (still non-fatal) so the commission recalculation just below reads the sale_items
+            // that already carry the new staff.
+            try {
+                await salesRepository.reassignStaffForAppointment(appointmentId, patch.staff_id);
+            } catch (err: any) {
+                logger.warn("Sale staff reassignment failed (non-fatal)", {
                     appointmentId, newStaffId: patch.staff_id, err: err?.message,
-                }));
+                });
+            }
+        }
+
+        // ── Staff changed on a paid/partial bill: move the COMMISSION too ─────
+        // Changing who did a service (the appointment's staff, or any service/package/product/membership
+        // line's staff) rewrites sales/sale_items, but the commission_earned rows were written at payment
+        // time for the ORIGINAL staff and nothing refreshed them — Staff A kept the commission and Staff B
+        // never got it. Clear the sale's pending rows and calculate again from the sale's current lines,
+        // under the new staff's own commission rules. reverseForSale deletes the sale's rows before any
+        // insert, so this can never leave a duplicate set. Bill amount and payments are not touched.
+        // Commission already paid out / settled to Staff A is left alone (reverseForSale only clears pending rows).
+        const staffSignature = (a: any): string => [
+            a?.staff_id,
+            ...(a?.services ?? []).map((i: any) => i?.staff_id),
+            ...(a?.package_items ?? []).map((i: any) => i?.staff_id),
+            ...(a?.product_items ?? []).map((i: any) => i?.staff_id),
+            ...(a?.membership_items ?? []).map((i: any) => i?.staff_id),
+        ].map((v) => v ?? "").join("|");
+        if ((existing.status === "paid" || existing.status === "partial") && staffSignature(existing) !== staffSignature(updated)) {
+            try {
+                const linkedSale = await salesRepository.findByAppointmentId(appointmentId);
+                if (linkedSale) {
+                    const linkedItems = await salesRepository.findItemsBySaleId(linkedSale.id);
+                    await commissionCalculationService.reverseForSale(linkedSale.id);
+                    await commissionCalculationService.calculateForSale({
+                        salonId:         existing.salon_id,
+                        saleId:          linkedSale.id,
+                        appointmentId,
+                        fallbackStaffId: updated.staff_id ?? null,
+                        items:           linkedItems,
+                        packageItemIds:  new Set((updated.package_items ?? []).map((pk: any) => pk.package_id)),
+                    });
+                }
+            } catch (err: any) {
+                logger.warn("Commission recalculation after staff change failed (non-fatal)", { appointmentId, err: err?.message });
+            }
         }
 
         // Same idea for the DATE: moving a paid/partial appointment must carry

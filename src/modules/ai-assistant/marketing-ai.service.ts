@@ -36,6 +36,7 @@ async function askJson(user: AssistantUser, system: string, userMsg: string, max
         return parseJson(reply.content);
     } catch (err: any) {
         logger.error("[ai-assistant] marketing AI call failed", { error: err?.message });
+        if (err instanceof AppError && err.code === "AI_QUOTA_EXCEEDED") throw err;
         throw new AppError(502, "LUNOX is unavailable right now. Please try again shortly.", "AI_UNAVAILABLE");
     }
 }

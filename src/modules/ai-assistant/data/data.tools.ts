@@ -5,7 +5,7 @@ import { reportsService } from "../../reports/reports.service";
 import { salonsRepository } from "../../salons/salons.repository";
 import { AssistantUser, Tool } from "../ai-assistant.types";
 import { moneyFormatter } from "../../../config/currency";
-import { PERIODS, ResolvedPeriod, resolvePeriod } from "./periods";
+import { PERIODS, ResolvedPeriod, resolvePeriod, todayIn } from "./periods";
 import { findReportsForChart } from "./report-locations";
 import { upcomingForSalon } from "../../festivals/festivals.service";
 
@@ -124,6 +124,8 @@ const getSalesReportTool: Tool = {
             reportsRepository.getSalesSummaryPreviousPeriodStats(user.salonId, filters).catch(() => null),
         ]);
 
+        const countedEnd = per.end_date > todayIn(tz) ? todayIn(tz) : per.end_date;
+        const daysCounted = Math.max(1, Math.round((new Date(`${countedEnd}T00:00:00Z`).getTime() - new Date(`${per.start_date}T00:00:00Z`).getTime()) / 86_400_000) + 1);
         const received = Number(stats.received_amount) || 0;
         const billed = Number(stats.total_sale) || 0;
         const bills = Number(stats.total_bill) || 0;
@@ -135,6 +137,11 @@ const getSalesReportTool: Tool = {
             total_billed: fmt(billed),
             number_of_bills: bills,
             average_bill: bills > 0 ? fmt(billed / bills) : null,
+            // Daily average, worked out here so the model never does the division: calendar days in the period, counted
+            // only up to today (a "this month so far" or a custom range that runs past today is not padded with future days).
+            days_counted: daysCounted,
+            daily_average_money_received: fmt(received / daysCounted),
+            daily_average_total_billed: fmt(billed / daysCounted),
             discounts_given: fmt(Number(stats.total_discount) || 0),
             tips: fmt(Number(stats.total_tip) || 0),
             gst: fmt(Number(stats.total_gst) || 0),

@@ -1,7 +1,26 @@
 import pool from "../../config/database";
 import bcrypt from "bcrypt";
-import { purgeSalon, clearSalonData as clearSalonDataRows } from "../salons/salons.repository";
+import { purgeSalon, clearSalonData as clearSalonDataRows, salonTransactionHistory } from "../salons/salons.repository";
 import { getPlatformSalonId } from "../client-announcements/platform-salon";
+
+// Soft-delete ("archive") columns on salons. The migration (Migration/add_salon_soft_delete.sql) is not auto-run, so the first use adds
+// them itself, the same way the support module does.
+let deletionColumns: Promise<void> | null = null;
+export function ensureSalonDeletionColumns(): Promise<void> {
+  if (!deletionColumns) {
+    deletionColumns = pool
+      .query(
+        `ALTER TABLE salons
+           ADD COLUMN IF NOT EXISTS deleted_at       TIMESTAMPTZ,
+           ADD COLUMN IF NOT EXISTS deleted_by       UUID,
+           ADD COLUMN IF NOT EXISTS deletion_reason  TEXT,
+           ADD COLUMN IF NOT EXISTS deleted_user_ids UUID[]`
+      )
+      .then(() => undefined)
+      .catch((err) => { deletionColumns = null; throw err; });
+  }
+  return deletionColumns;
+}
 
 export const superAdminRepository = {
 
@@ -166,8 +185,11 @@ export const superAdminRepository = {
     return rows.map((r: { id: string }) => r.id);
   },
 
-  async getAllSalons(search?: string, kind?: "real" | "dummy") {
+  async getAllSalons(search?: string, kind?: "real" | "dummy", deleted: "hide" | "only" | "include" = "hide") {
+    await ensureSalonDeletionColumns();
     const param = search ? `%${search}%` : null;
+    // Archived (soft-deleted) salons are hidden from the normal lists; "only" is the Deleted view, "include" shows everything.
+    const deletedFilter = deleted === "only" ? "AND s.deleted_at IS NOT NULL" : deleted === "include" ? "" : "AND s.deleted_at IS NULL";
     const dummyFilter = kind ? (kind === "dummy" ? "AND s.is_dummy = true" : "AND s.is_dummy = false") : "";
     // The hidden salon behind Client Announcements is SalonOx's own, not a customer: keep it out of these lists.
     const platformSalonId = await getPlatformSalonId().catch(() => null);
@@ -179,7 +201,9 @@ export const superAdminRepository = {
         u.email                                                                           AS owner_email,
         u.phone                                                                           AS owner_phone,
         TRIM(CONCAT(u.first_name,' ',COALESCE(u.last_name,'')))                         AS owner_name,
-        CASE WHEN s.is_active THEN 'active' ELSE 'inactive' END                         AS status,
+        CASE WHEN s.deleted_at IS NOT NULL THEN 'deleted' WHEN s.is_active THEN 'active' ELSE 'inactive' END AS status,
+        s.deleted_at,
+        s.deletion_reason,
         COALESCE(u.is_onboarding_complete, false)                                       AS is_onboarding_complete,
         -- Meta (WhatsApp Cloud API) setup: complete only when the salon has a saved,
         -- verified connection with every credential present.
@@ -220,6 +244,7 @@ export const superAdminRepository = {
          OR u.phone         ILIKE $1
          OR u.first_name    ILIKE $1)
       ${dummyFilter}
+      ${deletedFilter}
       AND ($2::text IS NULL OR s.id::text <> $2::text)
       ORDER BY s.created_at DESC
     `, [param, platformSalonId]);
@@ -741,7 +766,129 @@ export const superAdminRepository = {
 
   // ── PAYMENTS ──────────────────────────────────────────────────────────────────
 
+  // ── SALON DELETION ────────────────────────────────────────────────────────────────────────────────────────────────────────
+  // A salon with transaction history (sales, payments, invoices, appointments, purchases, payroll, paid subscriptions...) is NEVER purged:
+  // financial and historical records must survive. It is archived instead (soft delete): deactivated, its owner and staff logins switched
+  // off and signed out, and hidden from the normal Salons lists (Super Admin can still open the Deleted view and restore it). Only a salon
+  // with no such history — an empty or test salon — is permanently deleted. No foreign key is dropped or loosened for either path.
+
+  /** What deleting this salon would do, so the confirmation can say so before anything happens. null = no such salon. */
+  async getSalonDeletionPreview(id: string) {
+    await ensureSalonDeletionColumns();
+    const { rows } = await pool.query(
+      `SELECT id, COALESCE(business_name, slug, 'Unnamed') AS name, deleted_at,
+              EXISTS (SELECT 1 FROM subscriptions s WHERE s.salon_id = salons.id AND s.status IN ('active', 'authenticated')
+                        AND s.razorpay_subscription_id IS NOT NULL AND COALESCE(s.cancel_at_period_end, false) = false) AS subscription_active
+         FROM salons WHERE id = $1`,
+      [id]
+    );
+    if (!rows[0]) return null;
+    const history = await salonTransactionHistory(pool, id);
+    return {
+      id: rows[0].id as string,
+      name: rows[0].name as string,
+      already_deleted: rows[0].deleted_at !== null,
+      mode: (history.total > 0 ? "archive" : "permanent") as "archive" | "permanent",
+      history: history.counts,
+      history_total: history.total,
+      subscription_active: rows[0].subscription_active === true,
+    };
+  },
+
+  /** Deletes the salon the safe way: archives it when it has history, permanently deletes it only when it has none. null = no such salon. */
   async deleteSalon(id: string, deletedByUserId: string, reason?: string) {
+    await ensureSalonDeletionColumns();
+    const preview = await this.getSalonDeletionPreview(id);
+    if (!preview) return null;
+    // Product decision: Delete removes the salon and ALL its data permanently, history included (nothing is archived).
+    const purged = await this.purgeSalonAccount(id, deletedByUserId, reason, true);
+    return purged && purged !== "has_history" ? { mode: "deleted" as const, subscription_active: preview.subscription_active } : null;
+  },
+
+  async archiveSalon(id: string, deletedByUserId: string, reason?: string) {
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const { rows: salons } = await client.query(
+        `SELECT id, owner_id, deleted_at, COALESCE(business_name, slug, 'Unnamed') AS name FROM salons WHERE id = $1 FOR UPDATE`,
+        [id]
+      );
+      if (!salons[0]) { await client.query("ROLLBACK"); return null; }
+      const ownerId = salons[0].owner_id;
+
+      // Logins that exist only for this salon: staff/admin logins with no staff row at another salon, and the owner when they own no
+      // other live salon. A shared login keeps working. Only active ones are switched off, and their ids are remembered so a restore
+      // switches back on exactly those (not a login somebody had deliberately disabled).
+      const { rows: staffLogins } = await client.query(
+        `SELECT DISTINCT u.id FROM users u JOIN staff s ON s.user_id = u.id
+          WHERE s.salon_id = $1 AND u.role IN ('staff', 'admin') AND u.is_active IS NOT FALSE AND u.id IS DISTINCT FROM $2
+            AND NOT EXISTS (SELECT 1 FROM staff s2 WHERE s2.user_id = u.id AND s2.salon_id <> $1)
+            AND NOT EXISTS (SELECT 1 FROM salons o WHERE o.owner_id = u.id AND o.id <> $1 AND o.deleted_at IS NULL)`,
+        [id, ownerId]
+      );
+      const loginIds: string[] = staffLogins.map((r: { id: string }) => r.id);
+      let ownerEmail: string | null = null;
+      if (ownerId) {
+        const { rows: o } = await client.query(`SELECT email, is_active, role FROM users WHERE id = $1`, [ownerId]);
+        ownerEmail = o[0]?.email ?? null;
+        const { rows: other } = await client.query(`SELECT 1 FROM salons WHERE owner_id = $1 AND id <> $2 AND deleted_at IS NULL LIMIT 1`, [ownerId, id]);
+        if (o[0] && o[0].role !== "super_admin" && o[0].is_active !== false && !other[0]) loginIds.push(ownerId);
+      }
+      if (loginIds.length > 0) {
+        await client.query(`UPDATE users SET is_active = false, updated_at = NOW() WHERE id = ANY($1::uuid[]) AND role <> 'super_admin'`, [loginIds]);
+        await client.query(`DELETE FROM refresh_tokens WHERE user_id = ANY($1::uuid[])`, [loginIds]);   // signed out everywhere
+      }
+      await client.query(
+        `UPDATE salons SET is_active = false, deleted_at = NOW(), deleted_by = $2, deletion_reason = $3, deleted_user_ids = $4::uuid[], updated_at = NOW() WHERE id = $1`,
+        [id, deletedByUserId, reason ?? null, loginIds]
+      );
+      await client.query(
+        `INSERT INTO deleted_account_log (account_type, account_id, account_email, account_name, account_role, deleted_by, reason)
+         VALUES ('salon', $1, $2, $3, 'salon_owner', $4, $5)`,
+        [id, ownerEmail, salons[0].name, deletedByUserId, `Archived — history kept${reason ? ` — ${reason}` : ""}`]
+      );
+      const { rows: sub } = await client.query(
+        `SELECT 1 FROM subscriptions WHERE salon_id = $1 AND status IN ('active', 'authenticated') AND razorpay_subscription_id IS NOT NULL
+            AND COALESCE(cancel_at_period_end, false) = false LIMIT 1`,
+        [id]
+      );
+      await client.query("COMMIT");
+      return { mode: "archived" as const, subscription_active: sub.length > 0 };
+    } catch (err) {
+      await client.query("ROLLBACK");
+      throw err;
+    } finally {
+      client.release();
+    }
+  },
+
+  /** Brings an archived salon back: live again, and the logins that were switched off by the archive are switched back on. */
+  async restoreSalon(id: string) {
+    await ensureSalonDeletionColumns();
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const { rows } = await client.query(`SELECT id, deleted_at, deleted_user_ids FROM salons WHERE id = $1 FOR UPDATE`, [id]);
+      if (!rows[0]) { await client.query("ROLLBACK"); return null; }
+      if (rows[0].deleted_at === null) { await client.query("ROLLBACK"); return { restored: false }; }
+      const ids: string[] = rows[0].deleted_user_ids ?? [];
+      if (ids.length > 0) await client.query(`UPDATE users SET is_active = true, updated_at = NOW() WHERE id = ANY($1::uuid[])`, [ids]);
+      await client.query(
+        `UPDATE salons SET is_active = true, deleted_at = NULL, deleted_by = NULL, deletion_reason = NULL, deleted_user_ids = NULL, updated_at = NOW() WHERE id = $1`,
+        [id]
+      );
+      await client.query("COMMIT");
+      return { restored: true };
+    } catch (err) {
+      await client.query("ROLLBACK");
+      throw err;
+    } finally {
+      client.release();
+    }
+  },
+
+  /** Permanent deletion of a salon with NO transaction history. Returns "has_history" (and deletes nothing) if history exists. */
+  async purgeSalonAccount(id: string, deletedByUserId: string, reason?: string, allowHistory = false): Promise<{ id: string } | null | "has_history"> {
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
@@ -761,6 +908,12 @@ export const superAdminRepository = {
         return null;
       }
       const ownerId = salons[0].owner_id;
+
+      // Last line of defence, inside the transaction and just before anything is deleted: history means this must be an archive, not a purge.
+      if (!allowHistory && (await salonTransactionHistory(client, id)).total > 0) {
+        await client.query("ROLLBACK");
+        return "has_history";
+      }
 
       // Fetched separately (not joined into the locked SELECT above — see
       // that query's comment) BEFORE the owner's user row is possibly
