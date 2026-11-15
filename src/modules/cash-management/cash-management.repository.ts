@@ -1061,7 +1061,7 @@ export const cashManagementRepository = {
     salonId: string;
     cashManagementId: string;
     editedBy: string;
-    changes: { openingBalance?: number; inStoreCash?: number; remarks?: string | null };
+    changes: { openingBalance?: number; closingBalance?: number; inStoreCash?: number; remarks?: string | null };
   }) {
     const { salonId, cashManagementId, editedBy, changes } = params;
     const client = await pool.connect();
@@ -1089,10 +1089,19 @@ export const cashManagementRepository = {
           [cashManagementId, openingBalance.toFixed(2)],
         );
         after = await recalculateCounterById(client, cashManagementId, salonId);
+        // Opening and closing are independent: a typed closing balance replaces the derived one. (An open counter's
+        // closing is re-derived again the next time a payment or expense is recorded.)
+        if (changes.closingBalance !== undefined) {
+          const { rows } = await client.query<CashManagementRecord>(
+            `UPDATE cash_management SET closing_balance = $2, updated_at = NOW() WHERE id = $1 RETURNING *`,
+            [cashManagementId, changes.closingBalance.toFixed(2)],
+          );
+          after = rows[0];
+        }
       } else {
         const inStoreCash = changes.inStoreCash ?? (before.in_store_cash === null ? 0 : parseFloat(before.in_store_cash));
-        const closingBalance =
-          openingBalance + parseFloat(before.cash_revenue ?? "0") - parseFloat(before.cash_expense ?? "0");
+        // Independent of the opening balance: unless a new closing balance is typed, the saved one stays as it was.
+        const closingBalance = changes.closingBalance ?? parseFloat(before.closing_balance ?? "0");
         const remarks = changes.remarks !== undefined ? changes.remarks?.toString().trim() || null : before.remarks;
         const { rows } = await client.query<CashManagementRecord>(
           `UPDATE cash_management

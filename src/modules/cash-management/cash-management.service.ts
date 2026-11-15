@@ -215,9 +215,10 @@ export const cashManagementService = {
       return n;
     };
     const openingBalance = num(body.opening_balance, "opening_balance");
+    const closingBalance = num(body.closing_balance, "closing_balance");
     const inStoreCash = num(body.in_store_cash, "in_store_cash");
     const remarks = body.remarks === undefined ? undefined : body.remarks === null ? null : String(body.remarks);
-    if (openingBalance === undefined && inStoreCash === undefined && remarks === undefined) {
+    if (openingBalance === undefined && closingBalance === undefined && inStoreCash === undefined && remarks === undefined) {
       throw new AppError(400, "Nothing to update", "VALIDATION_ERROR");
     }
 
@@ -225,7 +226,7 @@ export const cashManagementService = {
       salonId,
       cashManagementId: cashManagementId.trim(),
       editedBy,
-      changes: { openingBalance, inStoreCash, remarks },
+      changes: { openingBalance, closingBalance, inStoreCash, remarks },
     });
 
     if (counter.status === "closed") notifyOwnerCashCounterClosed(salonId, counter, { updated: true }).catch(() => {});

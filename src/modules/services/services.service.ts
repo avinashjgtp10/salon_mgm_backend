@@ -256,10 +256,11 @@ export const servicesService = {
     // Checked against the header row before touching any data row — a file
     // with the wrong columns entirely shouldn't produce a pile of per-row
     // "missing X" errors, it should fail fast with one clear reason.
-    const REQUIRED_COLUMNS = ["Name", "Category", "Description", "Price / Retail Price", "Duration (min)"];
+    // Only Name, Category and Price must be in the file; Description and Duration (min) are optional (Duration defaults to 30).
+    const REQUIRED_COLUMNS = ["Name", "Category", "Price / Retail Price"];
     // Extra columns the importer already knows how to use beyond the
     // required template — allowed without tripping an "unexpected column" error.
-    const OPTIONAL_KNOWN_COLUMNS = ["Price Type", "Online Booking", "Commission", "Resource Required", "Gender"];
+    const OPTIONAL_KNOWN_COLUMNS = ["Description", "Duration (min)", "Price Type", "Online Booking", "Commission", "Resource Required", "Gender"];
     const ALLOWED_COLUMNS = new Set([...REQUIRED_COLUMNS, ...OPTIONAL_KNOWN_COLUMNS]);
     // Common near-miss headers → the exact column name they were probably
     // meant to be, so a rename typo gets a precise fix instead of a vague
@@ -360,7 +361,13 @@ export const servicesService = {
         }
       }
 
-      const priceRaw = String(r["Price / Retail Price"] ?? r.Price ?? r.price ?? "0").replace(/[^0-9.]/g, "");
+      if (!catName) {
+        result.skipped++;
+        result.errors.push({ row: rowNum, name, status: "skipped", reason: "Category is required. Add a value in the Category column." });
+        continue;
+      }
+      const priceCell = String(r["Price / Retail Price"] ?? r.Price ?? r.price ?? "").trim();
+      const priceRaw = priceCell.replace(/[^0-9.]/g, "");
       const durationRaw = String(r["Duration (min)"] ?? r.Duration ?? r.duration ?? "30").replace(/[^0-9]/g, "");
       const priceTypeRaw = String(r["Price Type"] ?? r.price_type ?? "fixed").toLowerCase().trim();
       const priceType = (["fixed", "from", "free"].includes(priceTypeRaw) ? priceTypeRaw : "fixed") as "fixed" | "from" | "free";
@@ -378,6 +385,13 @@ export const servicesService = {
       if (!genderPreference) {
         result.skipped++;
         result.errors.push({ row: rowNum, name, status: "skipped", reason: `Gender must be Unisex, Female or Male (found "${String(r.Gender ?? r.gender).trim()}")` });
+        continue;
+      }
+
+      // Price is mandatory (a 0 must be typed); only a "free" service may leave it blank.
+      if (priceCell === "" && priceType !== "free") {
+        result.skipped++;
+        result.errors.push({ row: rowNum, name, status: "skipped", reason: "Price is required. Add a value in the Price / Retail Price column (0 is allowed)." });
         continue;
       }
 
