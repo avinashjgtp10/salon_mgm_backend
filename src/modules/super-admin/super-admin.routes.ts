@@ -73,6 +73,8 @@ router.patch("/salons/:id/status",          superAdminController.setSalonStatus)
 router.patch("/salons/:id/dummy",           superAdminController.setSalonDummy);
 router.patch("/salons/:id/onboarding",      superAdminController.forceOnboarding);
 router.post("/salons/:id/impersonate",      superAdminController.impersonateSalon);
+router.get("/salons/:id/delete-preview",   superAdminController.getSalonDeletionPreview);
+router.post("/salons/:id/restore",          superAdminController.restoreSalon);
 router.delete("/salons/:id",               superAdminController.deleteSalon);
 router.post("/salons/:id/clear-data",       superAdminController.clearSalonData);
 
