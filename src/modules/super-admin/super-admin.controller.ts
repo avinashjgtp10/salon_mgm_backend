@@ -85,7 +85,9 @@ export const superAdminController = {
     try {
       const search = typeof req.query.search === "string" ? req.query.search : undefined;
       const kind = req.query.kind === "dummy" ? "dummy" : req.query.kind === "real" ? "real" : undefined;
-      const data = await superAdminService.getAllSalons(search, kind);
+      // Archived (soft-deleted) salons are hidden unless the Deleted view asks for them.
+      const deleted = req.query.deleted === "only" ? "only" : req.query.deleted === "include" ? "include" : "hide";
+      const data = await superAdminService.getAllSalons(search, kind, deleted);
       return res.json({ success: true, data });
     } catch (err) { return next(err); }
   },
@@ -126,6 +128,20 @@ export const superAdminController = {
     try {
       const id = String(req.params.id);
       const data = await superAdminService.forceCompleteOnboarding(id);
+      return res.json({ success: true, data });
+    } catch (err) { return next(err); }
+  },
+
+  async getSalonDeletionPreview(req: Request, res: Response, next: NextFunction) {
+    try {
+      const data = await superAdminService.getSalonDeletionPreview(String(req.params.id));
+      return res.json({ success: true, data });
+    } catch (err) { return next(err); }
+  },
+
+  async restoreSalon(req: Request, res: Response, next: NextFunction) {
+    try {
+      const data = await superAdminService.restoreSalon(String(req.params.id));
       return res.json({ success: true, data });
     } catch (err) { return next(err); }
   },

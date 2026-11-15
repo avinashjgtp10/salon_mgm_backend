@@ -67,6 +67,67 @@ const SALON_ORPHAN_RISK_TABLES = [
  * on an unrelated missing table) is worse than skipping one that has nothing
  * to delete anyway.
  */
+// ── Transaction history ──────────────────────────────────────────────────────────────────────────────────────────────────────
+// Tables whose rows are the salon's financial or business history. A salon with ANY of these is never permanently deleted by Super
+// Admin (it is archived instead: deactivated, logins disabled, hidden, data kept). Only a salon with none of them — an empty or test
+// salon — can be purged. Tables a given database does not have are skipped.
+const TRANSACTION_HISTORY_TABLES: { table: string; label: string; where?: string }[] = [
+  { table: "sales", label: "Sales / bills" },
+  { table: "payments", label: "Payments" },
+  { table: "invoices", label: "Invoices" },
+  { table: "invoices_archive", label: "Archived invoices" },
+  { table: "appointments", label: "Appointments" },
+  { table: "bookings", label: "Bookings" },
+  { table: "purchases", label: "Purchases" },
+  { table: "orders", label: "Purchase orders" },
+  { table: "order_receipts", label: "Goods receipts" },
+  { table: "supplier_payments", label: "Supplier payments" },
+  { table: "cash_management", label: "Cash counter records" },
+  { table: "cash_management_expenses", label: "Expenses" },
+  { table: "payroll_entries", label: "Payroll" },
+  { table: "payroll_salary_advances", label: "Salary advances" },
+  { table: "commission_earned", label: "Commissions" },
+  { table: "commission_settlements", label: "Commission settlements" },
+  { table: "tip_earned", label: "Tips" },
+  { table: "tip_settlements", label: "Tip settlements" },
+  { table: "client_packages", label: "Packages sold" },
+  { table: "client_memberships", label: "Memberships sold" },
+  { table: "ewallet_ledger", label: "E-wallet entries" },
+  { table: "subscription_invoices", label: "Subscription invoices" },
+  { table: "subscription_upgrades", label: "Plan upgrades" },
+  // Append-only by design (a database trigger rejects every delete), so a salon that has any can only be archived.
+  { table: "asset_events", label: "Asset history" },
+  // A free trial leaves no financial record; a subscription that went through Razorpay does.
+  { table: "subscriptions", label: "Paid subscriptions", where: "COALESCE(is_trial, false) = false AND razorpay_subscription_id IS NOT NULL" },
+];
+
+/** Rows of financial / business history the salon has, by label (only non-zero entries), and their total. */
+export async function salonTransactionHistory(
+  client: PoolClient | typeof pool,
+  salonId: string,
+): Promise<{ counts: Record<string, number>; total: number }> {
+  const id = assertUuid(salonId);
+  const { rows: have } = await client.query(
+    `SELECT table_name FROM information_schema.columns
+     WHERE table_schema = 'public' AND column_name = 'salon_id' AND table_name = ANY($1::text[])`,
+    [TRANSACTION_HISTORY_TABLES.map((t) => t.table)],
+  );
+  const present = new Set((have as { table_name: string }[]).map((r) => r.table_name));
+  const parts = TRANSACTION_HISTORY_TABLES.filter((t) => present.has(t.table)).map(
+    (t, i) => `SELECT ${i} AS i, COUNT(*)::int AS n FROM ${t.table} WHERE salon_id = '${id}'${t.where ? ` AND ${t.where}` : ""}`,
+  );
+  const counts: Record<string, number> = {};
+  let total = 0;
+  if (parts.length > 0) {
+    const { rows } = await client.query(parts.join(" UNION ALL "));
+    const used = TRANSACTION_HISTORY_TABLES.filter((t) => present.has(t.table));
+    for (const r of rows as { i: number; n: number }[]) {
+      if (r.n > 0) { counts[used[r.i].label] = r.n; total += r.n; }
+    }
+  }
+  return { counts, total };
+}
+
 export async function purgeSalon(client: PoolClient, salonId: string): Promise<{ id: string } | null> {
   // Wipe the salon's data in the dependency-safe order first (children before
   // parents: stock_ledger/product_audit_items/supplier_payments before
@@ -199,7 +260,10 @@ const SALON_CLEAR_DATA_TABLES = [
   // Purchase Orders — order_items.product_id references products (NO
   // ACTION) and orders.supplier_id references suppliers (NO ACTION), so
   // both must be cleared before the catalog/inventory sections below.
-  "order_items", "orders", "order_signatures",
+  // order_receipts FIRST: order_receipt_items.order_item_id -> order_items is NO ACTION, so deleting order_items while a goods
+  // receipt still lists them aborted every salon delete / Clear Data with "(order_receipt_items)". Deleting the receipts first
+  // cascades their lines away (order_receipt_items -> order_receipts is ON DELETE CASCADE).
+  "order_receipts", "order_items", "orders", "order_signatures",
 
   // Product audits & stock ledger — product_audit_items.product_id and
   // stock_ledger.product_id/.supplier_id are all plain (NO ACTION) FKs, and
@@ -310,6 +374,21 @@ const SALON_CLEAR_DATA_TABLES = [
 export async function clearSalonData(client: PoolClient, salonId: string): Promise<boolean> {
   const { rows: salons } = await client.query(`SELECT id FROM salons WHERE id = $1`, [salonId]);
   if (!salons[0]) return false;
+
+  // attendance_breaks has no salon column and its FK to attendance is RESTRICT, so the generic attendance delete below would abort
+  // on the first break; remove the breaks of this salon's attendance rows first.
+  const { rows: hasBreaks } = await client.query(`SELECT to_regclass('public.attendance_breaks') AS t`);
+  if (hasBreaks[0]?.t) {
+    await client.query(
+      `DELETE FROM attendance_breaks WHERE attendance_id IN (SELECT id FROM attendance WHERE salon_id = $1)`,
+      [salonId]
+    );
+  }
+
+  // asset_events is append-only: its trigger blocks UPDATE, and deleting an asset_incident would UPDATE events via ON DELETE SET NULL.
+  // Plain DELETEs are allowed, so remove the salon's events first and the cascade then has nothing to update.
+  const { rows: hasEvents } = await client.query(`SELECT to_regclass('public.asset_events') AS t`);
+  if (hasEvents[0]?.t) await client.query(`DELETE FROM asset_events WHERE salon_id = $1`, [salonId]);
 
   // pos_payment_events has no salon-scope column of its own — it's only
   // reachable via pos_payment_request_id (NO ACTION FK) — so it can't go

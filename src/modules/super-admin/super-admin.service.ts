@@ -114,8 +114,8 @@ export const superAdminService = {
 
   // ── SALONS ────────────────────────────────────────────────────────────────────
 
-  async getAllSalons(search?: string, kind?: "real" | "dummy") {
-    return this._withSalonSiteRevenue(await superAdminRepository.getAllSalons(search, kind));
+  async getAllSalons(search?: string, kind?: "real" | "dummy", deleted: "hide" | "only" | "include" = "hide") {
+    return this._withSalonSiteRevenue(await superAdminRepository.getAllSalons(search, kind, deleted));
   },
 
   // Moves a salon between the Real and Dummy lists.
@@ -284,6 +284,23 @@ export const superAdminService = {
     if (!deletedByUserId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
     const result = await superAdminRepository.deleteSalon(id, deletedByUserId, reason);
     if (!result) throw new AppError(404, "Salon not found", "NOT_FOUND");
+    // mode: "archived" (had history: deactivated and hidden, data kept) or "deleted" (no history: permanently removed).
+    return { success: true, ...result };
+  },
+
+  /** What deleting a salon would do (archive vs permanent) and the history that decides it, for the confirmation dialog. */
+  async getSalonDeletionPreview(id: string) {
+    if (!id) throw new AppError(400, "Salon ID required", "VALIDATION_ERROR");
+    const preview = await superAdminRepository.getSalonDeletionPreview(id);
+    if (!preview) throw new AppError(404, "Salon not found", "NOT_FOUND");
+    return preview;
+  },
+
+  async restoreSalon(id: string) {
+    if (!id) throw new AppError(400, "Salon ID required", "VALIDATION_ERROR");
+    const result = await superAdminRepository.restoreSalon(id);
+    if (!result) throw new AppError(404, "Salon not found", "NOT_FOUND");
+    if (!result.restored) throw new AppError(409, "This salon is not deleted.", "NOT_DELETED");
     return { success: true };
   },
 
