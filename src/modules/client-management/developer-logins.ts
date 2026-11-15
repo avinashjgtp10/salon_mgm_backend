@@ -15,11 +15,19 @@ export function generatePassword(length = 12): string {
   return out;
 }
 
-export function chooseNewPassword(given: unknown): string {
+export function chooseNewPassword(given: unknown, strict = false): string {
   if (given === undefined || given === null || given === "") return generatePassword();
-  const p = String(given);
+  if (typeof given !== "string") throw new AppError(400, "Password must be text", "VALIDATION_ERROR");
+  const p = given;
   if (p.length < 8) throw new AppError(400, "Password must be at least 8 characters", "VALIDATION_ERROR");
   if (/\s/.test(p)) throw new AppError(400, "Password cannot contain spaces", "VALIDATION_ERROR");
+  // A password a Super Admin types in (Reset password) must also be strong; a generated one always is.
+  if (strict) {
+    if (p.length > 72) throw new AppError(400, "Password must be 72 characters or fewer", "VALIDATION_ERROR"); // bcrypt ignores anything past 72 bytes
+    if (!/[A-Z]/.test(p) || !/[a-z]/.test(p) || !/\d/.test(p)) {
+      throw new AppError(400, "Password must include an uppercase letter, a lowercase letter and a number", "VALIDATION_ERROR");
+    }
+  }
   return p;
 }
 
@@ -78,7 +86,8 @@ export const developerLogins = {
 
   /** New password for an existing login; every signed-in session of that account is ended. */
   async resetPassword(developerId: string, password: unknown) {
-    const plain = chooseNewPassword(password);
+    const chosen = password !== undefined && password !== null && password !== "";
+    const plain = chooseNewPassword(password, true);
     const hash = await bcrypt.hash(plain, 10);
     try {
       const { rows } = await pool.query(`SELECT d.user_id, d.email FROM developers d WHERE d.id = $1`, [developerId]);
@@ -86,7 +95,8 @@ export const developerLogins = {
       if (!rows[0].user_id) throw new AppError(404, "This developer has no login yet", "NOT_FOUND");
       await pool.query(`UPDATE users SET password_hash = $2, updated_at = NOW() WHERE id = $1`, [rows[0].user_id, hash]);
       await pool.query(`DELETE FROM refresh_tokens WHERE user_id = $1`, [rows[0].user_id]);
-      return { email: rows[0].email as string, password: plain };
+      // A password the Super Admin typed is never sent back; only a server-generated one (no password given) is returned, once.
+      return chosen ? { email: rows[0].email as string } : { email: rows[0].email as string, password: plain };
     } catch (e) { return wrapMissingColumn(e); }
   },
 
