@@ -50,15 +50,15 @@ const validateConsumablesUsed = (v: unknown, field: string): void => {
 // The API used to accept any key and return 201, so a field the frontend sent
 // but the DB had no column for vanished with no error. That is how
 // consumables_used went unpersisted until a migration caught up, and how
-// discounted_price / padding_before / padding_after / gender_preference /
-// image_url survived for so long. Warning here means the next one surfaces
+// discounted_price / padding_before / padding_after / image_url survived for
+// so long (gender_preference was one of them until it got its own column). Warning here means the next one surfaces
 // immediately instead of months later. Deliberately a warning, not a 400: an
 // older client sending a stale field should not have its save rejected.
 const KNOWN_SERVICE_KEYS = new Set([
   "name", "category_id", "treatment_type", "description",
   "price_type", "price", "duration", "is_active",
   "online_booking", "commission_enabled", "resource_required",
-  "commission_rate", "commission_kind", "reminder_after_days",
+  "commission_rate", "commission_kind", "reminder_after_days", "gender_preference",
   "staff_ids", "consumables_used",
 ]);
 
@@ -117,6 +117,7 @@ export const validateCreateService = (req: Request, _res: Response, next: NextFu
     if (!isOptionalBool(b.commission_enabled)) throw new AppError(400, "commission_enabled must be a boolean", "VALIDATION_ERROR");
     if (!isOptionalBool(b.resource_required))  throw new AppError(400, "resource_required must be a boolean", "VALIDATION_ERROR");
     if (!isOptionalPositiveIntOrNull(b.reminder_after_days)) throw new AppError(400, "reminder_after_days must be a positive integer or null", "VALIDATION_ERROR");
+    if (!isEnum(b.gender_preference, ["unisex", "female", "male"])) throw new AppError(400, "gender_preference must be: unisex | female | male", "VALIDATION_ERROR");
     validateCommissionOverride(b);
     validateUuidArray(b.staff_ids, "staff_ids");
     validateConsumablesUsed(b.consumables_used, "consumables_used");
@@ -140,6 +141,7 @@ export const validateUpdateService = (req: Request, _res: Response, next: NextFu
     if (!isOptionalBool(b.resource_required))  throw new AppError(400, "resource_required must be a boolean", "VALIDATION_ERROR");
     if (!isOptionalBool(b.is_active))        throw new AppError(400, "is_active must be a boolean", "VALIDATION_ERROR");
     if (!isOptionalPositiveIntOrNull(b.reminder_after_days)) throw new AppError(400, "reminder_after_days must be a positive integer or null", "VALIDATION_ERROR");
+    if (!isEnum(b.gender_preference, ["unisex", "female", "male"])) throw new AppError(400, "gender_preference must be: unisex | female | male", "VALIDATION_ERROR");
     validateCommissionOverride(b);
     validateUuidArray(b.staff_ids, "staff_ids");
     validateConsumablesUsed(b.consumables_used, "consumables_used");

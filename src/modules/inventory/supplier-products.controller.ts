@@ -30,10 +30,12 @@ export const supplierProductsController = {
             const file = (req as any).file as Express.Multer.File | undefined;
             if (!file) throw new AppError(400, "No file uploaded", "VALIDATION_ERROR");
             logger.debug("POST /inventory/suppliers/:id/products/import called", { salonId, supplierId: req.params.id });
+            // dry_run=true: run every check but save nothing (the import screen validates first, then asks the user to confirm).
+            const dryRun = String(req.body?.dry_run ?? req.query?.dry_run ?? "").toLowerCase() === "true";
             const result = await supplierProductsService.import({
-                supplierId: String(req.params.id), salonId, file: file.buffer, filename: file.originalname,
+                supplierId: String(req.params.id), salonId, file: file.buffer, filename: file.originalname, dryRun,
             });
-            sendSuccess(res, 200, result, `Import completed: ${result.matched} matched, ${result.unmatched} unmatched, ${result.failed} failed`);
+            sendSuccess(res, 200, result, `${dryRun ? "Dry run (nothing saved)" : "Import completed"}: ${result.matched} matched, ${result.unmatched} unmatched, ${result.failed} failed`);
         } catch (err) { next(err); }
     },
 

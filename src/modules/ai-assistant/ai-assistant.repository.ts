@@ -17,15 +17,6 @@ export const aiAssistantRepository = {
         return rows[0].n;
     },
 
-    async tokensThisMonth(salonId: string): Promise<number> {
-        const { rows } = await pool.query(
-            `SELECT COALESCE(SUM(tokens), 0)::bigint AS n FROM ai_usage
-             WHERE salon_id = $1 AND created_at >= date_trunc('month', NOW())`,
-            [salonId]
-        );
-        return Number(rows[0].n);
-    },
-
     async imagesToday(salonId: string): Promise<number> {
         const { rows } = await pool.query(
             `SELECT COUNT(*)::int AS n FROM ai_usage WHERE salon_id = $1 AND kind = 'image' AND created_at >= date_trunc('day', NOW())`,

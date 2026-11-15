@@ -1,4 +1,5 @@
 import pool from "../../config/database";
+import { getSalonTimezone, DEFAULT_SALON_TIMEZONE } from "../../config/salonTimezone";
 import { digitalMenuRepository } from "../digital-menu/digital-menu.repository";
 
 // Postgres "undefined_column" — thrown if Migration/add_marketplace_booking_
@@ -21,7 +22,7 @@ const UNDEFINED_TABLE = "42P01";
 // module already assumes Asia/Kolkata (see formatDate/formatTime in
 // bookings.service.ts). When a salon timezone lands, this is the single place
 // to thread it through from.
-export const SALON_TIMEZONE = "Asia/Kolkata";
+export const SALON_TIMEZONE = DEFAULT_SALON_TIMEZONE;
 
 const DEFAULT_BOOKING_POLICY = {
     max_advance_days: 30,
@@ -74,7 +75,8 @@ async function optionalProfileColumns(): Promise<Set<string>> {
 // and defensively.
 const PUBLIC_SALON_SELECT = `
     SELECT s.id, s.slug, s.description, s.city, s.state, s.country,
-           s.logo_url, s.banner_url, s.currency,
+           s.logo_url, s.banner_url, s.currency, s.timezone,
+           COALESCE(to_jsonb(s) ->> 'language', 'en') AS language,
            COALESCE(NULLIF(s.business_name, ''), NULLIF(TRIM(CONCAT(u.first_name, ' ', COALESCE(u.last_name, ''))), '')) AS business_name,
            COALESCE(NULLIF(mp.business_phone, ''), NULLIF(s.phone, ''), u.phone) AS phone,
            COALESCE(NULLIF(s.email, ''), u.email) AS email,
@@ -401,6 +403,7 @@ export const bookingsRepository = {
     // windows the slot grid is built from. Cast to int because the pg driver
     // hands NUMERIC back as a string.
     async findAppointmentsForDate(salonId: string, dateStr: string) {
+        const tz = await getSalonTimezone(salonId);
         const { rows } = await pool.query(
             `SELECT staff_id,
                     (EXTRACT(HOUR   FROM (scheduled_at AT TIME ZONE $3)) * 60 +
@@ -411,7 +414,7 @@ export const bookingsRepository = {
                AND (scheduled_at AT TIME ZONE $3) >= $2::date
                AND (scheduled_at AT TIME ZONE $3) <  ($2::date + INTERVAL '1 day')
                AND status NOT IN ('cancelled', 'deleted')`,
-            [salonId, dateStr, SALON_TIMEZONE]
+            [salonId, dateStr, tz]
         );
         return rows;
     },
@@ -470,6 +473,7 @@ export const bookingsRepository = {
         excludeId?: string | null;
     }, client?: import("pg").PoolClient): Promise<boolean> {
         const db = client ?? pool;
+        const tz = await getSalonTimezone(params.salonId);
         const { rows } = await db.query(
             `SELECT 1
              FROM appointments
@@ -485,7 +489,7 @@ export const bookingsRepository = {
                     EXTRACT(MINUTE FROM (scheduled_at AT TIME ZONE $7))
                     + COALESCE(duration_minutes, 30)) > $4
              LIMIT 1`,
-            [params.salonId, params.staffId, params.dateStr, params.startMinute, params.endMinute, params.excludeId ?? null, SALON_TIMEZONE]
+            [params.salonId, params.staffId, params.dateStr, params.startMinute, params.endMinute, params.excludeId ?? null, tz]
         );
         return rows.length > 0;
     },

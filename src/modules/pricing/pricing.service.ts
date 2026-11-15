@@ -14,6 +14,7 @@ import { paymentsRepository } from '../payments/payments.repository';
 import { couponsService } from '../coupons/coupons.service';
 import { AppError } from '../../middleware/error.middleware';
 import { CalculateTotalsBody, CalculateTotalsResponse } from './pricing.types';
+import { getBillRoundingUnit } from "../../config/currency";
 
 // Read-only mirror of AppointmentModal.tsx's membershipWalletMap allocation
 // — NOT the same code path as payments.service.ts's deductWalletForBooking,
@@ -406,6 +407,7 @@ export const pricingService = {
       tip: body.tip ?? 0,
       tipAddedToSalon: !!body.tipAddedToSalon,
       roundSubtotalBeforeDiscount: false,
+      roundingUnit: await getBillRoundingUnit(salonId),
     });
     // Ceiling for the sequential Membership Wallet → eWallet → Reward Points →
     // Referral Credit capping below — rooted in the raw pre-redemption total,
@@ -548,6 +550,7 @@ export const pricingService = {
       // the legacy payments.service.ts call site) — see the doc comment on
       // this flag in pricing.engine.ts.
       roundSubtotalBeforeDiscount: false,
+      roundingUnit: await getBillRoundingUnit(salonId),
       rows: {
         service: serviceRows.map((r, i) => ({
           ...r, walletUsed: svcWalletPerRow[i] ?? 0, membershipDiscountUsed: membershipServiceDiscounts[i] ?? 0,

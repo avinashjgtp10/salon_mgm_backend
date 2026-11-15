@@ -2,6 +2,7 @@ import type { PoolClient } from 'pg';
 import pool from '../../config/database';
 import logger from '../../config/logger';
 import { PosPaymentRequest, PosPaymentStatus, NON_TERMINAL_STATUSES, CreatePosPaymentBody, MAX_RECORD_ATTEMPTS } from './pos-payments.types';
+import { getSalonCurrency } from '../../config/currency'
 
 // First key of the two-key advisory lock below — namespaces it so it can't
 // collide with any other advisory lock keyed on hashtext() of some id.
@@ -202,13 +203,14 @@ export const posPaymentsRepository = {
                payment_reference, provider, amount, currency, status,
                payload, created_by, expires_at,
                payment_mode, provider_terminal_id, provider_environment
-             ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'INR','PENDING',$9::jsonb,$10, NOW() + INTERVAL '20 minutes', $11,$12,$13)
+             ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$14,'PENDING',$9::jsonb,$10, NOW() + INTERVAL '20 minutes', $11,$12,$13)
              RETURNING *`,
             [
               data.salon_id, data.branch_id ?? null, data.appointment_id, data.client_id ?? null,
               data.terminal_id ?? null, reference, data.provider, data.amount,
               JSON.stringify(data.payload), data.created_by,
               data.payment_mode ?? null, data.provider_terminal_id ?? null, data.provider_environment ?? null,
+              await getSalonCurrency(data.salon_id),
             ],
           );
           await client.query('RELEASE SAVEPOINT pos_payment_insert_attempt');

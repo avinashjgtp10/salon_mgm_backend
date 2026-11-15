@@ -4,6 +4,7 @@ import { ewalletRepository } from "./ewallet.repository";
 import { EwalletLedgerEntry, WalletBreakdown } from "./ewallet.types";
 import { referralRepository } from "../referral/referral.repository";
 import { rewardPointsRepository } from "../reward-points/reward-points.repository";
+import { formatSalonMoney } from "../../config/currency";
 
 export const ewalletService = {
   async topUp(
@@ -67,7 +68,7 @@ export const ewalletService = {
       if (amount > currentBalance) {
         throw new AppError(
           400,
-          `Debit amount (₹${amount}) exceeds the client's available wallet balance (₹${currentBalance})`,
+          `Debit amount (${await formatSalonMoney(salonId, amount)}) exceeds the client's available wallet balance (${await formatSalonMoney(salonId, currentBalance)})`,
           "VALIDATION_ERROR",
         );
       }

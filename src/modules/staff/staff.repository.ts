@@ -637,6 +637,57 @@ export const staffEmergencyContactRepository = {
 // ─── Leaves ───────────────────────────────────────────────────────────────────
 
 export const staffLeavesRepository = {
+    /**
+     * Every leave of the salon's staff overlapping [from, to] (either end optional), with the staff member's name.
+     * Two sources: the leaves table, and the days off set on the Scheduled Shifts page (Add Time Off / Manage Day Off), which
+     * are saved as a date-specific, not-available row in staff_schedules (a "Blocked" day is not a leave). Dates are returned as
+     * YYYY-MM-DD text so the viewer's timezone can never shift them a day.
+     */
+    async listBySalon(salonId: string, from?: string, to?: string) {
+        const values: unknown[] = [salonId];
+        const leaveCond: string[] = [];
+        const schedCond: string[] = [];
+        if (from) { values.push(from); leaveCond.push(`sl.end_date::date >= $${values.length}::date`); schedCond.push(`ss.date >= $${values.length}::date`); }
+        if (to) { values.push(to); leaveCond.push(`sl.start_date::date <= $${values.length}::date`); schedCond.push(`ss.date <= $${values.length}::date`); }
+        const andLeave = leaveCond.length ? " AND " + leaveCond.join(" AND ") : "";
+        const andSched = schedCond.length ? " AND " + schedCond.join(" AND ") : "";
+        const { rows } = await pool.query(
+            `SELECT * FROM (
+               SELECT sl.id::text AS id, sl.staff_id,
+                      TRIM(COALESCE(st.first_name, '') || ' ' || COALESCE(st.last_name, '')) AS staff_name,
+                      COALESCE(st.designation, '') AS staff_role,
+                      sl.leave_type, sl.status, sl.reason,
+                      to_char(sl.start_date::date, 'YYYY-MM-DD') AS start_date,
+                      to_char(sl.end_date::date, 'YYYY-MM-DD') AS end_date,
+                      (sl.end_date::date - sl.start_date::date + 1) AS days,
+                      sl.created_at
+               FROM staff_leaves sl
+               JOIN staff st ON st.id = sl.staff_id
+               WHERE st.salon_id = $1${andLeave}
+               UNION ALL
+               SELECT ss.id::text AS id, ss.staff_id,
+                      TRIM(COALESCE(st.first_name, '') || ' ' || COALESCE(st.last_name, '')) AS staff_name,
+                      COALESCE(st.designation, '') AS staff_role,
+                      'dayoff' AS leave_type, 'approved' AS status, NULLIF(ss.notes, '') AS reason,
+                      to_char(ss.date, 'YYYY-MM-DD') AS start_date,
+                      to_char(ss.date, 'YYYY-MM-DD') AS end_date,
+                      1 AS days,
+                      ss.created_at
+               FROM staff_schedules ss
+               JOIN staff st ON st.id = ss.staff_id
+               WHERE st.salon_id = $1 AND ss.date IS NOT NULL AND ss.is_available = false
+                 AND COALESCE(ss.notes, '') <> 'Blocked'${andSched}
+                 AND NOT EXISTS (
+                   SELECT 1 FROM staff_leaves x
+                   WHERE x.staff_id = ss.staff_id AND x.start_date::date <= ss.date AND x.end_date::date >= ss.date
+                 )
+             ) u
+             ORDER BY u.start_date DESC, u.staff_name`,
+            values
+        );
+        return rows;
+    },
+
     async listByStaffId(staffId: string, from?: string, to?: string): Promise<StaffLeave[]> {
         const conditions = ["staff_id = $1"];
         const values: unknown[] = [staffId];

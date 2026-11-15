@@ -10,6 +10,8 @@ import { startCampaignScheduler, stopCampaignScheduler } from './modules/marketi
 import { startAutomationScheduler, stopAutomationScheduler } from './modules/whatsapp-automation/whatsapp-automation.scheduler'
 import { startWaLimitSyncScheduler, stopWaLimitSyncScheduler } from './modules/marketing/whatsapp/config/wa-limit-sync.scheduler'
 import { startAttendanceReminderScheduler, stopAttendanceReminderScheduler } from './modules/attendance/staffAttendance.scheduler'
+import { startFestivalReminderScheduler, stopFestivalReminderScheduler } from './modules/festivals/festival-reminder.scheduler'
+import { startCallbackDeadlineScheduler, stopCallbackDeadlineScheduler } from './modules/support/support.callbackScheduler'
 import { startNoShowScheduler, stopNoShowScheduler } from './modules/appointments/appointments.scheduler'
 import { startPushReceiptScheduler, stopPushReceiptScheduler } from './modules/notifications/pushNotification.service'
 import { startBotQuestionsCleanupScheduler, stopBotQuestionsCleanupScheduler } from './modules/bot/bot-questions-cleanup.scheduler'
@@ -17,6 +19,7 @@ import { startExpiryWriteOffScheduler, stopExpiryWriteOffScheduler } from './mod
 import { startInventoryAlertsScheduler, stopInventoryAlertsScheduler } from './modules/inventory/inventory-alerts.scheduler'
 import { startPosPaymentsScheduler, stopPosPaymentsScheduler } from './modules/pos-payments/pos-payments.scheduler'
 import { startSalonDeactivationReminderScheduler, stopSalonDeactivationReminderScheduler } from './modules/super-admin/salon-deactivation-reminder.scheduler'
+import { startSubscriptionExpiryReminderScheduler, stopSubscriptionExpiryReminderScheduler } from './modules/subscriptions/subscription-expiry-reminder.service'
 
 const PORT = config.port
 
@@ -54,6 +57,10 @@ httpServer.listen(PORT, () => {
   // Auto-flip overdue unpaid appointments to no-show
   startNoShowScheduler()
   startAttendanceReminderScheduler()
+  // Upcoming-festival reminders to each salon owner (in-app bell, once per festival)
+  startFestivalReminderScheduler()
+  // Support callbacks: due-soon / overdue notifications for the Super Admin
+  startCallbackDeadlineScheduler()
 
   // Retry Expo push receipt processing after restarts.
   startPushReceiptScheduler()
@@ -73,6 +80,9 @@ httpServer.listen(PORT, () => {
 
   // Daily 8am IST reminder email for every currently-deactivated salon
   startSalonDeactivationReminderScheduler()
+
+  // Daily 8am IST reminder (5, 4, 3, 2, 1 days before and on the day) to owners whose subscription is about to end
+  startSubscriptionExpiryReminderScheduler()
 })
 
 // Crash logging. Node already exits on these; the handlers only make sure the
@@ -94,12 +104,15 @@ process.on('SIGTERM', () => {
   stopWaLimitSyncScheduler()
   stopNoShowScheduler()
   stopAttendanceReminderScheduler()
+  stopFestivalReminderScheduler()
+  stopCallbackDeadlineScheduler()
   stopPushReceiptScheduler()
   stopBotQuestionsCleanupScheduler()
   stopExpiryWriteOffScheduler()
   stopInventoryAlertsScheduler()
   stopPosPaymentsScheduler()
   stopSalonDeactivationReminderScheduler()
+  stopSubscriptionExpiryReminderScheduler()
   httpServer.close(() => {
     logger.info('HTTP server closed')
     db.end()

@@ -34,5 +34,7 @@ router.post("/verify-phone-otp-exotel", authController.verifyPhoneOtpExotel);
 // Google OAuth
 router.get("/google/start", authController.googleStart);
 router.get("/google/callback", authController.googleCallback);
+// Mobile app: ID token from the native Google account picker (no browser).
+router.post("/google/native", authController.googleNativeLogin);
 
 export default router;

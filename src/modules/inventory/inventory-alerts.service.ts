@@ -21,6 +21,8 @@ import logger from "../../config/logger";
 import { alertUnitSizeSql, lowStockThreshold } from "./low-stock.sql";
 import { notificationsService } from "../notifications/notifications.service";
 import { notificationsRepository } from "../notifications/notifications.repository";
+import { numberLocale, getSalonCurrency } from "../../config/currency";
+import { salonTranslator, type Translator } from "../../config/i18n";
 
 export type InventoryAlertStatus = "low_stock" | "out_of_stock" | "expiring_soon" | "expired";
 
@@ -63,25 +65,27 @@ async function fetchCandidates(productIds: string[], salonId: string): Promise<A
   return rows;
 }
 
-// 880 -> "880", 0.25 -> "0.25", 12000 -> "12,000" (no trailing zeros, Indian grouping)
-function fmtQty(n: number): string {
-  return Number(n.toFixed(2)).toLocaleString("en-IN", { maximumFractionDigits: 2 });
+// 880 -> "880", 0.25 -> "0.25", 12000 -> "12,000" (no trailing zeros, grouped the way the salon's currency country groups)
+function fmtQty(n: number, currency?: string | null): string {
+  return Number(n.toFixed(2)).toLocaleString(numberLocale(currency), { maximumFractionDigits: 2 });
 }
 
 // What is actually left, in the product's own unit, with the bottle count beside it for
 // bottle-sized consumables: "880 ml left (about 9 bottles)" - never just a bottle count,
 // since a part-used bottle (9 x 80 ml left in the last one) is still stock that has gone.
-function describeRemaining(row: AlertCandidateRow): string {
+function describeRemaining(row: AlertCandidateRow, currency: string, t: Translator): string {
   const unit = (row.measure_unit ?? "").trim();
   const bottleSize = Number(row.bottle_size) || 0;
-  const amount = `${fmtQty(row.amount)}${unit ? ` ${unit}` : ""}`;
-  return bottleSize > 0 ? `${amount} left (about ${Math.ceil(row.amount / bottleSize)} bottle${Math.ceil(row.amount / bottleSize) === 1 ? "" : "s"})` : `${amount} left`;
+  const amount = `${fmtQty(row.amount, currency)}${unit ? ` ${unit}` : ""}`;
+  if (bottleSize <= 0) return t("notify.inventory.left", { amount });
+  const bottles = Math.ceil(row.amount / bottleSize);
+  return t(bottles === 1 ? "notify.inventory.leftBottle" : "notify.inventory.leftBottles", { amount, n: bottles });
 }
 
-function describeThreshold(row: AlertCandidateRow): string {
+function describeThreshold(row: AlertCandidateRow, currency: string): string {
   const unit = (row.measure_unit ?? "").trim();
   const t = lowStockThreshold(row) ?? 0;
-  return `${fmtQty(t)}${unit ? ` ${unit}` : ""}`;
+  return `${fmtQty(t, currency)}${unit ? ` ${unit}` : ""}`;
 }
 
 function deriveStatus(row: AlertCandidateRow): InventoryAlertStatus | null {
@@ -105,20 +109,20 @@ function deriveStatus(row: AlertCandidateRow): InventoryAlertStatus | null {
   return null;
 }
 
-function buildNotificationCopy(row: AlertCandidateRow, status: InventoryAlertStatus): { title: string; body: string } {
+function buildNotificationCopy(row: AlertCandidateRow, status: InventoryAlertStatus, currency: string, t: Translator): { title: string; body: string } {
   switch (status) {
     case "out_of_stock":
       return {
-        title: "Product out of stock",
-        body: `${row.name} is out of stock (0 remaining).`,
+        title: t("notify.inventory.outOfStock.title"),
+        body: t("notify.inventory.outOfStock.body", { name: row.name }),
       };
     case "low_stock":
       return {
-        title: "Low stock alert",
-        body: `${row.name} is low on stock — ${describeRemaining(row)}; alert level is ${describeThreshold(row)}.`,
+        title: t("notify.inventory.low.title"),
+        body: t("notify.inventory.low.body", { name: row.name, remaining: describeRemaining(row, currency, t), threshold: describeThreshold(row, currency) }),
       };
     case "expired": {
-      return { title: "Product expired", body: `${row.name} has expired (expiry date: ${row.expiry_date}).` };
+      return { title: t("notify.inventory.expired.title"), body: t("notify.inventory.expired.body", { name: row.name, date: String(row.expiry_date) }) };
     }
     case "expiring_soon": {
       const expiry = new Date(row.expiry_date as string);
@@ -126,8 +130,8 @@ function buildNotificationCopy(row: AlertCandidateRow, status: InventoryAlertSta
       today.setHours(0, 0, 0, 0);
       const daysLeft = Math.max(0, Math.floor((expiry.getTime() - today.getTime()) / 86_400_000));
       return {
-        title: "Product expiring soon",
-        body: `${row.name} expires on ${row.expiry_date} (${daysLeft} day${daysLeft === 1 ? "" : "s"} left).`,
+        title: t("notify.inventory.expiring.title"),
+        body: t(daysLeft === 1 ? "notify.inventory.expiringOne" : "notify.inventory.expiringMany", { name: row.name, date: String(row.expiry_date), days: daysLeft }),
       };
     }
   }
@@ -145,7 +149,7 @@ async function checkOne(row: AlertCandidateRow): Promise<void> {
   if (!status) return;
 
   const existing = await notificationsRepository.findActiveAlert(row.id, status);
-  const { title, body } = buildNotificationCopy(row, status);
+  const { title, body } = buildNotificationCopy(row, status, await getSalonCurrency(row.salon_id), await salonTranslator(row.salon_id));
 
   if (existing) {
     // Same ongoing alert — refresh copy (e.g. stock count changed but is

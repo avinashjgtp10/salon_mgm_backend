@@ -27,6 +27,9 @@ export async function sendReceiptDocument(params: {
         phone: string | null;
         website_url: string | null;
         gst_number: string | null;
+        timezone?: string | null;
+        currency?: string | null;
+        country?: string | null;
     };
     salonAddress: string | null;
     client: { name: string; phone: string | null; email: string | null };

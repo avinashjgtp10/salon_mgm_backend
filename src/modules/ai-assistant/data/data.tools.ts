@@ -4,8 +4,10 @@ import { reportsRepository } from "../../reports/reports.repository";
 import { reportsService } from "../../reports/reports.service";
 import { salonsRepository } from "../../salons/salons.repository";
 import { AssistantUser, Tool } from "../ai-assistant.types";
-import { moneyFormatter } from "./money";
-import { PERIODS, ResolvedPeriod, resolvePeriod } from "./periods";
+import { moneyFormatter } from "../../../config/currency";
+import { PERIODS, ResolvedPeriod, resolvePeriod, todayIn } from "./periods";
+import { findReportsForChart } from "./report-locations";
+import { upcomingForSalon } from "../../festivals/festivals.service";
 
 // Read-only tools for the dashboard "Ask your data" box. Money figures come from the SAME report functions the
 // Reports screen uses (Sales Summary, Product Sale), with the same default filters (paid + partial sales), so an answer
@@ -37,7 +39,7 @@ const uniq = (xs: string[]) => [...new Set(xs)];
 // The salon's timezone (for "today"/"last month") and currency (for every amount we print).
 async function getSalonContext(salonId: string): Promise<{ tz: string; fmt: (n: number) => string }> {
     const salon = await salonsRepository.findById(salonId);
-    return { tz: salon?.timezone || "Asia/Kolkata", fmt: moneyFormatter(salon?.currency) };
+    return { tz: salon?.timezone || "Asia/Kolkata", fmt: moneyFormatter(salon?.currency, { trimZeroDecimals: true }) };
 }
 
 const periodParams = {
@@ -122,6 +124,8 @@ const getSalesReportTool: Tool = {
             reportsRepository.getSalesSummaryPreviousPeriodStats(user.salonId, filters).catch(() => null),
         ]);
 
+        const countedEnd = per.end_date > todayIn(tz) ? todayIn(tz) : per.end_date;
+        const daysCounted = Math.max(1, Math.round((new Date(`${countedEnd}T00:00:00Z`).getTime() - new Date(`${per.start_date}T00:00:00Z`).getTime()) / 86_400_000) + 1);
         const received = Number(stats.received_amount) || 0;
         const billed = Number(stats.total_sale) || 0;
         const bills = Number(stats.total_bill) || 0;
@@ -133,6 +137,11 @@ const getSalesReportTool: Tool = {
             total_billed: fmt(billed),
             number_of_bills: bills,
             average_bill: bills > 0 ? fmt(billed / bills) : null,
+            // Daily average, worked out here so the model never does the division: calendar days in the period, counted
+            // only up to today (a "this month so far" or a custom range that runs past today is not padded with future days).
+            days_counted: daysCounted,
+            daily_average_money_received: fmt(received / daysCounted),
+            daily_average_total_billed: fmt(billed / daysCounted),
             discounts_given: fmt(Number(stats.total_discount) || 0),
             tips: fmt(Number(stats.total_tip) || 0),
             gst: fmt(Number(stats.total_gst) || 0),
@@ -292,5 +301,45 @@ const getRebookingRateTool: Tool = {
     },
 };
 
-export const dataTools: Tool[] = [getSalesReportTool, getProductSalesTool, getAppointmentCountsTool, getNewClientsTool, getLostClientsTool, getRebookingRateTool];
+// ─── Where to see a chart's full table ──────────────────────────────────────────
+// No data and no permission of its own: it only names a Reports screen, which checks the person's access when they open it.
+const getReportForChartTool: Tool = {
+    name: "getReportForChart",
+    description:
+        "Finds the report whose Table View holds the complete rows behind a chart. Call it ONLY when the user asks about a chart AND wants its details, the full table, the complete data or the underlying list. Returns the navigation path to give them; never use it for an ordinary numbers question.",
+    parameters: {
+        type: "object",
+        properties: { chart: { type: "string", description: "What the chart shows, in the user's words (e.g. 'payment methods', 'top services', 'new vs returning clients')." } },
+        required: ["chart"],
+    },
+    async execute(args) {
+        const matches = findReportsForChart(String(args.chart ?? ""));
+        if (matches.length === 0) return { not_found: true, note: "No matching report. Say you can't tell which report holds it and suggest browsing Reports." };
+        return {
+            reports: matches.map((r) => ({
+                report: r.report,
+                navigation_path: `Reports > ${r.category} > ${r.report}`,
+                how_to_see_full_table: "Open the report, set the same dates, and choose Table View (the switch beside Chart View).",
+            })),
+        };
+    },
+};
+
+// ─── Upcoming festivals (the same calendar as the Marketing page card) ───────────────────────────────────────
+const getUpcomingFestivalsTool: Tool = {
+    name: "getUpcomingFestivals",
+    description:
+        "Festivals and occasions coming up for THIS salon's country and region, with the date, days left and a suggested launch-by date for a campaign. Use for 'any festival coming up', 'what should I promote next', 'when is Diwali/Eid/Thanksgiving'. Dates are in the salon's own time zone.",
+    parameters: { type: "object", properties: { days_ahead: { type: "number", description: "How far ahead to look, 1–365. Default 60." } }, required: [] },
+    async execute(args, user: AssistantUser) {
+        const days = Math.min(365, Math.max(1, Math.round(Number(args.days_ahead)) || 60));
+        const list = await upcomingForSalon(user.salonId, days);
+        return {
+            festivals: list.slice(0, 8).map((f) => ({ name: f.name, date: f.date, days_left: f.daysLeft, launch_campaign_by: f.launchBy, ideas: f.ideas, ...(f.note ? { note: f.note } : {}) })),
+            note: list.length === 0 ? "No tracked festivals in that window for this salon's country." : undefined,
+        };
+    },
+};
+
+export const dataTools: Tool[] = [getSalesReportTool, getProductSalesTool, getAppointmentCountsTool, getNewClientsTool, getLostClientsTool, getRebookingRateTool, getReportForChartTool, getUpcomingFestivalsTool];
 export const findDataTool = (name: string) => dataTools.find((t) => t.name === name);

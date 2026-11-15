@@ -22,12 +22,14 @@ import { whatsappAutomationRepository } from '../whatsapp-automation/whatsapp-au
 import { salonsRepository } from '../salons/salons.repository';
 import { clientsRepository } from '../clients/clients.repository';
 import { getIO, salonRoom, salonStaffRoom } from '../../config/socket';
-import { getActiveTaxes } from '../settings/tax.util';
+import { getActiveTaxes, arePackageTaxesInclusive } from '../settings/tax.util';
 import { computeBillTotals, allocateMembershipDiscount } from '../pricing/pricing.engine';
 import pool from '../../config/database';
 import { AppError } from '../../middleware/error.middleware';
+import { commissionCalculationService } from '../commission/commissionCalculation.service';
 import { assertNoBlockingPosPayment } from '../pos-payments/pos-payments.guard';
 import { posPaymentsRepository } from '../pos-payments/pos-payments.repository';
+import { getBillRoundingUnit, formatSalonMoney } from "../../config/currency";
 
 interface DiscountEligibleItem {
   itemId?: string;
@@ -179,9 +181,13 @@ export const paymentsService = {
     }
     const body: CreatePaymentBody = posPaymentRequestId ? { ...clean, pos_payment_request_id: posPaymentRequestId } : clean;
 
-    // A custom payment method that has been deactivated can't take new money
-    // (history keeps its name; this only guards the new payment).
-    await paymentMethodsService.assertNotInactive(body.salon_id, body.payment_method, body.split_details);
+    // A payment method that has been switched off can't take new money (history
+    // keeps its name; this only guards the new payment). Built-ins are checked
+    // only when real money moves and it isn't a machine payment, which is
+    // recorded after the client has already paid on the terminal.
+    await paymentMethodsService.assertNotInactive(body.salon_id, body.payment_method, body.split_details, {
+      includeBuiltIns: !posPaymentRequestId && Number(body.paid_amount ?? 0) > 0,
+    });
 
     if (!body.appointment_id) return paymentsService.recordPayment(body, requesterUserId, async () => {});
     const lock = await posPaymentsRepository.acquireAppointmentPaymentLock(body.appointment_id);
@@ -409,7 +415,7 @@ export const paymentsService = {
                       delta: refereeWalletCredit,
                       sourceType: 'referral_welcome',
                       sourceId: data.client_id,
-                      note: `Referral welcome reward — bill below ₹${refConfig.min_bill_amount} minimum for an instant discount, credited to referral balance instead`,
+                      note: `Referral welcome reward — bill below ${await formatSalonMoney(data.salon_id, refConfig.min_bill_amount)} minimum for an instant discount, credited to referral balance instead`,
                     });
                   }
                   await clientsRepository.markRefereeRewarded(data.client_id);
@@ -553,6 +559,7 @@ export const paymentsService = {
             tip: tipAmt,
             tipAddedToSalon,
             roundSubtotalBeforeDiscount: true,
+            roundingUnit: await getBillRoundingUnit(data.salon_id),
           });
           // Ceiling for the sequential Membership Wallet → eWallet → Reward
           // Points → Referral Credit capping below — rooted in the raw
@@ -834,6 +841,7 @@ export const paymentsService = {
               // Reproduces this call site's pre-existing rounding order — see
               // the doc comment on this flag in pricing.engine.ts.
               roundSubtotalBeforeDiscount: true,
+              roundingUnit: await getBillRoundingUnit(data.salon_id),
             });
             taxAmount = result.gstAmount;
             grandTotal = result.grandTotal;
@@ -1014,7 +1022,7 @@ export const paymentsService = {
           delta: -ewalletUsedActual,
           sourceType: 'payment',
           sourceId: payment.id,
-          note: `Used for ₹${ewalletUsedActual.toFixed(2)} payment`,
+          note: `Used for ${await formatSalonMoney(data.salon_id, ewalletUsedActual)} payment`,
         });
 
         // ── WhatsApp Automation: eWallet Used ──────────────────────────────
@@ -1057,7 +1065,7 @@ export const paymentsService = {
           delta: -referralCreditUsedActual,
           sourceType: 'payment',
           sourceId: payment.id,
-          note: `Used ₹${referralCreditUsedActual.toFixed(2)} referral credit for payment`,
+          note: `Used ${await formatSalonMoney(data.salon_id, referralCreditUsedActual)} referral credit for payment`,
         });
 
         // ── WhatsApp Automation: Referral Credit Used ──────────────────────
@@ -1120,7 +1128,7 @@ export const paymentsService = {
               delta: pointsEarned,
               sourceType: 'payment',
               sourceId: payment.id,
-              note: `Earned on ₹${Number(data.net_amount).toFixed(2)} payment`,
+              note: `Earned on ${await formatSalonMoney(data.salon_id, data.net_amount)} payment`,
             });
 
             // ── WhatsApp Automation: Reward Points Earned ────────────────────
@@ -1429,6 +1437,30 @@ export const paymentsService = {
         checkoutSaleId = sale.id;
         checkoutInvoiceNumber = sale.invoice_number ? String(sale.invoice_number) : undefined;
 
+        // ── Staff commission on a part-payment ─────────────────────────────────────
+        // A fully paid bill reaches commission through the checkout step (which fires only once nothing is
+        // due). A part-payment never does, so staff earned nothing until the balance came in. Fire it here for
+        // 'partial': the commission follows the share of the bill received so far (read from this payment's
+        // due_amount), and the checkout that runs on the final payment replaces these rows with the full
+        // amount. reverseForSale clears the sale's pending rows first, so repeated part-payments (or a retry)
+        // never stack duplicates.
+        if (data.status === 'partial') {
+          try {
+            await commissionCalculationService.reverseForSale(sale.id);
+            await commissionCalculationService.calculateForSale({
+              salonId: data.salon_id,
+              saleId: sale.id,
+              appointmentId: data.appointment_id,
+              fallbackStaffId: appt.staff_id ?? null,
+              items: saleItemsForEvents,
+              packageItemIds: new Set((appt.package_items ?? []).map((p) => p.package_id)),
+            });
+          } catch (commissionErr) {
+            // Never fail the payment over commission bookkeeping.
+            logger.warn('payments.service: part-payment commission failed', { saleId: sale.id, commissionErr });
+          }
+        }
+
         // Note: appointment.status is managed by the checkout flow
         // (POST /api/v1/appointments/:id/checkout) to avoid double-completion
         // appointment.payment_status is updated above — that's all payments handles here
@@ -1662,6 +1694,7 @@ export const paymentsService = {
         clientId: data.client_id,
         appointmentId: data.appointment_id,
         gstPercent: appt?.gst_percent ?? 0,
+        taxInclusive: await arePackageTaxesInclusive(data.salon_id, data.include_gst !== false),
         saleId: checkoutSaleId,
         staffId: appt?.staff_id ?? undefined,
         requesterUserId,

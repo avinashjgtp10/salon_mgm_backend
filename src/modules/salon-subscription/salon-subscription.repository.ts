@@ -20,6 +20,63 @@ export const salonSubscriptionRepository = {
         return rows[0] ?? null;
     },
 
+    // Who to tell when a plan is given to the salon: its owner.
+    async ownerContact(salonId: string): Promise<{ email: string | null; salon_name: string } | null> {
+        const { rows } = await pool.query(
+            `SELECT u.email, COALESCE(sa.business_name, sa.slug, 'your salon') AS salon_name
+             FROM salons sa LEFT JOIN users u ON u.id = sa.owner_id
+             WHERE sa.id = $1`,
+            [salonId]
+        );
+        return rows[0] ?? null;
+    },
+
+    // Registered owners who have no salon yet (they have not paid, or not finished onboarding), with whether they have paid and the
+    // state of their newest subscription. `payment`: paid | unpaid. `status`: the newest subscription's status, or "none".
+    async usersWithoutSalon(f: { search?: string; payment?: string; status?: string }) {
+        const where: string[] = [
+            `u.role = 'salon_owner'`,
+            `NOT EXISTS (SELECT 1 FROM salons sa WHERE sa.owner_id = u.id)`,
+        ];
+        const params: unknown[] = [];
+        if (f.search) {
+            params.push(`%${f.search}%`);
+            where.push(`(TRIM(CONCAT(u.first_name, ' ', COALESCE(u.last_name, ''))) ILIKE $${params.length}
+                         OR u.email ILIKE $${params.length} OR COALESCE(u.phone, '') ILIKE $${params.length}
+                         OR COALESCE(u.business_name, '') ILIKE $${params.length})`);
+        }
+        const { rows } = await pool.query(
+            `SELECT * FROM (
+                SELECT u.id, TRIM(CONCAT(u.first_name, ' ', COALESCE(u.last_name, ''))) AS name, u.email, u.phone, u.business_name, u.created_at,
+                       EXISTS (SELECT 1 FROM subscription_payments p JOIN subscriptions s ON s.id = p.subscription_id
+                               WHERE s.user_id = u.id AND p.payment_status = 'paid') AS paid,
+                       ls.status AS subscription_status, ls.plan_name
+                FROM users u
+                LEFT JOIN LATERAL (
+                    SELECT s.status, sp.name AS plan_name FROM subscriptions s LEFT JOIN subscription_plans sp ON sp.id = s.plan_id
+                    WHERE s.user_id = u.id AND s.salon_id IS NULL ORDER BY s.created_at DESC LIMIT 1
+                ) ls ON TRUE
+                WHERE ${where.join(" AND ")}
+             ) x
+             WHERE ($${params.length + 1}::text IS NULL OR x.paid = ($${params.length + 1} = 'paid'))
+               AND ($${params.length + 2}::text IS NULL OR COALESCE(x.subscription_status, 'none') = $${params.length + 2})
+             ORDER BY x.created_at DESC
+             LIMIT 200`,
+            [...params, f.payment === "paid" || f.payment === "unpaid" ? f.payment : null, f.status || null]
+        );
+        return rows;
+    },
+
+    // A user who has signed up but not created their salon yet.
+    async userContact(userId: string): Promise<{ email: string | null; first_name: string | null; salon_id: string | null } | null> {
+        const { rows } = await pool.query(
+            `SELECT u.email, u.first_name, (SELECT sa.id FROM salons sa WHERE sa.owner_id = u.id LIMIT 1) AS salon_id
+             FROM users u WHERE u.id = $1`,
+            [userId]
+        );
+        return rows[0] ?? null;
+    },
+
     async salonExists(salonId: string) {
         const { rows } = await pool.query(`SELECT 1 FROM salons WHERE id = $1`, [salonId]);
         return rows.length > 0;

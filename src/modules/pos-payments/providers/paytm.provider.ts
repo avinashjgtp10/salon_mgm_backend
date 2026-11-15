@@ -14,7 +14,7 @@ import {
   NormalizedWebhookEvent,
 } from './provider.types';
 import { ProviderCredentials } from './provider.types';
-import { formatPaytmDateTime, fromPaise, toPaise, toPaytmMerchantTxnId } from './paytm.helpers';
+import { formatPaytmDateTime, fromPaise, toPaise, toPaytmMerchantTxnId, PAYTM_CURRENCY } from './paytm.helpers';
 import { PosPaymentMode } from '../pos-payments.types';
 
 export type PaytmCredentials = {
@@ -22,26 +22,19 @@ export type PaytmCredentials = {
   merchantKey: string;
 };
 
-// Paytm EDC ECR API (Sale, Status Enquiry, Abort). URLs exactly as provided
-// by Paytm for this integration. The hosts are not uniform — confirm with
-// Paytm that this is intended:
-//   - Status/Abort staging use securegw-stage.paytm.in, Sale staging uses
-//     securegw-stage.paytmpayments.in;
-//   - Abort production uses securegw-edc.paytm.com, Sale/Status production
-//     use securegw-edc.paytmpayments.in.
+// Staging-only Paytm EDC integration. Sale/Status use the supplied staging
+// documentation host; Abort retains its existing staging endpoint.
+// All three live on securegw-stage.paytm.in — the host Paytm supplied with the
+// staging credentials. The paytmpayments.in host these first two used answers
+// a bare HTTP 404 on both paths (verified 2026-11-14): no ECR envelope, no
+// resultInfo, so testConnection reported "could not reach Paytm (HTTP 404)"
+// and every sale would have failed the same way. Not to be confused with
+// Paytm's own result code 0404 ("transaction doesn't exist"), which arrives
+// inside a 200 body and is the expected answer to a connection probe.
 const ECR_ENDPOINTS = {
-  sale: {
-    sandbox: 'https://securegw-stage.paytmpayments.in/ecr/payment/request',
-    production: 'https://securegw-edc.paytmpayments.in/ecr/payment/request',
-  },
-  status: {
-    sandbox: 'https://securegw-stage.paytm.in/ecr/V2/payment/status',
-    production: 'https://securegw-edc.paytmpayments.in/ecr/V2/payment/status',
-  },
-  abort: {
-    sandbox: 'https://securegw-stage.paytm.in/ecr/abort/txn',
-    production: 'https://securegw-edc.paytm.com/ecr/abort/txn',
-  },
+  sale: 'https://securegw-stage.paytm.in/ecr/payment/request',
+  status: 'https://securegw-stage.paytm.in/ecr/V2/payment/status',
+  abort: 'https://securegw-stage.paytm.in/ecr/abort/txn',
 };
 const ECR_CHANNEL_ID = 'EDC';
 const ECR_VERSION = '3.1';
@@ -201,14 +194,50 @@ function interpretAbortResponse(data: any, merchantTransactionId: string): Provi
 }
 
 /**
- * Sale body extension asking the machine for one payment mode. Paytm's Sale
- * API lists merchantExtendedInfo.paymentMode = ALL / CARD / QR; its sample
- * request sends merchantExtendedInfo as a JSON object, so that shape is used.
- * UNVERIFIED on a live terminal — confirm Card mode and QR mode each open the
- * right screen before go-live.
+ * Customer mobile → the 10-digit number Paytm expects, or null when it isn't
+ * a recognisable Indian mobile (sent as-is it could fail the whole Sale).
  */
-export function buildMerchantExtendedInfo(paymentMode: PosPaymentMode | null | undefined): { paymentMode: PosPaymentMode } | undefined {
-  return paymentMode ? { paymentMode } : undefined;
+export function toPaytmPhoneNumber(phone: string | null | undefined): string | null {
+  let digits = String(phone ?? '').replace(/\D/g, '');
+  if (digits.length === 12 && digits.startsWith('91')) digits = digits.slice(2);
+  if (digits.length === 11 && digits.startsWith('0')) digits = digits.slice(1);
+  return /^[6-9]\d{9}$/.test(digits) ? digits : null;
+}
+
+/**
+ * Sale body, built the way Paytm's C# staging sample builds it: the checksum
+ * is generated over the flat body fields (paytmchecksum sorts the keys and
+ * joins the values with "|", same as Paytm's Java TreeMap / C# utilities),
+ * and the optional fields are then repeated inside merchantExtendedInfo,
+ * which is itself not part of the signed string.
+ *   paymentMode: CARD (tap/insert/swipe) or QR (customer scans); omitted =
+ *                the machine's default screen.
+ *   autoAccept:  "True" — the machine starts the payment without staff
+ *                having to accept the pushed request first.
+ */
+export function buildSaleParams(input: {
+  mid: string;
+  tid: string;
+  transactionDateTime: string;
+  merchantTransactionId: string;
+  transactionAmount: string;
+  paymentMode?: PosPaymentMode | null;
+  phoneNumber?: string | null;
+}): { signed: Record<string, string>; body: Record<string, unknown> } {
+  const extended: Record<string, string> = {
+    ...(input.phoneNumber ? { phoneNumber: input.phoneNumber } : {}),
+    ...(input.paymentMode ? { paymentMode: input.paymentMode } : {}),
+    autoAccept: 'True',
+  };
+  const signed: Record<string, string> = {
+    paytmMid: input.mid,
+    paytmTid: input.tid,
+    transactionDateTime: input.transactionDateTime,
+    merchantTransactionId: input.merchantTransactionId,
+    transactionAmount: input.transactionAmount,
+    ...extended,
+  };
+  return { signed, body: { ...signed, merchantExtendedInfo: extended } };
 }
 
 /**
@@ -234,11 +263,10 @@ export function interpretConnectionProbe(data: any, tid: string): { ok: boolean;
 }
 
 export class PaytmProvider implements PaymentProvider {
-  private readonly environment: 'sandbox' | 'production';
   private readonly ecrUrls: { sale: string; status: string; abort: string };
   private readonly creds: PaytmCredentials;
 
-  constructor(credentials: ProviderCredentials, environment: 'sandbox' | 'production') {
+  constructor(credentials: ProviderCredentials) {
     const mid = String(credentials.mid ?? '').trim();
     const merchantKey = String(credentials.merchantKey ?? '');
     if (!mid || !merchantKey) {
@@ -254,9 +282,7 @@ export class PaytmProvider implements PaymentProvider {
       throw new Error('Paytm merchantKey must be exactly 16 characters');
     }
     this.creds = { mid, merchantKey };
-    this.environment = environment === 'production' ? 'production' : 'sandbox';
-    const ecrEnv = this.environment;
-    this.ecrUrls = { sale: ECR_ENDPOINTS.sale[ecrEnv], status: ECR_ENDPOINTS.status[ecrEnv], abort: ECR_ENDPOINTS.abort[ecrEnv] };
+    this.ecrUrls = ECR_ENDPOINTS;
   }
 
   /**
@@ -267,6 +293,22 @@ export class PaytmProvider implements PaymentProvider {
   private async signedEcrPayload(body: Record<string, unknown>): Promise<string> {
     const bodyJson = JSON.stringify(body);
     const checksum = await PaytmChecksum.generateSignature(bodyJson, this.creds.merchantKey);
+    return this.ecrPayload(bodyJson, checksum);
+  }
+
+  /** signedEcrPayload + the one logged POST, for the APIs that sign the serialized body. */
+  private async sendSignedEcr(args: {
+    api: string;
+    url: string;
+    body: Record<string, unknown>;
+    merchantTransactionId: string;
+    tid: string;
+  }) {
+    const payload = await this.signedEcrPayload(args.body);
+    return this.postEcr({ ...args, payload });
+  }
+
+  private ecrPayload(bodyJson: string, checksum: string): string {
     const head = {
       requestTimeStamp: formatPaytmDateTime(new Date()),
       channelId: ECR_CHANNEL_ID,
@@ -276,11 +318,76 @@ export class PaytmProvider implements PaymentProvider {
     return `{"head":${JSON.stringify(head)},"body":${bodyJson}}`;
   }
 
-  private postEcr(url: string, payload: string) {
-    return axios.post(url, payload, {
-      headers: { 'Content-Type': 'application/json' },
-      timeout: ECR_TIMEOUT_MS,
-    });
+  /**
+   * Every ECR request goes through here, so each Paytm call leaves exactly one
+   * structured log line carrying both sides of the exchange: the request body,
+   * the response, the HTTP status, Paytm's result code/status and the latency.
+   * The POS screen only ever shows "approved" or "declined" — this is the only
+   * place that sees what Paytm actually received and returned, and it's what
+   * Paytm's integration checklist asks to see.
+   *
+   * merchantTransactionId is the trace id: it is generated once per sale and
+   * reused verbatim by every Status Enquiry and the Abort for that sale, so
+   * grepping one id pulls a complete transaction out of the logs. No separate
+   * uuid is minted — a second id would have to be threaded through the
+   * scheduler and the database to survive a restart, and this one already is.
+   *
+   * Never logged: the Merchant Key, the generated checksum (stripChecksums
+   * removes it from both directions), or err.config, which carries the signed
+   * payload. Paytm returns card numbers already masked and we store them that
+   * way — a full PAN in a log is a PCI problem even on staging.
+   */
+  private async postEcr(args: {
+    api: string;
+    url: string;
+    payload: string;
+    body: Record<string, unknown>;
+    merchantTransactionId: string;
+    tid: string;
+  }) {
+    const context = {
+      api: args.api,
+      traceId: args.merchantTransactionId,
+      merchantTransactionId: args.merchantTransactionId,
+      mid: this.creds.mid,
+      tid: args.tid,
+      url: args.url,
+      request: stripChecksums(args.body),
+    };
+    const startedAt = Date.now();
+    try {
+      const response = await axios.post(args.url, args.payload, {
+        headers: { 'Content-Type': 'application/json' },
+        timeout: ECR_TIMEOUT_MS,
+        maxRedirects: 0,
+      });
+      const info = (response.data as any)?.body?.resultInfo;
+      logger.info('[pos-payments/paytm] ECR call', {
+        ...context,
+        httpStatus: response.status,
+        latencyMs: Date.now() - startedAt,
+        resultCodeId: info?.resultCodeId ?? null,
+        resultCode: info?.resultCode ?? null,
+        resultStatus: info?.resultStatus ?? null,
+        resultMsg: info?.resultMsg ?? null,
+        response: stripChecksums(response.data),
+      });
+      return response;
+    } catch (err: any) {
+      const info = err?.response?.data?.body?.resultInfo;
+      logger.warn('[pos-payments/paytm] ECR call failed', {
+        ...context,
+        httpStatus: err?.response?.status ?? null,
+        latencyMs: Date.now() - startedAt,
+        code: err?.code ?? null,
+        message: err?.message,
+        resultCodeId: info?.resultCodeId ?? null,
+        resultCode: info?.resultCode ?? null,
+        resultStatus: info?.resultStatus ?? null,
+        response: stripChecksums(err?.response?.data),
+      });
+      throw err;
+    }
   }
 
   // Paytm's Sale, Status Enquiry and Abort APIs all identify the transaction
@@ -308,25 +415,31 @@ export class PaytmProvider implements PaymentProvider {
     // which device picks it up. It's the TID printed on the machine's own
     // info screen (Settings → POS / Payment Machine → terminal's TID).
     const paytmTid = this.requireTid(params.terminalProviderId, 'payment request');
-    if (params.currency && params.currency.toUpperCase() !== 'INR') {
-      throw new Error(`Paytm EDC only supports INR (got ${params.currency})`);
+    if (params.currency && params.currency.toUpperCase() !== PAYTM_CURRENCY) {
+      throw new Error(`Paytm EDC only supports ${PAYTM_CURRENCY} (got ${params.currency})`);
     }
     const merchantTransactionId = toPaytmMerchantTxnId(params.reference);
-    const merchantExtendedInfo = buildMerchantExtendedInfo(params.paymentMode);
-    const body = {
-      paytmMid: this.creds.mid,
-      paytmTid,
+    const { signed, body } = buildSaleParams({
+      mid: this.creds.mid,
+      tid: paytmTid,
       transactionDateTime: formatPaytmDateTime(params.requestedAt),
       merchantTransactionId,
-      merchantReferenceNo: merchantTransactionId,
       transactionAmount: toPaise(params.amount),
-      // Card → CARD (tap/insert/swipe), UPI → QR (customer scans).
-      ...(merchantExtendedInfo ? { merchantExtendedInfo } : {}),
-    };
-    const payload = await this.signedEcrPayload(body);
+      paymentMode: params.paymentMode,
+      phoneNumber: toPaytmPhoneNumber(params.customerPhone),
+    });
+    const checksum = await PaytmChecksum.generateSignature(signed, this.creds.merchantKey);
+    const payload = this.ecrPayload(JSON.stringify(body), checksum);
 
     try {
-      const { data } = await this.postEcr(this.ecrUrls.sale, payload);
+      const { data } = await this.postEcr({
+        api: 'SALE',
+        url: this.ecrUrls.sale,
+        payload,
+        body,
+        merchantTransactionId,
+        tid: paytmTid,
+      });
       return interpretSaleResponse(data, merchantTransactionId);
     } catch (err: any) {
       return this.handleSaleTransportError(err, merchantTransactionId);
@@ -382,16 +495,21 @@ export class PaytmProvider implements PaymentProvider {
   async getPaymentStatus(ctx: ProviderTxnContext): Promise<ProviderStatusResult> {
     const paytmTid = this.requireTid(ctx.terminalProviderId, 'status enquiry');
     const merchantTransactionId = toPaytmMerchantTxnId(ctx.reference);
-    const payload = await this.signedEcrPayload({
-      paytmMid: this.creds.mid,
-      paytmTid,
-      transactionDateTime: formatPaytmDateTime(ctx.requestedAt),
-      merchantTransactionId,
-    });
 
     let data: unknown;
     try {
-      ({ data } = await this.postEcr(this.ecrUrls.status, payload));
+      ({ data } = await this.sendSignedEcr({
+        api: 'STATUS',
+        url: this.ecrUrls.status,
+        body: {
+          paytmMid: this.creds.mid,
+          paytmTid,
+          transactionDateTime: formatPaytmDateTime(ctx.requestedAt),
+          merchantTransactionId,
+        },
+        merchantTransactionId,
+        tid: paytmTid,
+      }));
     } catch (err: any) {
       // Never logs err.config — it carries the signed payload and checksum.
       logger.warn('[pos-payments/paytm] status enquiry failed — outcome unknown, no status change', {
@@ -418,15 +536,20 @@ export class PaytmProvider implements PaymentProvider {
   async cancelPayment(ctx: ProviderTxnContext): Promise<ProviderCancelResult> {
     const paytmTid = this.requireTid(ctx.terminalProviderId, 'abort');
     const merchantTransactionId = toPaytmMerchantTxnId(ctx.reference);
-    const payload = await this.signedEcrPayload({
-      paytmMid: this.creds.mid,
-      paytmTid,
-      merchantTransactionId,
-      transactionDateTime: formatPaytmDateTime(ctx.requestedAt),
-    });
 
     try {
-      const { data } = await this.postEcr(this.ecrUrls.abort, payload);
+      const { data } = await this.sendSignedEcr({
+        api: 'ABORT',
+        url: this.ecrUrls.abort,
+        body: {
+          paytmMid: this.creds.mid,
+          paytmTid,
+          merchantTransactionId,
+          transactionDateTime: formatPaytmDateTime(ctx.requestedAt),
+        },
+        merchantTransactionId,
+        tid: paytmTid,
+      });
       return interpretAbortResponse(data, merchantTransactionId);
     } catch (err: any) {
       // A structured Paytm body on an HTTP error (e.g. 0012) is still a
@@ -467,7 +590,7 @@ export class PaytmProvider implements PaymentProvider {
    * is online, and the message says so.
    */
   async testConnection(options: { terminalProviderIds?: string[] } = {}): Promise<{ ok: boolean; message: string }> {
-    const mode = this.environment === 'production' ? 'Live' : 'Test (sandbox)';
+    const mode = 'Test (sandbox)';
     const tids = [...new Set((options.terminalProviderIds ?? []).map((t) => t.trim()).filter(Boolean))].slice(0, 5);
     if (tids.length === 0) {
       return { ok: false, message: 'Add an active terminal with its TID first — Paytm can only be tested against a real TID.' };
@@ -477,14 +600,19 @@ export class PaytmProvider implements PaymentProvider {
     for (const tid of tids) {
       const requestedAt = new Date();
       const merchantTransactionId = `SXTEST${requestedAt.getTime()}`;
-      const payload = await this.signedEcrPayload({
-        paytmMid: this.creds.mid,
-        paytmTid: tid,
-        transactionDateTime: formatPaytmDateTime(requestedAt),
-        merchantTransactionId,
-      });
       try {
-        const { data } = await this.postEcr(this.ecrUrls.status, payload);
+        const { data } = await this.sendSignedEcr({
+          api: 'STATUS_PROBE',
+          url: this.ecrUrls.status,
+          body: {
+            paytmMid: this.creds.mid,
+            paytmTid: tid,
+            transactionDateTime: formatPaytmDateTime(requestedAt),
+            merchantTransactionId,
+          },
+          merchantTransactionId,
+          tid,
+        });
         results.push(interpretConnectionProbe(data, tid));
       } catch (err: any) {
         if (err?.response?.data?.body?.resultInfo) {
@@ -501,7 +629,7 @@ export class PaytmProvider implements PaymentProvider {
     return {
       ok,
       message: ok
-        ? `${mode}: ${summary} This doesn't check that the machine is switched on — do a ₹1 test payment to confirm.`
+        ? `${mode}: ${summary} This doesn't check that the machine is switched on — do a minimal test payment to confirm.`
         : `${mode}: ${summary}`,
     };
   }

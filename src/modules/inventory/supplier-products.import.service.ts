@@ -136,13 +136,14 @@ async function parseExcel(buffer: Buffer): Promise<ImportRow[]> {
     }
 }
 
-async function getOrCreateBrand(brandName: string, salonId: string, cache: Map<string, string>): Promise<string> {
+async function getOrCreateBrand(brandName: string, salonId: string, cache: Map<string, string>, dryRun = false): Promise<string> {
     if (!brandName || !brandName.trim()) return "";
     const cacheKey = `${salonId}:${brandName.trim().toLowerCase()}`;
     if (cache.has(cacheKey)) return cache.get(cacheKey)!;
     try {
         const existing = await brandsRepository.findByName(brandName.trim(), salonId);
         if (existing) { cache.set(cacheKey, existing.id); return existing.id; }
+        if (dryRun) { const v = `dry-run:brand:${brandName.trim().toLowerCase()}`; cache.set(cacheKey, v); return v; }
         const created = await brandsRepository.create({ name: brandName.trim() }, salonId);
         cache.set(cacheKey, created.id);
         return created.id;
@@ -152,7 +153,7 @@ async function getOrCreateBrand(brandName: string, salonId: string, cache: Map<s
     }
 }
 
-async function getOrCreateCategory(categoryName: string, salonId: string, cache: Map<string, string>): Promise<string> {
+async function getOrCreateCategory(categoryName: string, salonId: string, cache: Map<string, string>, dryRun = false): Promise<string> {
     if (!categoryName || !categoryName.trim()) return "";
     const trimmed = categoryName.trim();
     const cacheKey = `${salonId}:${trimmed.toLowerCase()}`;
@@ -160,6 +161,7 @@ async function getOrCreateCategory(categoryName: string, salonId: string, cache:
     try {
         const existing = await categoriesRepository.findByName(trimmed, salonId);
         if (existing) { cache.set(cacheKey, existing.id); return existing.id; }
+        if (dryRun) { const v = `dry-run:category:${trimmed.toLowerCase()}`; cache.set(cacheKey, v); return v; }
         const created = await categoriesRepository.create(salonId, { name: trimmed, type: "product" });
         cache.set(cacheKey, created.id);
         return created.id;
@@ -175,8 +177,11 @@ const nameBrandCategoryKey = (name: string, brandId: string | null, categoryId: 
 export const supplierProductsImportService = {
     async importCatalog(params: {
         file: Buffer; filename: string; salonId: string; supplierId: string;
+        /** Validate everything (including matches/duplicates) but write nothing. */
+        dryRun?: boolean;
     }): Promise<SupplierProductImportResult> {
         const { file, filename, salonId, supplierId } = params;
+        const dryRun = params.dryRun === true;
 
         const result: SupplierProductImportResult = {
             total: 0, matched: 0, unmatched: 0, updated: 0, failed: 0, issues: [],
@@ -242,8 +247,8 @@ export const supplierProductsImportService = {
                 const supplierSku = row.supplierSku?.trim() || null;
                 const price = row.price ?? null;
                 const hsnSac = row.hsnSac?.trim() || null;
-                const brandId = (await getOrCreateBrand(row.brand || "", salonId, brandCache)) || null;
-                const categoryId = (await getOrCreateCategory(row.category || "", salonId, categoryCache)) || null;
+                const brandId = (await getOrCreateBrand(row.brand || "", salonId, brandCache, dryRun)) || null;
+                const categoryId = (await getOrCreateCategory(row.category || "", salonId, categoryCache, dryRun)) || null;
 
                 // ── Stage 1: catalog-level dedupe (re-import of the same
                 // supplier's sheet) — barcode -> supplier_sku -> name+brand+category.
@@ -254,9 +259,11 @@ export const supplierProductsImportService = {
                 if (catalogMatch) {
                     // product_id deliberately never touched — preserves any
                     // prior link/create_product resolution.
-                    await supplierProductsRepository.updateFromReimport(catalogMatch.id, {
-                        name, barcode, brandId, categoryId, price, hsnSac,
-                    });
+                    if (!dryRun) {
+                        await supplierProductsRepository.updateFromReimport(catalogMatch.id, {
+                            name, barcode, brandId, categoryId, price, hsnSac,
+                        });
+                    }
                     if (barcode) catalogByBarcode.set(barcode, catalogMatch);
                     if (supplierSku) catalogBySupplierSku.set(supplierSku, catalogMatch);
                     catalogByNameBrandCategory.set(nameBrandCategoryKey(name, brandId, categoryId), catalogMatch);
@@ -270,11 +277,13 @@ export const supplierProductsImportService = {
                 let productMatch = barcode ? productsByBarcode.get(barcode) : undefined;
                 if (!productMatch) productMatch = productsByNameBrandCategory.get(nameBrandCategoryKey(name, brandId, categoryId));
 
-                const inserted = await supplierProductsRepository.insert({
-                    salonId, supplierId, productId: productMatch?.id ?? null,
-                    name, barcode, brandId, categoryId, supplierSku, price, hsnSac,
-                    matchStatus: productMatch ? "matched" : "unmatched",
-                });
+                const inserted = dryRun
+                    ? { id: "dry-run:catalog" }
+                    : await supplierProductsRepository.insert({
+                        salonId, supplierId, productId: productMatch?.id ?? null,
+                        name, barcode, brandId, categoryId, supplierSku, price, hsnSac,
+                        matchStatus: productMatch ? "matched" : "unmatched",
+                    });
 
                 // Register the new catalog row so a later row in the SAME
                 // file referencing it again is caught as a stage-1 match

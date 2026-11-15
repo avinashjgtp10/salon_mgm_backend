@@ -19,6 +19,7 @@ import {
   PaymentProvider, ProviderCancelResult, ProviderCreateResult, ProviderStatusResult, ProviderTxnContext,
 } from './providers/provider.types';
 import type { Payment } from '../payments/payments.types';
+import { getSalonMoneyFormatter, formatSalonMoney } from "../../config/currency";
 
 const AMOUNT_TOLERANCE = 0.5; // rupees — guards against float/rounding noise, not real mismatches
 // Provider statuses that prove no money moved — the only basis for marking a
@@ -81,7 +82,7 @@ export const posPaymentsService = {
     // payments.controller.ts enforces salon_id from the JWT.
     const payload = { ...params.payload, salon_id: salonId, appointment_id: appointmentId };
     const paymentMode = resolvePosPaymentMode(payload, params.paymentMode);
-    assertPosAmountMatchesPayload(params.amount, payload);
+    assertPosAmountMatchesPayload(params.amount, payload, await getSalonMoneyFormatter(salonId));
 
     const appt = await appointmentsRepository.findById(appointmentId);
     if (!appt || String((appt as any).salon_id) !== String(salonId)) {
@@ -96,7 +97,7 @@ export const posPaymentsService = {
       if (!config?.is_enabled) {
         throw new AppError(400, 'The payment machine is turned off in Settings — choose "Payment collected elsewhere" or another method.', 'PROVIDER_NOT_CONFIGURED');
       }
-      environment = config.environment === 'production' ? 'production' : 'sandbox';
+      environment = 'sandbox';
       if (!params.terminalId) throw new AppError(400, 'Choose which payment machine to use', 'TERMINAL_REQUIRED');
     }
 
@@ -168,6 +169,7 @@ export const posPaymentsService = {
         terminalProviderId,
         requestedAt: toRequestedAt(request.created_at),
         paymentMode,
+        customerPhone: (appt as any).client_phone ?? null,
       });
     } catch (err: any) {
       logger.error('[pos-payments] provider createPayment failed — nothing reached the machine', { requestId: request.id, message: err?.message });
@@ -247,6 +249,21 @@ export const posPaymentsService = {
     if (live.status === 'SUCCESS') {
       return posPaymentsService.finalizeSuccess(request, live.providerTransactionId, live.amount ?? request.amount, live.raw);
     }
+    // A poll that resolved nothing still has to leave a trace. Paytm's
+    // integration checklist asks how we treat their in-progress codes (0010,
+    // 0030, 0404) and their unknown answers: these rows are the evidence that
+    // each one was read as "still pending" and the request was never finalised
+    // early. interpretStatusResponse marks exactly those two shapes, so an
+    // ordinary "still processing" answer doesn't write a row on every poll —
+    // the frontend polls far too often for that, and the per-call log line in
+    // logs/ already carries every single exchange with its result code.
+    const rawDetail = (live.raw ?? {}) as { retryable?: boolean; outcomeUnknown?: boolean; reason?: string };
+    if (rawDetail.retryable || rawDetail.outcomeUnknown) {
+      await posPaymentsRepository
+        .addEvent(request.id, rawDetail.retryable ? 'STATUS_PENDING_RETRYABLE' : 'STATUS_OUTCOME_UNKNOWN', request.status, request.status, live.raw)
+        .catch((err: any) => logger.warn('[pos-payments] could not record the poll result', { requestId: request.id, message: err?.message }));
+    }
+
     if (live.status === request.status) return request; // no change
     if (['FAILED', 'CANCELLED', 'EXPIRED'].includes(live.status)) {
       const resolved = resolvedUnknownOutcomePatch(request, live.status);
@@ -283,7 +300,7 @@ export const posPaymentsService = {
     if (Math.abs(Number(confirmedAmount) - Number(request.amount)) > AMOUNT_TOLERANCE) {
       await posPaymentsRepository.flagNeedsReview(
         request.id,
-        `Provider confirmed ₹${confirmedAmount} but request was for ₹${request.amount} — not auto-completed, needs manual reconciliation.`,
+        `Provider confirmed ${await formatSalonMoney(request.salon_id, confirmedAmount)} but request was for ${await formatSalonMoney(request.salon_id, request.amount)} — not auto-completed, needs manual reconciliation.`,
       );
       await posPaymentsRepository.addEvent(request.id, 'AMOUNT_MISMATCH', request.status, request.status, providerResponse);
       return (await posPaymentsRepository.findById(request.id, request.salon_id)) ?? request;

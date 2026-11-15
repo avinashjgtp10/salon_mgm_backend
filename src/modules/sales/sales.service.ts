@@ -16,6 +16,8 @@ import { clientMembershipsService } from "../client-memberships/client-membershi
 import { sendPurchaseReceipt } from "./receipt-send.helper";
 import { clientPackagesService } from "../client-packages/client-packages.service";
 import { stockLedgerService } from "../inventory/stock-ledger.service";
+import { formatSalonMoney } from "../../config/currency";
+import { salonTranslator } from "../../config/i18n";
 
 export const salesService = {
 
@@ -36,12 +38,13 @@ export const salesService = {
         const items = await salesRepository.findItemsBySaleId(sale.id);
 
         // Fire notification (fire-and-forget)
+        const nt = await salonTranslator(sale.salon_id);
         notificationsService.create({
             salon_id: sale.salon_id,
             type:     "payment",
             appointment_id: sale.appointment_id ?? undefined,
-            title:    "New Sale Created",
-            body:     `${(sale as any).client_name ?? "Walk-in"} — ₹${sale.total_amount ?? 0}`,
+            title:    nt("notify.newSale.title"),
+            body:     `${(sale as any).client_name ?? nt("notify.walkIn")} — ${await formatSalonMoney(sale.salon_id, sale.total_amount ?? 0)}`,
             event_key: "newPayment",
         }).catch((err: any) => {
             logger.error("New sale notification failed", {
@@ -190,6 +193,11 @@ export const salesService = {
             appointmentId:   sale.appointment_id ?? null,
             fallbackStaffId: sale.staff_id       ?? null,
             items,
+            // Commission follows what was actually collected: a deposit-only checkout earns on the deposit's
+            // share of the bill, not on the whole of it (a walk-in sale has no appointment to read this from).
+            paidRatio: parseFloat(sale.total_amount) > 0
+                ? Math.min(1, Math.max(0, 1 - saleDueAmount / parseFloat(sale.total_amount)))
+                : 1,
         }).catch(() => {}); // already safe internally, double-guard here
         tipCalculationService.earnForSale(sale.id, sale.salon_id).catch(() => {});
 

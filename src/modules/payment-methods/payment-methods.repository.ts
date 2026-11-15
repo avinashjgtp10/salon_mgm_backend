@@ -55,4 +55,36 @@ export const paymentMethodsRepository = {
     );
     return rows[0] ?? null;
   },
+
+  async delete(id: string, salonId: string): Promise<boolean> {
+    const { rowCount } = await pool.query(
+      `DELETE FROM salon_payment_methods WHERE id = $1 AND salon_id = $2`,
+      [id, salonId],
+    );
+    return (rowCount ?? 0) > 0;
+  },
+
+  /** Keys of the built-in methods (cash/card/upi) this salon has switched off. */
+  async listDisabledBuiltIns(salonId: string): Promise<string[]> {
+    const { rows } = await pool.query(
+      `SELECT method_key FROM salon_disabled_payment_methods WHERE salon_id = $1`,
+      [salonId],
+    );
+    return rows.map((r) => r.method_key);
+  },
+
+  async setBuiltInDisabled(salonId: string, key: string, disabled: boolean, userId: string | null): Promise<void> {
+    if (disabled) {
+      await pool.query(
+        `INSERT INTO salon_disabled_payment_methods (salon_id, method_key, disabled_by)
+         VALUES ($1, $2, $3) ON CONFLICT (salon_id, method_key) DO NOTHING`,
+        [salonId, key, userId],
+      );
+    } else {
+      await pool.query(
+        `DELETE FROM salon_disabled_payment_methods WHERE salon_id = $1 AND method_key = $2`,
+        [salonId, key],
+      );
+    }
+  },
 };

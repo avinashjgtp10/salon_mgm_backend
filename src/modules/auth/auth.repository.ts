@@ -10,6 +10,20 @@ import { AppError } from "../../middleware/error.middleware";
 // (users.email has no citext/lower() normalization), so a differently-cased
 // variant must still be caught.
 const RESERVED_SUPERADMIN_EMAIL = "avinash@salonox.com";
+
+// users.onboarding_completed_at: when the owner finished onboarding. Added on first use (same statement as
+// Migration/add_users_onboarding_completed_at.sql); if the database user may not alter tables, onboarding still completes,
+// it just isn't timestamped.
+let onboardingCompletedAtColumn: Promise<boolean> | null = null;
+const onboardingCompletedAtReady = (): Promise<boolean> => {
+  if (!onboardingCompletedAtColumn) {
+    onboardingCompletedAtColumn = pool
+      .query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS onboarding_completed_at TIMESTAMPTZ`)
+      .then(() => true)
+      .catch(() => false);
+  }
+  return onboardingCompletedAtColumn;
+};
 const GUARDED_ROLES = new Set(["salon_owner", "admin", "staff"]);
 
 // Message deliberately reads like a plain duplicate-email collision (same
@@ -346,12 +360,16 @@ export const authRepository = {
   // ===================== ONBOARDING =====================
 
   /**
-   * Mark onboarding as complete for a user
+   * Mark onboarding as complete for a user and record when (users.onboarding_completed_at). Returns true only for the call that
+   * actually flipped it from "not complete" (a single atomic UPDATE), so a one-time action — the onboarding-complete email — can
+   * safely hang off it, however many times the completion API is called.
    */
-  async markOnboardingComplete(userId: string) {
-    await safeQuery(() =>
-      pool.query(`UPDATE users SET is_onboarding_complete = true WHERE id = $1`, [userId]),
+  async markOnboardingComplete(userId: string): Promise<boolean> {
+    const stamp = (await onboardingCompletedAtReady()) ? ", onboarding_completed_at = NOW()" : "";
+    const res = await safeQuery(() =>
+      pool.query(`UPDATE users SET is_onboarding_complete = true${stamp} WHERE id = $1 AND is_onboarding_complete IS NOT TRUE`, [userId]),
     );
+    return (res?.rowCount ?? 0) > 0;
   },
 
   // ===================== GOOGLE IDENTITIES =====================

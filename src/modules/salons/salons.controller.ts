@@ -62,7 +62,17 @@ export const salonsController = {
             // for a different salon, a cross-tenant data leak. See the identical
             // reasoning already documented in interceptors.ts.
             const salonId = req.user?.salonId ?? null;
-            const salon = await salonsService.mySalon(userId, salonId);
+            let salon;
+            try {
+                salon = await salonsService.mySalon(userId, salonId);
+            } catch (err) {
+                // An owner who has registered but has no salon yet (it is created when their payment arrives or onboarding
+                // finishes) is not an error: answer with an empty result so the app sends them through onboarding.
+                if (err instanceof AppError && err.code === "NOT_FOUND") {
+                    return sendSuccess(res, 200, null, "No salon yet - onboarding required");
+                }
+                throw err;
+            }
 
             logger.debug("GET /salons/current success", {
                 userId,

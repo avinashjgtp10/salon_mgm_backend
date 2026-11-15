@@ -12,7 +12,7 @@ export function computeAppointmentTotals(appt: {
     discount_type?: string; discount_value?: number; discount_applies_to?: unknown;
     ex_charges?: number; tip_amount?: number; tip_added_to_salon?: boolean;
     include_gst?: boolean; membership_discount_used?: number | string;
-}, activeTaxes: ActiveTaxRow[]) {
+}, activeTaxes: ActiveTaxRow[], roundingUnit: number = 1) {
     const toRow = (items: any[] = []) => (items || []).map((i) => ({
         price: Number(i?.price) || 0,
         // Stored appointment service/item rows use "qty" (see
@@ -27,6 +27,7 @@ export function computeAppointmentTotals(appt: {
         isPackageService: !!i?.is_package_service,
     }));
     return computeBillTotals({
+        roundingUnit,
         actualAmounts: {
             // Package-covered rows are excluded from the taxable base — the
             // customer already paid for those sessions when they bought the

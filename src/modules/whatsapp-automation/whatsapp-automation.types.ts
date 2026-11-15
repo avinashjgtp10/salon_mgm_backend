@@ -20,6 +20,7 @@ export type AutomationEventType =
   | 'appointment_confirmation'
   | 'appointment_rescheduled'
   | 'appointment_cancelled'
+  | 'appointment_no_show'
   | 'payment_received'
   | 'package_expiring_7d'
   | 'package_expiring_24h'
@@ -39,12 +40,17 @@ export type AutomationEventType =
   // global/admin-only model; see PURCHASE_EVENTS' own comment).
   | 'birthday_wishes'
   | 'anniversary_wishes'
+  // Per-service "time to redo this service" nudge: sent services.reminder_after_days
+  // days after a paid visit (see waScheduledMessagesService.seedServiceRedoReminders).
+  | 'service_redo_reminder'
   // Owner-facing operational alerts — sent to the SALON OWNER's own WhatsApp
   // number (clientId is always null for these), not to a client. Still a
   // real Meta-approved template like everything else in PURCHASE_EVENTS,
   // since the owner may not be inside Meta's 24h customer-service window.
   | 'cash_counter_opened'
   | 'cash_counter_closed'
+  | 'cash_counter_opened_updated'
+  | 'cash_counter_closed_updated'
   // Legacy global (admin-managed, salon_id IS NULL) events, untouched by the
   // trigger-template rework.
   | 'pending_payment_reminder'
@@ -64,6 +70,7 @@ export const PURCHASE_EVENTS: AutomationEventType[] = [
   'appointment_confirmation',
   'appointment_rescheduled',
   'appointment_cancelled',
+  'appointment_no_show',
   'payment_received',
   'package_expiring_7d',
   'package_expiring_24h',
@@ -86,8 +93,11 @@ export const PURCHASE_EVENTS: AutomationEventType[] = [
   // falls back to a global row for a PURCHASE_EVENTS member).
   'birthday_wishes',
   'anniversary_wishes',
+  'service_redo_reminder',
   'cash_counter_opened',
   'cash_counter_closed',
+  'cash_counter_opened_updated',
+  'cash_counter_closed_updated',
 ]
 
 // PURCHASE_EVENTS members that skip Meta template submission entirely (sent
@@ -105,6 +115,7 @@ export const TRANSACTIONAL_EVENTS: AutomationEventType[] = [
 export const MARKETING_EVENTS: AutomationEventType[] = [
   'birthday_wishes',
   'anniversary_wishes',
+  'service_redo_reminder',
   'new_year_campaign',
   'we_miss_you_30d',
   'we_miss_you_60d',
@@ -189,6 +200,10 @@ export type AutomationTemplate = {
   pending_rejection_reason:  string | null
 }
 
+// What trigger() reports back. It still never throws; a caller that wants to know
+// WHY nothing was sent (the Scheduled Templates poller does) reads skippedReason.
+export type TriggerOutcome = { skippedReason?: string }
+
 // ── Trigger Payload ───────────────────────────────────────────────────────────
 export type AutomationTriggerPayload = {
   salonId:        string
@@ -264,6 +279,7 @@ export const SCHEDULABLE_GROUP_A: AutomationEventType[] = [
   'membership_expiring_24h',
   'package_appointment_reminder_24h',
   'service_reminder_24h',
+  'service_redo_reminder',
   'birthday_wishes',
   'anniversary_wishes',
   'new_year_campaign',

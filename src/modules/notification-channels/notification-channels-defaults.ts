@@ -6,7 +6,8 @@
 // the WhatsApp default (see bill_receipt: SMS is a genuine short summary,
 // not the email content cut short).
 //
-// SMS defaults deliberately use "Rs." not "₹" — the rupee sign isn't in the
+// Currency amounts are written "¤{{amount}}": the ¤ marker is replaced with the salon's ASCII-safe currency label
+// (config/currency.ts, applyCurrencyMarker with sms:true) when the salon's copy is created — the rupee sign isn't in the
 // GSM-7 SMS character set, so using it silently drops every default from a
 // 160-char segment budget to a 70-char Unicode one. See smsSegments.ts on
 // the frontend for the counter that surfaces this to a salon editing their
@@ -38,32 +39,36 @@ export const DEFAULT_SMS_TEMPLATES: Record<DefaultPurchaseEventType, string> = {
     "Hi {{customer_name}}, your {{salon_name}} appointment moved to {{new_date}} {{new_time}} (was {{old_date}} {{old_time}}).",
   appointment_cancelled:
     "Hi {{customer_name}}, your {{appointment_date}} {{appointment_time}} appointment at {{salon_name}} has been cancelled.",
+  appointment_no_show:
+    "Hi {{customer_name}}, we missed you at {{salon_name}} for your {{appointment_date}} {{appointment_time}} appointment. Reply to reschedule.",
   payment_received:
-    "Hi {{customer_name}}, your bill of Rs.{{amount}} at {{salon_name}} has been paid. Thank you!",
+    "Hi {{customer_name}}, your bill of ¤{{amount}} at {{salon_name}} has been paid. Thank you!",
   package_expiring_7d:
     "Hi {{customer_name}}, your {{package_name}} expires on {{expiry_date}} ({{remaining_sessions}} sessions left). Book now!",
   package_expiring_24h:
     "Hi {{customer_name}}, your {{package_name}} expires tomorrow ({{remaining_sessions}} sessions left). Book now!",
   membership_expiring_7d:
-    "Hi {{customer_name}}, your {{membership_name}} membership expires on {{expiry_date}} (Rs.{{remaining_balance}} left).",
+    "Hi {{customer_name}}, your {{membership_name}} membership expires on {{expiry_date}} (¤{{remaining_balance}} left).",
   membership_expiring_24h:
-    "Hi {{customer_name}}, your {{membership_name}} membership expires tomorrow (Rs.{{remaining_balance}} left).",
+    "Hi {{customer_name}}, your {{membership_name}} membership expires tomorrow (¤{{remaining_balance}} left).",
   package_session_used:
     "Hi {{customer_name}}, your {{service_name}} session from {{package_name}} is used. {{remaining_sessions}} session(s) left.",
   membership_session_used:
-    "Hi {{customer_name}}, Rs.{{amount_used}} used from your membership for {{service_name}}. Balance: Rs.{{remaining_balance}}.",
+    "Hi {{customer_name}}, ¤{{amount_used}} used from your membership for {{service_name}}. Balance: ¤{{remaining_balance}}.",
   package_appointment_reminder_24h:
     "Reminder: {{customer_name}}, your {{service_name}} appointment at {{salon_name}} is tomorrow at {{appointment_time}} (uses 1 session from {{package_name}}).",
   service_reminder_24h:
-    "Reminder: {{customer_name}}, your {{service_name}} appointment at {{salon_name}} is tomorrow at {{appointment_time}}.",
+    "Reminder: {{customer_name}}, your {{service_name}} appointment at {{salon_name}} is on {{appointment_date}} at {{appointment_time}}.",
+  service_redo_reminder:
+    "Hi {{customer_name}}, it has been a while since your {{service_name}} at {{salon_name}} ({{last_visit_date}}). Time for your next one? Reply to book.",
   reward_points_earned:
     "Hi {{customer_name}}, you earned {{points_earned}} reward points at {{salon_name}}! Total: {{total_points}}.",
   referral_reward:
     "Hi {{customer_name}}, you earned a referral reward for {{referred_customer_name}}'s visit to {{salon_name}}! Reward: {{reward}}.",
   ewallet_used:
-    "Hi {{customer_name}}, Rs.{{amount_used}} used from your eWallet at {{salon_name}}. Balance: Rs.{{remaining_balance}}.",
+    "Hi {{customer_name}}, ¤{{amount_used}} used from your eWallet at {{salon_name}}. Balance: ¤{{remaining_balance}}.",
   referral_credit_used:
-    "Hi {{customer_name}}, Rs.{{amount_used}} used from your Referral Balance at {{salon_name}}. Balance: Rs.{{remaining_balance}}.",
+    "Hi {{customer_name}}, ¤{{amount_used}} used from your Referral Balance at {{salon_name}}. Balance: ¤{{remaining_balance}}.",
   reward_points_used:
     "Hi {{customer_name}}, {{points_used}} reward points used at {{salon_name}}. Remaining: {{remaining_points}}.",
   birthday_wishes:
@@ -74,6 +79,10 @@ export const DEFAULT_SMS_TEMPLATES: Record<DefaultPurchaseEventType, string> = {
     "Cash Counter Opened - {{salon_name}}. {{opening_date}} {{opening_time}}. Opening Cash: {{opening_amount}}.",
   cash_counter_closed:
     "Cash Counter Closed - {{salon_name}}. {{closing_date}} {{closing_time}}. {{collection_breakdown}}. Total: {{total_collection}}. Expenses: {{expenses}}. In-Store Cash: {{in_store_cash}}.",
+  cash_counter_opened_updated:
+    "Cash Counter Updated - {{salon_name}}. Opening details updated. {{opening_date}} {{opening_time}}. Opening Cash: {{opening_amount}}.",
+  cash_counter_closed_updated:
+    "Cash Counter Updated - {{salon_name}}. Closing details updated. {{closing_date}} {{closing_time}}. {{collection_breakdown}}. Total: {{total_collection}}. Expenses: {{expenses}}. In-Store Cash: {{in_store_cash}}.",
 }
 
 export const DEFAULT_EMAIL_TEMPLATES: Record<DefaultPurchaseEventType, { subject: string; body: string }> = {
@@ -83,11 +92,11 @@ export const DEFAULT_EMAIL_TEMPLATES: Record<DefaultPurchaseEventType, { subject
   },
   package_purchased: {
     subject: "Your {{package_name}} purchase is confirmed",
-    body: "Hi {{customer_name}},\n\nThank you for purchasing our {{package_name}}!\n\nPackage: {{package_name}}\nServices: {{services}}\nSessions: {{total_sessions}}\nValid Until: {{expiry_date}}\nAmount: Rs.{{package_value}}\nInvoice: {{invoice_number}}\n\nWe look forward to seeing you again. Book your next visit with us!",
+    body: "Hi {{customer_name}},\n\nThank you for purchasing our {{package_name}}!\n\nPackage: {{package_name}}\nServices: {{services}}\nSessions: {{total_sessions}}\nValid Until: {{expiry_date}}\nAmount: ¤{{package_value}}\nInvoice: {{invoice_number}}\n\nWe look forward to seeing you again. Book your next visit with us!",
   },
   membership_purchased: {
     subject: "Your {{membership_name}} membership is active",
-    body: "Hi {{customer_name}},\n\nYour {{membership_name}} is now active!\n\nMembership: {{membership_name}}\nBenefit: {{benefit}}\nStart Date: {{start_date}}\nValid Until: {{expiry_date}}\nMembership Price: Rs.{{membership_price}}\nInvoice: {{invoice_number}}\n\nEnjoy your exclusive membership benefits on your future visits!",
+    body: "Hi {{customer_name}},\n\nYour {{membership_name}} is now active!\n\nMembership: {{membership_name}}\nBenefit: {{benefit}}\nStart Date: {{start_date}}\nValid Until: {{expiry_date}}\nMembership Price: ¤{{membership_price}}\nInvoice: {{invoice_number}}\n\nEnjoy your exclusive membership benefits on your future visits!",
   },
   bill_receipt: {
     subject: "Thank you for visiting {{salon_name}}",
@@ -112,12 +121,16 @@ export const DEFAULT_EMAIL_TEMPLATES: Record<DefaultPurchaseEventType, { subject
     subject: "Your Appointment has been Cancelled — {{salon_name}}",
     body: "Hi {{customer_name}},\n\nYour appointment at {{salon_name}} has been cancelled.\n\nDate: {{appointment_date}}\nTime: {{appointment_time}}\nService: {{service_name}}\n\nPlease contact us if you'd like to rebook or if you have any questions.",
   },
+  appointment_no_show: {
+    subject: "We missed you at {{salon_name}}",
+    body: "Hi {{customer_name}},\n\nWe missed you at {{salon_name}} for your appointment.\n\nDate: {{appointment_date}}\nTime: {{appointment_time}}\nService: {{service_name}}\n\nIf you would still like to visit, please reply to this email or contact us and we will be happy to reschedule.",
+  },
   payment_received: {
     // Transcribed from email.service.ts's sendAppointmentCompletedEmail,
     // adapted to this event's actual variable set (that method's own params
     // — services/amount only — don't include appointment_date/time).
     subject: "Your Appointment Receipt — {{salon_name}}",
-    body: "Hi {{customer_name}},\n\nThank you for visiting {{salon_name}}. Here's your receipt:\n\nAmount Paid: Rs.{{amount}}\nAppointment: {{appointment_date}} at {{appointment_time}}\n\nWe hope to see you again soon!",
+    body: "Hi {{customer_name}},\n\nThank you for visiting {{salon_name}}. Here's your receipt:\n\nAmount Paid: ¤{{amount}}\nAppointment: {{appointment_date}} at {{appointment_time}}\n\nWe hope to see you again soon!",
   },
   package_expiring_7d: {
     subject: "Your {{package_name}} expires in 7 days",
@@ -129,11 +142,11 @@ export const DEFAULT_EMAIL_TEMPLATES: Record<DefaultPurchaseEventType, { subject
   },
   membership_expiring_7d: {
     subject: "Your {{membership_name}} membership expires in 7 days",
-    body: "Hi {{customer_name}},\n\nYour {{membership_name}} membership expires in 7 days.\n\nExpiry Date: {{expiry_date}}\nBalance Remaining: Rs.{{remaining_balance}}\n\nMake the most of your remaining membership benefits before it expires.",
+    body: "Hi {{customer_name}},\n\nYour {{membership_name}} membership expires in 7 days.\n\nExpiry Date: {{expiry_date}}\nBalance Remaining: ¤{{remaining_balance}}\n\nMake the most of your remaining membership benefits before it expires.",
   },
   membership_expiring_24h: {
     subject: "Your {{membership_name}} membership expires tomorrow",
-    body: "Hi {{customer_name}},\n\nYour {{membership_name}} membership expires tomorrow.\n\nRemaining Balance: Rs.{{remaining_balance}}\nExpiry Date: {{expiry_date}}\n\nDon't let your remaining membership balance go unused.",
+    body: "Hi {{customer_name}},\n\nYour {{membership_name}} membership expires tomorrow.\n\nRemaining Balance: ¤{{remaining_balance}}\nExpiry Date: {{expiry_date}}\n\nDon't let your remaining membership balance go unused.",
   },
   package_session_used: {
     subject: "Session used — {{package_name}}",
@@ -141,15 +154,19 @@ export const DEFAULT_EMAIL_TEMPLATES: Record<DefaultPurchaseEventType, { subject
   },
   membership_session_used: {
     subject: "Membership balance used at {{salon_name}}",
-    body: "Hi {{customer_name}},\n\nYour {{service_name}} service has been successfully redeemed from your membership.\n\nAmount Used: Rs.{{amount_used}}\nRemaining Balance: Rs.{{remaining_balance}}\n\nThank you for visiting {{salon_name}} — we appreciate you!",
+    body: "Hi {{customer_name}},\n\nYour {{service_name}} service has been successfully redeemed from your membership.\n\nAmount Used: ¤{{amount_used}}\nRemaining Balance: ¤{{remaining_balance}}\n\nThank you for visiting {{salon_name}} — we appreciate you!",
   },
   package_appointment_reminder_24h: {
     subject: "Reminder: Your appointment tomorrow at {{salon_name}}",
     body: "Hi {{customer_name}},\n\nJust a reminder that you have an appointment tomorrow at {{salon_name}}.\n\nDate: {{appointment_date}}\nTime: {{appointment_time}}\nService: {{service_name}}\n\nThis appointment will use 1 session from your {{package_name}}. See you tomorrow!",
   },
   service_reminder_24h: {
-    subject: "Reminder: Your appointment tomorrow at {{salon_name}}",
-    body: "Hi {{customer_name}},\n\nThis is a reminder for your appointment tomorrow at {{salon_name}}.\n\nDate: {{appointment_date}}\nTime: {{appointment_time}}\nService: {{service_name}}\nStaff: {{staff_name}}\n\nWe look forward to seeing you tomorrow!",
+    subject: "Reminder: Your upcoming appointment at {{salon_name}}",
+    body: "Hi {{customer_name}},\n\nThis is a reminder for your upcoming appointment at {{salon_name}}.\n\nDate: {{appointment_date}}\nTime: {{appointment_time}}\nService: {{service_name}}\nStaff: {{staff_name}}\n\nWe look forward to seeing you!",
+  },
+  service_redo_reminder: {
+    subject: "Time for your next {{service_name}} at {{salon_name}}?",
+    body: "Hi {{customer_name}},\n\nIt has been a while since your {{service_name}} at {{salon_name}} on {{last_visit_date}}.\n\nIt may be time for your next one. Reply to this email or contact us and we will help you book a slot.",
   },
   reward_points_earned: {
     subject: "You earned {{points_earned}} reward points!",
@@ -161,11 +178,11 @@ export const DEFAULT_EMAIL_TEMPLATES: Record<DefaultPurchaseEventType, { subject
   },
   ewallet_used: {
     subject: "eWallet used at {{salon_name}}",
-    body: "Hi {{customer_name}},\n\nYour eWallet was used for a payment at {{salon_name}}.\n\nAmount Used: Rs.{{amount_used}}\nRemaining Balance: Rs.{{remaining_balance}}\n\nThank you for choosing {{salon_name}} — we appreciate you!",
+    body: "Hi {{customer_name}},\n\nYour eWallet was used for a payment at {{salon_name}}.\n\nAmount Used: ¤{{amount_used}}\nRemaining Balance: ¤{{remaining_balance}}\n\nThank you for choosing {{salon_name}} — we appreciate you!",
   },
   referral_credit_used: {
     subject: "Referral Balance used at {{salon_name}}",
-    body: "Hi {{customer_name}},\n\nYour Referral Balance was used for a payment at {{salon_name}}.\n\nAmount Used: Rs.{{amount_used}}\nRemaining Referral Balance: Rs.{{remaining_balance}}\n\nThank you for choosing {{salon_name}} — we appreciate you!",
+    body: "Hi {{customer_name}},\n\nYour Referral Balance was used for a payment at {{salon_name}}.\n\nAmount Used: ¤{{amount_used}}\nRemaining Referral Balance: ¤{{remaining_balance}}\n\nThank you for choosing {{salon_name}} — we appreciate you!",
   },
   reward_points_used: {
     subject: "Reward Points used at {{salon_name}}",
@@ -186,6 +203,14 @@ export const DEFAULT_EMAIL_TEMPLATES: Record<DefaultPurchaseEventType, { subject
   cash_counter_closed: {
     subject: "Cash Counter Closed — {{salon_name}}",
     body: "Cash Counter Closed — {{salon_name}}\n\nYour cash counter has been closed for the day. Here is the collection summary for this session.\n\nDate: {{closing_date}}\nTime: {{closing_time}}\n\nCollection Summary\n{{collection_breakdown}}\n\nTotal Collection: {{total_collection}}\nExpenses: {{expenses}}\nIn-Store Cash: {{in_store_cash}}\n\nThank you for reconciling today's cash counter.",
+  },
+  cash_counter_opened_updated: {
+    subject: "Cash Counter Updated — {{salon_name}}",
+    body: "Cash Counter Updated — {{salon_name}}\n\nYour cash counter opening details have been updated successfully.\n\nDate: {{opening_date}}\nTime: {{opening_time}}\nOpening Cash Amount: {{opening_amount}}\n\nThank you!",
+  },
+  cash_counter_closed_updated: {
+    subject: "Cash Counter Updated — {{salon_name}}",
+    body: "Cash Counter Updated — {{salon_name}}\n\nYour cash counter closing details have been updated successfully.\n\nDate: {{closing_date}}\nTime: {{closing_time}}\n\nUpdated Collection Summary\n{{collection_breakdown}}\n\nTotal Collection: {{total_collection}}\nExpenses: {{expenses}}\nIn-Store Cash: {{in_store_cash}}\n\nThank you for reconciling today's cash counter.",
   },
 }
 

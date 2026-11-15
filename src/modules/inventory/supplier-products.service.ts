@@ -12,7 +12,7 @@ export const supplierProductsService = {
         return supplierProductsRepository.list(supplierId, salonId, filters);
     },
 
-    async import(params: { supplierId: string; salonId: string; file: Buffer; filename: string }): Promise<SupplierProductImportResult> {
+    async import(params: { supplierId: string; salonId: string; file: Buffer; filename: string; dryRun?: boolean }): Promise<SupplierProductImportResult> {
         return supplierProductsImportService.importCatalog(params);
     },
 

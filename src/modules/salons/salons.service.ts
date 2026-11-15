@@ -5,6 +5,47 @@ import { salonsRepository } from "./salons.repository";
 import { CreateSalonBody, UpdateSalonBody, Salon } from "./salons.types";
 import { authRepository } from "../auth/auth.repository";
 import { issueSessionTokens } from "../auth/session.util";
+import { regionalDefaultsForCountry, normalizeCountryCode } from "../../config/salonTimezone";
+import { seedUaeVatDefaults } from "../settings/tax.util";
+import { emailService } from "../utils/email.service";
+
+// The mandatory onboarding answers the backend keeps: the business name (entered at sign-up, confirmed on the first step) and the
+// service category chosen on the second. (The team size and location choices are not stored on the salon.)
+const hasMandatoryOnboardingData = (salon: Salon) =>
+    Boolean(salon.business_name?.trim()) && Boolean(salon.business_type?.trim());
+
+const fmtValidUntil = (v: unknown) =>
+    v ? new Date(v as string).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric", timeZone: "Asia/Kolkata" }) : null;
+
+// Marks the owner's onboarding complete (stamping users.onboarding_completed_at) and sends the "onboarding complete" welcome email —
+// but only when this call is the one that actually completed it (the flip is one atomic update, so a repeated call to the
+// completion API, a retry or a double click can never send a second email), only to the salon's owner, and only once the
+// mandatory onboarding data is in. Registering or buying a plan never gets here. Best effort: a mail problem never fails onboarding.
+export async function completeOnboarding(userId: string, salon: Salon): Promise<void> {
+    const firstTime = await authRepository.markOnboardingComplete(userId);
+    if (!firstTime) return;
+    if (salon.owner_id !== userId || !hasMandatoryOnboardingData(salon)) {
+        logger.info("Onboarding marked complete; welcome email skipped (not the owner, or mandatory onboarding data missing)", { userId, salonId: salon.id });
+        return;
+    }
+    void (async () => {
+        try {
+            const user: any = await authRepository.findUserById(userId);
+            if (!user?.email) return;
+            const plan = await salonsRepository.currentPlanSummary(salon.id).catch(() => null);
+            await emailService.sendOnboardingCompleteEmail({
+                to: user.email,
+                ownerName: user.first_name,
+                salonName: salon.business_name,
+                planName: plan?.plan_name ?? (plan?.is_trial ? "Free Trial" : null),
+                validUntil: fmtValidUntil(plan?.valid_until),
+            });
+            logger.info("Onboarding-complete email sent", { userId, salonId: salon.id });
+        } catch (err: any) {
+            logger.error("Onboarding-complete email failed", { userId, error: err?.message });
+        }
+    })();
+}
 
 const slugify = (text: string) =>
     text
@@ -54,29 +95,89 @@ function normalizeAdditionalPhones(input: unknown, primary: string | null | unde
     return out;
 }
 
+// A salon signing up from a country we support (e.g. UAE) starts with that country's
+// timezone and currency instead of the India defaults — unless the body already chose its own.
+// India (and any unlisted country) is left exactly as before.
+async function applyRegionalDefaults(salon: Salon, body: { timezone?: unknown; currency?: unknown }) {
+    const regional = regionalDefaultsForCountry(salon.country);
+    if (regional && !body.timezone && !body.currency) {
+        await salonsRepository.update(salon.id, regional).catch((err) =>
+            logger.error("regional defaults failed", { salonId: salon.id, error: err?.message })
+        );
+    }
+    // UAE salons also start with a 5% VAT mapping (module off until they confirm VAT registration).
+    if (normalizeCountryCode(salon.country) === "AE") {
+        await seedUaeVatDefaults(salon.id).catch((err) =>
+            logger.error("UAE VAT defaults failed", { salonId: salon.id, error: err?.message })
+        );
+    }
+}
+
 export const salonsService = {
+    // The owner's salon, created from their registration details if it doesn't exist yet. Used when a payment arrives before
+    // onboarding, so the subscription and its invoice have a salon to belong to; onboarding later fills the same salon in
+    // (create() above). Safe to call repeatedly or concurrently: it never makes a second salon.
+    async ensureForOwner(ownerId: string): Promise<Salon | null> {
+        const existing = await salonsRepository.findByOwnerId(ownerId);
+        if (existing) return existing;
+        const registrant: any = await authRepository.findUserById(ownerId);
+        if (!registrant) return null;
+        const fullName = [registrant.first_name, registrant.last_name].filter(Boolean).join(" ").trim();
+        const name = String(registrant.business_name ?? "").trim() || fullName || "My Salon";
+        try {
+            const salon = await salonsRepository.create(ownerId, {
+                business_name: name,
+                slug: await ensureUniqueSlug(name),
+                email: registrant.email ?? undefined,
+                phone: registrant.phone ?? undefined,
+                address: registrant.address || undefined,
+                country: registrant.country || undefined,
+            } as CreateSalonBody);
+            await applyRegionalDefaults(salon, {});
+            logger.info("Salon created for owner at payment time", { ownerId, salonId: salon.id });
+            return salon;
+        } catch (e: any) {
+            // A concurrent call made it first.
+            const raced = await salonsRepository.findByOwnerId(ownerId);
+            if (raced) return raced;
+            throw e;
+        }
+    },
+
     async create(ownerId: string, body: CreateSalonBody) {
         logger.info("salonsService.create called", { ownerId });
 
+        // A salon that already exists is fine while onboarding is unfinished: it was created when the owner's payment arrived
+        // (see ensureForOwner), so onboarding fills it in. Once onboarding is complete a second create is still refused.
         const existing = await salonsRepository.findByOwnerId(ownerId);
-        if (existing) {
-            throw new AppError(409, "Salon already exists for this owner", "SALON_EXISTS");
-        }
-
-        const finalSlug = await ensureUniqueSlug(body.slug?.trim() || body.business_name);
-
         // The business address lives on the salon only. Registration collected an address/country
         // on the user row before any salon existed — carry those over so the salon starts with them
         // (anything sent in the onboarding body wins).
         const registrant = await authRepository.findUserById(ownerId);
+        if (existing && (registrant as any)?.is_onboarding_complete) {
+            throw new AppError(409, "Salon already exists for this owner", "SALON_EXISTS");
+        }
 
         try {
-            const salon = await salonsRepository.create(ownerId, {
-                ...body,
-                slug: finalSlug,
-                address: body.address || registrant?.address || undefined,
-                country: body.country || registrant?.country || undefined,
-            });
+            let salon: Salon;
+            if (existing) {
+                const wantsSlug = body.slug?.trim();
+                salon = await salonsRepository.update(existing.id, {
+                    ...body,
+                    slug: wantsSlug && wantsSlug !== existing.slug ? await ensureUniqueSlug(wantsSlug) : existing.slug,
+                    address: body.address || registrant?.address || undefined,
+                    country: body.country || registrant?.country || undefined,
+                } as UpdateSalonBody);
+            } else {
+                const finalSlug = await ensureUniqueSlug(body.slug?.trim() || body.business_name);
+                salon = await salonsRepository.create(ownerId, {
+                    ...body,
+                    slug: finalSlug,
+                    address: body.address || registrant?.address || undefined,
+                    country: body.country || registrant?.country || undefined,
+                });
+                await applyRegionalDefaults(salon, body);
+            }
 
             // Anything the owner subscribed to on the plan page before this salon existed now belongs to it.
             await subscriptionCheckoutService.attachPendingToSalon(ownerId, salon.id).catch((err) =>
@@ -102,7 +203,7 @@ export const salonsService = {
             });
 
             // Mark onboarding complete
-            await authRepository.markOnboardingComplete(ownerId);
+            await completeOnboarding(ownerId, salon);
 
             logger.info("salonsService.create success", {
                 ownerId,
@@ -198,7 +299,7 @@ export const salonsService = {
             const updated = await salonsRepository.update(salonId, patch);
 
             if (patch.onboarding_completed === true) {
-                await authRepository.markOnboardingComplete(requesterUserId);
+                await completeOnboarding(requesterUserId, updated);
             }
 
             logger.info("salonsService.updateByOwnerOrAdmin success", {

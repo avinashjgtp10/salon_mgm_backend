@@ -31,6 +31,7 @@ async function runReminderSweep(): Promise<void> {
     try {
       await emailService.sendSalonDeactivatedEmail({
         to: salon.owner_email,
+        salonId: salon.id,
         salonName: salon.name,
         ownerName: salon.owner_name,
       })

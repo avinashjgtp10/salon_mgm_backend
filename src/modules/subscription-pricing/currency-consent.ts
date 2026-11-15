@@ -1,6 +1,7 @@
 import crypto from "crypto";
 import jwt from "jsonwebtoken";
 import { AppError } from "../../middleware/error.middleware";
+import { PLATFORM_BILLING_CURRENCY } from "../../config/currency";
 
 // Consent to be billed in INR when the customer's own currency cannot be charged.
 //
@@ -32,7 +33,7 @@ function secret(): string {
 
 export function issueConsentToken(b: ConsentBinding): string {
     return jwt.sign(
-        { purpose: "currency_fallback", uid: b.userId, tier: b.tier, cycle: b.cycle, country: b.country, req: b.requestedCurrency, cur: "INR", amt: b.amount },
+        { purpose: "currency_fallback", uid: b.userId, tier: b.tier, cycle: b.cycle, country: b.country, req: b.requestedCurrency, cur: PLATFORM_BILLING_CURRENCY, amt: b.amount },
         secret(),
         { algorithm: "HS256", expiresIn: TTL_SECONDS, jwtid: crypto.randomUUID() },
     );
@@ -50,7 +51,7 @@ export function checkConsentToken(token: unknown, expected: ConsentBinding): Con
         return { ok: false, reason: err?.name === "TokenExpiredError" ? "expired" : "invalid" };
     }
     const same =
-        c.purpose === "currency_fallback" && c.cur === "INR" &&
+        c.purpose === "currency_fallback" && c.cur === PLATFORM_BILLING_CURRENCY &&
         c.uid === expected.userId && c.tier === expected.tier && c.cycle === expected.cycle &&
         c.country === expected.country && c.req === expected.requestedCurrency &&
         Math.round(Number(c.amt) * 100) === Math.round(expected.amount * 100);

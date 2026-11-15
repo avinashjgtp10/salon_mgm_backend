@@ -12,6 +12,7 @@ import authRoutes from "./modules/auth/auth.routes";
 import categoriesRoutes from "./modules/categories/categories.routes";
 import salonsRoutes from "./modules/salons/salons.routes";
 import branchesRoutes from "./modules/branches/branches.routes";
+import salonBranchesRoutes from "./modules/salon-branches/salon-branches.routes";
 import staffRoutes from "./modules/staff/staff.routes";
 import rolesRoutes from "./modules/roles/roles.routes";
 import permissionsRoutes from "./modules/permissions/permissions.routes";
@@ -92,6 +93,7 @@ import clientRequirementsRoutes from "./modules/client-requirements/client-requi
 import notificationsRoutes from "./modules/notifications/notifications.routes";
 import mobileStaffRoutes from "./modules/mobile-staff/mobileStaff.routes";
 import mobileOwnerRoutes from "./modules/mobile-staff/mobileOwner.routes";
+import mobileLunoxRoutes from "./modules/ai-assistant/mobile-lunox.routes";
 import deploymentAnnouncementsRoutes from "./modules/deployment-announcements/deployment-announcements.routes";
 import appVersionRoutes from "./modules/app-version/app-version.routes";
 import enquiriesRoutes from "./modules/enquiries/enquiries.routes";
@@ -99,6 +101,7 @@ import mediaRoutes from "./modules/media/media.routes";
 import { emailService } from "./modules/utils/email.service";
 import swaggerUi from "swagger-ui-express";
 import path from "path";
+import { dateLocale } from "./config/currency";
 
 // ── Subscription gate ──────────────────────────────────────────────────────────
 //import { subscriptionMiddleware } from "./middleware/subscription.middleware";
@@ -240,8 +243,8 @@ app.get("/api/v1/test-email", async (_req, res) => {
       salonName:     "Test Salon",
       clientName:    "Test Client",
       services:      "Haircut, Styling",
-      date:          new Date().toLocaleDateString("en-IN"),
-      time:          new Date().toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" }),
+      date:          new Date().toLocaleDateString(dateLocale()),
+      time:          new Date().toLocaleTimeString(dateLocale(), { hour: "2-digit", minute: "2-digit" }),
       appointmentId: "TEST-001",
     });
     logger.info("[test-email] Test email sent successfully to", testTo);
@@ -276,6 +279,7 @@ app.use("/api/v1/users", usersRoutes);
 app.use("/api/v1/categories", categoriesRoutes);
 app.use("/api/v1/salons", salonsRoutes);
 app.use("/api/v1/branches", branchesRoutes);
+app.use("/api/v1/salon-branches", salonBranchesRoutes);
 app.use("/api/v1/staff", staffRoutes);
 app.use("/api/v1/roles", rolesRoutes);
 app.use("/api/v1/permissions", permissionsRoutes);
@@ -348,6 +352,8 @@ app.use("/api/v1/mobile/staff", mobileStaffRoutes);
 // Owner/admin settings that exist only in the mobile app (e.g. a staff
 // member's Calendar & Quick Sale access).
 app.use("/api/v1/mobile/owner", mobileOwnerRoutes);
+// LUNOX features that exist only in the mobile app (e.g. the dashboard's daily AI insight card).
+app.use("/api/v1/mobile/lunox", mobileLunoxRoutes);
 app.use("/api/v1/deployment-announcements", deploymentAnnouncementsRoutes);
 // Global mobile app version configuration. GET /api/v1/app/version is public.
 // Distinct from /api/v1/appointments: Express matches mount paths on segment

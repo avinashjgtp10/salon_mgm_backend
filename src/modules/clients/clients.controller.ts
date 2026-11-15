@@ -13,6 +13,7 @@ import { clientsRepository } from "./clients.repository";
 import { ClientsListQuery, CreateClientBody, UpdateClientBody, CampaignFilterParams, PackageMembershipFilter, BlockedStatusFilter } from "./clients.types";
 import pool from "../../config/database";
 import { resolveClientExportColumns, buildClientExportRows } from "./clients.export-columns";
+import { getSalonCurrency, formatMoneyAscii, dateLocale } from "../../config/currency";
 
 type AuthRequest = Request & { user?: { userId: string; role?: string; salonId?: string } };
 
@@ -354,6 +355,7 @@ export const clientsController = {
                 res.setHeader("Content-Type", "application/pdf");
                 res.setHeader("Content-Disposition", `attachment; filename="clients_export.pdf"`);
                 const doc = new PDFDocument({ margin: 40, size: "A4", layout: "landscape" });
+                const salonCurrency = await getSalonCurrency(salonId);
                 doc.pipe(res);
                 doc.fontSize(18).font("Helvetica-Bold").text("Clients Report", { align: "center" });
                 doc.fontSize(10).font("Helvetica").fillColor("#666").text(`Generated: ${new Date().toLocaleDateString()}`, { align: "center" });
@@ -383,8 +385,8 @@ export const clientsController = {
                     doc.text(String(c.email ?? "—").substring(0, 28), cols.email, y + 7, { width: 155 });
                     doc.text(String(c.gender ?? "—"), cols.gender, y + 7, { width: 75 });
                     doc.text(String(c.client_source ?? "—"), cols.source, y + 7, { width: 95 });
-                    doc.text(`Rs. ${Number(c.total_sales ?? 0).toFixed(2)}`, cols.sales, y + 7, { width: 65 });
-                    doc.text(c.created_at ? new Date(c.created_at).toLocaleDateString("en-IN") : "—", cols.created, y + 7, { width: 80 });
+                    doc.text(formatMoneyAscii(c.total_sales ?? 0, salonCurrency), cols.sales, y + 7, { width: 65 });
+                    doc.text(c.created_at ? new Date(c.created_at).toLocaleDateString(dateLocale(salonCurrency)) : "—", cols.created, y + 7, { width: 80 });
                     y += 22;
                 });
                 doc.end();

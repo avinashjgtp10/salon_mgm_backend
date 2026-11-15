@@ -10,6 +10,8 @@ export type RegisterBody = {
   phone?: string;
   password: string;
   terms: boolean;
+  /** Language the sign-up screen was shown in — used for the welcome email (the salon has no language of its own yet). */
+  language?: string;
 
   // role should NOT come from frontend normally
   role?: "salon_owner" | "staff" | "client" | "admin";
@@ -25,6 +27,14 @@ export type LoginBody = {
   password: string;
   clientType?: ClientType; // defaults to "web"
   // Set by the controller from the request, only to record the login for Client Activity Tracking.
+  ip?: string | null;
+  userAgent?: string | null;
+};
+
+/** Native Google sign-in from the mobile app: the ID token from the account picker. */
+export type GoogleNativeLoginBody = {
+  idToken: string;
+  clientType?: ClientType;
   ip?: string | null;
   userAgent?: string | null;
 };

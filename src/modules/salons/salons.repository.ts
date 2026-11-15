@@ -1,6 +1,8 @@
 import type { PoolClient } from "pg";
 import pool from "../../config/database";
 import { CreateSalonBody, UpdateSalonBody, Salon } from "./salons.types";
+import { invalidateSalonCurrency } from "../../config/currency";
+import { invalidateSalonLanguage } from "../../config/language";
 
 // The batched delete scripts below inline the salon id (a multi-statement
 // query can't take bind parameters), so it must be a real UUID first.
@@ -23,6 +25,15 @@ function assertUuid(value: string): string {
 // blind forever though: it must be re-checked the same way whenever a new
 // salon-scoped table is added, since a table added after this list was last
 // verified will silently orphan data exactly like the ones below used to.
+// Super Admin "Client Activity Management" history (meetings, training, activity, follow-up tasks, attachments, audit trail).
+// Their salon_id FKs are ON DELETE RESTRICT (create_client_activity_management_tables.sql), so they block deleting the salon
+// ("REFERENCED_ELSEWHERE ... client_followup_tasks"). They are removed only when the salon itself is deleted — Clear Data
+// keeps this CRM history. Children first.
+const SALON_DELETE_ONLY_TABLES = [
+  "client_activity_attachments", "client_activity_audit_logs", "meeting_attendees", "client_meetings",
+  "client_training_progress", "client_activity_logs", "client_followup_tasks",
+];
+
 const SALON_ORPHAN_RISK_TABLES = [
   // Confirmed on live DB: salon_id column present, NO FK to salons at all.
   "ai_agent_logs", "ai_customer_memory", "ai_token_usage", "appointments",
@@ -65,6 +76,67 @@ const SALON_ORPHAN_RISK_TABLES = [
  * on an unrelated missing table) is worse than skipping one that has nothing
  * to delete anyway.
  */
+// ── Transaction history ──────────────────────────────────────────────────────────────────────────────────────────────────────
+// Tables whose rows are the salon's financial or business history. A salon with ANY of these is never permanently deleted by Super
+// Admin (it is archived instead: deactivated, logins disabled, hidden, data kept). Only a salon with none of them — an empty or test
+// salon — can be purged. Tables a given database does not have are skipped.
+const TRANSACTION_HISTORY_TABLES: { table: string; label: string; where?: string }[] = [
+  { table: "sales", label: "Sales / bills" },
+  { table: "payments", label: "Payments" },
+  { table: "invoices", label: "Invoices" },
+  { table: "invoices_archive", label: "Archived invoices" },
+  { table: "appointments", label: "Appointments" },
+  { table: "bookings", label: "Bookings" },
+  { table: "purchases", label: "Purchases" },
+  { table: "orders", label: "Purchase orders" },
+  { table: "order_receipts", label: "Goods receipts" },
+  { table: "supplier_payments", label: "Supplier payments" },
+  { table: "cash_management", label: "Cash counter records" },
+  { table: "cash_management_expenses", label: "Expenses" },
+  { table: "payroll_entries", label: "Payroll" },
+  { table: "payroll_salary_advances", label: "Salary advances" },
+  { table: "commission_earned", label: "Commissions" },
+  { table: "commission_settlements", label: "Commission settlements" },
+  { table: "tip_earned", label: "Tips" },
+  { table: "tip_settlements", label: "Tip settlements" },
+  { table: "client_packages", label: "Packages sold" },
+  { table: "client_memberships", label: "Memberships sold" },
+  { table: "ewallet_ledger", label: "E-wallet entries" },
+  { table: "subscription_invoices", label: "Subscription invoices" },
+  { table: "subscription_upgrades", label: "Plan upgrades" },
+  // Append-only by design (a database trigger rejects every delete), so a salon that has any can only be archived.
+  { table: "asset_events", label: "Asset history" },
+  // A free trial leaves no financial record; a subscription that went through Razorpay does.
+  { table: "subscriptions", label: "Paid subscriptions", where: "COALESCE(is_trial, false) = false AND razorpay_subscription_id IS NOT NULL" },
+];
+
+/** Rows of financial / business history the salon has, by label (only non-zero entries), and their total. */
+export async function salonTransactionHistory(
+  client: PoolClient | typeof pool,
+  salonId: string,
+): Promise<{ counts: Record<string, number>; total: number }> {
+  const id = assertUuid(salonId);
+  const { rows: have } = await client.query(
+    `SELECT table_name FROM information_schema.columns
+     WHERE table_schema = 'public' AND column_name = 'salon_id' AND table_name = ANY($1::text[])`,
+    [TRANSACTION_HISTORY_TABLES.map((t) => t.table)],
+  );
+  const present = new Set((have as { table_name: string }[]).map((r) => r.table_name));
+  const parts = TRANSACTION_HISTORY_TABLES.filter((t) => present.has(t.table)).map(
+    (t, i) => `SELECT ${i} AS i, COUNT(*)::int AS n FROM ${t.table} WHERE salon_id = '${id}'${t.where ? ` AND ${t.where}` : ""}`,
+  );
+  const counts: Record<string, number> = {};
+  let total = 0;
+  if (parts.length > 0) {
+    const { rows } = await client.query(parts.join(" UNION ALL "));
+    const used = TRANSACTION_HISTORY_TABLES.filter((t) => present.has(t.table));
+    for (const r of rows as { i: number; n: number }[]) {
+      if (r.n > 0) { counts[used[r.i].label] = r.n; total += r.n; }
+    }
+  }
+  return { counts, total };
+}
+
 export async function purgeSalon(client: PoolClient, salonId: string): Promise<{ id: string } | null> {
   // Wipe the salon's data in the dependency-safe order first (children before
   // parents: stock_ledger/product_audit_items/supplier_payments before
@@ -94,7 +166,7 @@ export async function purgeSalon(client: PoolClient, salonId: string): Promise<{
   // One lookup for which of these tables exist (a table not yet migrated in
   // some environment is skipped, not a hard failure), then one batched script
   // — see clearSalonData for why per-table round trips are avoided.
-  const wanted = [...SALON_ORPHAN_RISK_TABLES, "roles", "permission_audit_log"];
+  const wanted = [...SALON_ORPHAN_RISK_TABLES, ...SALON_DELETE_ONLY_TABLES, "roles", "permission_audit_log"];
   const { rows: present } = await client.query(
     `SELECT table_name FROM information_schema.tables
      WHERE table_schema = 'public' AND table_name = ANY($1::text[])`,
@@ -103,6 +175,9 @@ export async function purgeSalon(client: PoolClient, salonId: string): Promise<{
   const existing = new Set((present as { table_name: string }[]).map((r) => r.table_name));
   const id = assertUuid(salonId);
   const stmts: string[] = [];
+  for (const table of SALON_DELETE_ONLY_TABLES) {
+    if (existing.has(table)) stmts.push(`DELETE FROM ${table} WHERE salon_id = '${id}'`);
+  }
   for (const table of SALON_ORPHAN_RISK_TABLES) {
     if (existing.has(table)) stmts.push(`DELETE FROM ${table} WHERE salon_id = '${id}'`);
   }
@@ -197,7 +272,10 @@ const SALON_CLEAR_DATA_TABLES = [
   // Purchase Orders — order_items.product_id references products (NO
   // ACTION) and orders.supplier_id references suppliers (NO ACTION), so
   // both must be cleared before the catalog/inventory sections below.
-  "order_items", "orders", "order_signatures",
+  // order_receipts FIRST: order_receipt_items.order_item_id -> order_items is NO ACTION, so deleting order_items while a goods
+  // receipt still lists them aborted every salon delete / Clear Data with "(order_receipt_items)". Deleting the receipts first
+  // cascades their lines away (order_receipt_items -> order_receipts is ON DELETE CASCADE).
+  "order_receipts", "order_items", "orders", "order_signatures",
 
   // Product audits & stock ledger — product_audit_items.product_id and
   // stock_ledger.product_id/.supplier_id are all plain (NO ACTION) FKs, and
@@ -309,6 +387,21 @@ export async function clearSalonData(client: PoolClient, salonId: string): Promi
   const { rows: salons } = await client.query(`SELECT id FROM salons WHERE id = $1`, [salonId]);
   if (!salons[0]) return false;
 
+  // attendance_breaks has no salon column and its FK to attendance is RESTRICT, so the generic attendance delete below would abort
+  // on the first break; remove the breaks of this salon's attendance rows first.
+  const { rows: hasBreaks } = await client.query(`SELECT to_regclass('public.attendance_breaks') AS t`);
+  if (hasBreaks[0]?.t) {
+    await client.query(
+      `DELETE FROM attendance_breaks WHERE attendance_id IN (SELECT id FROM attendance WHERE salon_id = $1)`,
+      [salonId]
+    );
+  }
+
+  // asset_events is append-only: its trigger blocks UPDATE, and deleting an asset_incident would UPDATE events via ON DELETE SET NULL.
+  // Plain DELETEs are allowed, so remove the salon's events first and the cascade then has nothing to update.
+  const { rows: hasEvents } = await client.query(`SELECT to_regclass('public.asset_events') AS t`);
+  if (hasEvents[0]?.t) await client.query(`DELETE FROM asset_events WHERE salon_id = $1`, [salonId]);
+
   // pos_payment_events has no salon-scope column of its own — it's only
   // reachable via pos_payment_request_id (NO ACTION FK) — so it can't go
   // through the generic salon_id-column loop below (SALON_CLEAR_DATA_TABLES
@@ -380,7 +473,9 @@ const SALON_SELECT_WITH_OWNER_CONTACT = `
            s.logo_url, s.banner_url, s.email, s.phone, s.additional_phones, s.website_url, s.google_review_url,
            s.gst_number, s.pan_number, s.is_verified, s.is_active, s.onboarding_completed,
            s.address, s.address_line2, s.city, s.state, s.country, s.pincode, s.timezone,
-           s.currency, s.business_category, s.gst_registration_type, s.created_at, s.updated_at
+           s.currency, s.business_category, s.gst_registration_type, s.created_at, s.updated_at,
+           -- Read tolerantly: until Migration/add_salon_language.sql runs there is no column, and that must not break salons.
+           COALESCE(to_jsonb(s) ->> 'language', 'en') AS language
     FROM salons s
 `;
 
@@ -496,6 +591,28 @@ export const salonsRepository = {
             values
         );
 
+        // Messages, documents and bill rounding read the salon's currency through a short-lived cache — drop it so a
+        // change takes effect immediately.
+        if (patch.currency !== undefined) invalidateSalonCurrency(id);
+        if (patch.language !== undefined) invalidateSalonLanguage(id);
+
         return rows[0];
+    },
+
+    // The plan the salon is on right now and when it is valid until (a free trial reports its trial end), for the onboarding-complete
+    // email. A paid active plan wins over a trial; null when the salon has neither.
+    async currentPlanSummary(salonId: string): Promise<{ plan_name: string | null; valid_until: string | null; is_trial: boolean } | null> {
+        const { rows } = await pool.query(
+            `SELECT sp.name AS plan_name, s.status, COALESCE(s.is_trial, FALSE) AS is_trial,
+                    CASE WHEN s.status = 'trialing' THEN s.trial_ends_at ELSE s.current_period_end END AS valid_until
+             FROM subscriptions s
+             LEFT JOIN subscription_plans sp ON sp.id = s.plan_id
+             WHERE s.salon_id = $1 AND s.status IN ('active', 'trialing')
+             ORDER BY (s.status = 'active') DESC, s.current_period_end DESC NULLS LAST
+             LIMIT 1`,
+            [salonId]
+        );
+        const r = rows[0];
+        return r ? { plan_name: r.plan_name ?? null, valid_until: r.valid_until ?? null, is_trial: Boolean(r.is_trial) || r.status === "trialing" } : null;
     },
 };

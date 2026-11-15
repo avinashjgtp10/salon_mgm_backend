@@ -169,6 +169,10 @@ router.get("/tips/earned",               auth, ownerAdminStaff, viewTips, staffT
 router.post("/tips/:staffId/settle",     auth, ownerAdminStaff, requireAnyPermission(["edit_tip", "manage_tips"]), staffTipsController.settleStaffTip);
 router.get("/tips/:staffId/settlements", auth, ownerAdminStaff, viewTips, staffTipsController.getSettlementHistory);
 
+// Staff Leave Report — salon-wide, so it must be BEFORE the /:staffId routes (a literal "leaves" segment after them
+// would be swallowed by /:staffId/...).
+router.get("/leaves/report", auth, ownerAdminStaff, requireAnyPermission(["view_report_staff_leave_report", "view_scheduled_shifts"]), staffLeavesController.report);
+
 // ─── Commission Slabs + History — per staff ──────────────────────────────────
 router.get("/:staffId/commissions/slabs",   auth, ownerAdminStaff, viewCommissions, staffCommissionsController.getSlabs);
 router.put("/:staffId/commissions/slabs",   auth, ownerAdminStaff, manageCommissions, staffCommissionsController.upsertSlabs);

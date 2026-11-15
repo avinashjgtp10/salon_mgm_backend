@@ -1,7 +1,7 @@
 import { Router, Request, Response, NextFunction } from "express";
 import { AppError } from "../../middleware/error.middleware";
 import { sendSuccess } from "../utils/response.util";
-import { clientActivityRepository, type StatusFilter } from "./client-activity.repository";
+import { clientActivityRepository, NAMED_ACTIVITY_ROLES, type ActivityRole, type StatusFilter } from "./client-activity.repository";
 
 // Mounted under /api/v1/super-admin/client-activity - the parent router already requires a valid JWT
 // AND the super_admin role (super-admin.routes.ts), so none of this is reachable by a client/salon user.
@@ -27,13 +27,22 @@ function parseRange(q: Request["query"]): { from: Date; to: Date } {
 const platformOf = (v: unknown): "web" | "app" | undefined => (v === "web" || v === "app" ? v : undefined);
 const num = (v: unknown, d: number, min: number, max: number) => Math.min(max, Math.max(min, Math.floor(Number(v)) || d));
 
-// GET /client-activity?days=7|14|30  or  ?from=&to=   &platform=web|app &status=online|active|inactive &search= &page= &limit=
+// A multi-value filter arrives as a comma list ("web,app"); unknown values are dropped, empty means no filter.
+const listOf = <T extends string>(v: unknown, allowed: readonly string[]): T[] | undefined => {
+  const out = String(v ?? "").split(",").map((s) => s.trim()).filter((s) => allowed.includes(s)) as T[];
+  return out.length ? out : undefined;
+};
+
+// GET /client-activity?days=7|14|30  or  ?from=&to=   &platform=web,app &status=online,active,inactive
+//     &role=salon_owner,manager,staff,branch_owner,other &search= &page= &limit=
 router.get("/", async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { from, to } = parseRange(req.query);
-    const status = ["online", "active", "inactive"].includes(String(req.query.status)) ? (req.query.status as StatusFilter) : undefined;
     const data = await clientActivityRepository.list({
-      from, to, platform: platformOf(req.query.platform), status,
+      from, to,
+      platform: listOf<"web" | "app">(req.query.platform, ["web", "app"]),
+      status: listOf<StatusFilter>(req.query.status, ["online", "active", "inactive"]),
+      role: listOf<ActivityRole>(req.query.role, [...NAMED_ACTIVITY_ROLES, "other"]),
       search: String(req.query.search || "").trim() || undefined,
       page: num(req.query.page, 1, 1, 100000), limit: num(req.query.limit, 20, 1, 100),
     });

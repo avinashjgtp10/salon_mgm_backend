@@ -4,6 +4,8 @@
 
 import { AutomationEventType } from "../whatsapp-automation/whatsapp-automation.types"
 import { DefaultPurchaseEventType, EVENT_VARIABLE_NAMES } from "./notification-channels-defaults"
+import { translator } from "../../config/i18n"
+import { languageDir, normalizeLanguage } from "../../config/language"
 
 // Every existing trigger() call site already builds its variables object
 // positionally ({'1': 'Nishant', '2': 'Style Studio', ...}) to match Meta's
@@ -50,18 +52,22 @@ export function renderTemplate(text: string, namedVars: Record<string, string>, 
 // escapeHtmlValues=true) by the caller — this function does not escape them
 // again (that would double-escape entities). `salonName` is the one raw,
 // unescaped value this function itself is responsible for escaping.
-export function renderChannelEmailHtml(params: { subject: string; bodyText: string; salonName: string }): string {
+export function renderChannelEmailHtml(params: { subject: string; bodyText: string; salonName: string; language?: string | null }): string {
   const { subject, bodyText, salonName } = params
+  const lang = normalizeLanguage(params.language)
+  const dir = languageDir(lang)
+  const tr = translator(lang)
+  const align = dir === "rtl" ? "right" : "left"
   const safeSalonName = escapeHtml(salonName)
   // bodyText already has its variables substituted (and HTML-escaped) by
   // renderTemplate — safe to drop into <p> tags after converting newlines.
   const paragraphs = bodyText
     .split(/\n{2,}/)
-    .map((block) => `<p style="margin:0 0 14px;color:#374151;font-size:15px;line-height:1.6;white-space:pre-line;">${block}</p>`)
+    .map((block) => `<p style="margin:0 0 14px;color:#374151;font-size:15px;line-height:1.6;white-space:pre-line;text-align:${align};">${block}</p>`)
     .join("")
 
   return `
-    <!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"/></head>
+    <!DOCTYPE html><html lang="${lang}" dir="${dir}"><head><meta charset="UTF-8"/></head>
     <body style="margin:0;padding:0;background:#f4f4f7;font-family:'Segoe UI',Arial,sans-serif;">
       <table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f7;padding:36px 0;">
         <tr><td align="center">
@@ -69,8 +75,8 @@ export function renderChannelEmailHtml(params: { subject: string; bodyText: stri
             style="background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 4px 20px rgba(0,0,0,0.07);max-width:560px;width:100%;">
             <tr>
               <td style="background:#111111;padding:28px 36px;">
-                <p style="margin:0;color:#fff;font-size:12px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;opacity:0.8;">${safeSalonName}</p>
-                <h1 style="margin:6px 0 0;color:#fff;font-size:22px;font-weight:800;">${subject}</h1>
+                <p style="margin:0;color:#fff;font-size:12px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;opacity:0.8;text-align:${align};">${safeSalonName}</p>
+                <h1 style="margin:6px 0 0;color:#fff;font-size:22px;font-weight:800;text-align:${align};">${subject}</h1>
               </td>
             </tr>
             <tr>
@@ -80,7 +86,7 @@ export function renderChannelEmailHtml(params: { subject: string; bodyText: stri
             </tr>
             <tr>
               <td style="background:#f9fafb;padding:16px 36px;border-top:1px solid #e5e7eb;">
-                <p style="margin:0;color:#9ca3af;font-size:12px;text-align:center;">© ${new Date().getFullYear()} ${safeSalonName}. Automated notification.</p>
+                <p style="margin:0;color:#9ca3af;font-size:12px;text-align:center;">© ${new Date().getFullYear()} ${safeSalonName}. ${tr("email.automatedNotification")}</p>
               </td>
             </tr>
           </table>

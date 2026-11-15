@@ -13,6 +13,19 @@ import {
 import logger from "../../config/logger";
 import { googleStartQuerySchema } from "./auth.validator";
 
+/** The language the caller's screen is showing (optional `language` in the body). Only used to write the e-mail in it; unknown values mean English. */
+const readLanguage = (req: Request): string | undefined =>
+  typeof req.body?.language === "string" ? req.body.language : undefined;
+
+// An explicit clientType (body or X-Client-Type header) wins. Without one,
+// browsers are web and native/React-Native HTTP clients are mobile.
+function resolveClientType(req: Request): "mobile" | "web" {
+  const explicit = String(req.body?.clientType ?? req.headers["x-client-type"] ?? "").toLowerCase();
+  if (explicit === "mobile" || explicit === "web") return explicit;
+  const ua = String(req.headers["user-agent"] || "");
+  return /okhttp|cfnetwork|darwin|expo|react-?native/i.test(ua) ? "mobile" : "web";
+}
+
 function redirectToFrontend(
   res: Response,
   accessToken: string,
@@ -70,7 +83,9 @@ export const authController = {
 
   // ================= LOGIN =================
   async login(req: Request, res: Response, next: NextFunction) {
-    const email = String(req.body?.email || "")
+    // `identifier` is an email OR a connected-branch username (no "@"); `email` is still accepted for older clients.
+    // Kept in a variable called `email` because every limiter/log below keys on it.
+    const email = String(req.body?.identifier || req.body?.email || "")
       .toLowerCase()
       .trim();
     const password = String(req.body?.password || "");
@@ -83,19 +98,13 @@ export const authController = {
         logger.warn("Login validation failed", { email });
         throw new AppError(
           400,
-          "Email and password required",
+          "Email or username and password required",
           "VALIDATION_ERROR"
         );
       }
 
-      // An explicit clientType (body or X-Client-Type header) wins. Without one,
-      // browsers are web and native/React-Native HTTP clients are mobile.
-      const explicit = String(req.body?.clientType ?? req.headers["x-client-type"] ?? "").toLowerCase();
       const ua = String(req.headers["user-agent"] || "");
-      const clientType =
-        explicit === "mobile" || explicit === "web"
-          ? explicit
-          : /okhttp|cfnetwork|darwin|expo|react-?native/i.test(ua) ? "mobile" : "web";
+      const clientType = resolveClientType(req);
 
       const data = await authService.login({ email, password, clientType, ip, userAgent: ua });
 
@@ -145,6 +154,29 @@ export const authController = {
       }
 
       logger.error("Login error", { error, email, ip });
+      return next(error);
+    }
+  },
+
+  // ================= NATIVE GOOGLE LOGIN (mobile account picker) =================
+  async googleNativeLogin(req: Request, res: Response, next: NextFunction) {
+    const ip = String((req as any).ip || "");
+    try {
+      const idToken = String(req.body?.idToken || "").trim();
+      if (!idToken) {
+        throw new AppError(400, "idToken required", "VALIDATION_ERROR");
+      }
+
+      const data = await authService.loginWithGoogleIdToken({
+        idToken,
+        clientType: resolveClientType(req),
+        ip,
+        userAgent: String(req.headers["user-agent"] || ""),
+      });
+
+      logger.info("Google native login successful", { email: data.user.email, ip });
+      return sendSuccess(res, 200, data, "Login successful");
+    } catch (error) {
       return next(error);
     }
   },
@@ -210,7 +242,7 @@ export const authController = {
   async sendEmailOtp(req: Request, res: Response, next: NextFunction) {
     try {
       const email = String(req.body?.email || "").trim().toLowerCase();
-      const data = await authService.sendEmailOtp(email);
+      const data = await authService.sendEmailOtp(email, readLanguage(req));
       return sendSuccess(res, 200, data, "OTP sent");
     } catch (e) {
       return next(e);
@@ -232,7 +264,7 @@ export const authController = {
   async sendPasswordResetOtp(req: Request, res: Response, next: NextFunction) {
     try {
       const email = String(req.body?.email || "").trim().toLowerCase();
-      const data = await authService.forgotPasswordSendOtp(email);
+      const data = await authService.forgotPasswordSendOtp(email, readLanguage(req));
       return sendSuccess(res, 200, data, "Password reset request processed");
     } catch (e) {
       return next(e);
@@ -255,7 +287,7 @@ export const authController = {
       const email = String(req.body?.email || "").trim().toLowerCase();
       const otp = String(req.body?.otp || "").trim();
       const newPassword = String(req.body?.newPassword || "");
-      const data = await authService.resetPassword(email, otp, newPassword);
+      const data = await authService.resetPassword(email, otp, newPassword, readLanguage(req));
       return sendSuccess(res, 200, data, "Password reset successfully");
     } catch (e) {
       return next(e);

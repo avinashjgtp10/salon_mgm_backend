@@ -2,6 +2,7 @@ import { attendanceActivity } from "./attendance.activity";
 import logger from "../../config/logger";
 import { AppError } from "../../middleware/error.middleware";
 import { attendanceRepository } from "./attendance.repository";
+import { getSalonTimezone, salonWallClockAt } from "../../config/salonTimezone";
 import { notificationsService } from "../notifications/notifications.service";
 import {
     Attendance,
@@ -18,7 +19,10 @@ import {
     StaffPresence,
 } from "./attendance.types";
 import { loadStaffPresence } from "./attendance.presence";
+import { shiftWindow, zonedInstant } from "./staffAttendance.rules";
 import { getIO, salonRoom, salonStaffRoom } from "../../config/socket";
+import { getSalonDateLocale } from "../../config/currency";
+import { salonTranslator } from "../../config/i18n";
 
 // Invalidation only (no staff data is sent): open Calendars / Quick Sale screens refetch staff-presence
 // when they hear this, instead of polling for it.
@@ -28,8 +32,8 @@ export function emitAttendanceUpdated(salonId: string): void {
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
-function todayIST(): string {
-    return new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" }); // YYYY-MM-DD
+async function todayInSalon(salonId: string): Promise<string> {
+    return new Date().toLocaleDateString("en-CA", { timeZone: await getSalonTimezone(salonId) }); // YYYY-MM-DD
 }
 
 function parseTimeToMinutes(hhmm: string): number {
@@ -66,8 +70,9 @@ function calcStatus(
 
 const VALID_STATUSES: AttendanceStatus[] = ["present", "absent", "half_day", "late", "on_leave"];
 
-function istClock(timestamp: string) {
-    const ist = new Date(new Date(timestamp).getTime() + 330 * 60_000);
+function salonClock(timestamp: string, timeZone: string) {
+    const offsetMs = salonWallClockAt(new Date(timestamp), timeZone).getTime() - new Date(timestamp).getTime();
+    const ist = new Date(new Date(timestamp).getTime() + offsetMs);
     const hour = ist.getUTCHours();
     return {
         clock: `${String(hour % 12 || 12).padStart(2, "0")}:${String(ist.getUTCMinutes()).padStart(2, "0")} ${hour >= 12 ? "PM" : "AM"}`,
@@ -78,7 +83,7 @@ function istClock(timestamp: string) {
 async function attendanceStaffName(record: Attendance) {
     const details = await attendanceRepository.findById(record.id);
     if (!details || details.salon_id !== record.salon_id || details.staff_id !== record.staff_id) return null;
-    return details.staff_name?.trim() || "A staff member";
+    return details.staff_name?.trim() || "";
 }
 
 export async function notifyAttendancePunch(record: Attendance, action: "in" | "out"): Promise<void> {
@@ -86,15 +91,19 @@ export async function notifyAttendancePunch(record: Attendance, action: "in" | "
     try {
         const timestamp = action === "in" ? record.check_in : record.check_out;
         if (!timestamp) return;
-        const name = await attendanceStaffName(record);
-        if (!name) return;
-        const { clock, day } = istClock(timestamp);
+        // null = this attendance row does not belong to a staff member of the salon: send nothing (unchanged). A blank name falls back to a generic one.
+        const rawName = await attendanceStaffName(record);
+        if (rawName === null) return;
+        const nt = await salonTranslator(record.salon_id);
+        const name = rawName || nt("notify.attendance.staffFallback");
+        const { clock, day } = salonClock(timestamp, await getSalonTimezone(record.salon_id));
+        const kind = action === "in" ? "checkedIn" : "checkedOut";
         await notificationsService.create({
             salon_id: record.salon_id,
             reference_id: record.id,
             type: "attendance",
-            title: action === "in" ? "Staff Checked In" : "Staff Checked Out",
-            body: `${name} checked ${action} at ${clock} on ${day}.`,
+            title: nt(`notify.attendance.${kind}.title`),
+            body: nt(`notify.attendance.${kind}.body`, { name, clock, day }),
             event_key: "otherUpdates",
         }, { deduplicate: true, persistWhenPushDisabled: true });
     } catch (error: any) {
@@ -116,18 +125,22 @@ export async function notifyAttendanceBreak(
     try {
         const timestamp = action === "start" ? brk.actual_start : brk.actual_end;
         if (!timestamp) return;
-        const name = await attendanceStaffName(record);
-        if (!name) return;
-        const { clock, day } = istClock(timestamp);
-        const note = brk.note?.trim() ? ` Note: ${brk.note.trim()}` : "";
+        // null = this attendance row does not belong to a staff member of the salon: send nothing (unchanged). A blank name falls back to a generic one.
+        const rawName = await attendanceStaffName(record);
+        if (rawName === null) return;
+        const nt = await salonTranslator(record.salon_id);
+        const name = rawName || nt("notify.attendance.staffFallback");
+        const tz = await getSalonTimezone(record.salon_id);
+        const { clock, day } = salonClock(timestamp, tz);
+        const note = brk.note?.trim() ? nt("notify.attendance.breakNote", { note: brk.note.trim() }) : "";
         await notificationsService.create({
             salon_id: record.salon_id,
             reference_id: brk.id,
             type: "attendance",
-            title: action === "start" ? "Staff On Break" : "Staff Back From Break",
+            title: nt(action === "start" ? "notify.attendance.breakStart.title" : "notify.attendance.breakEnd.title"),
             body: action === "start"
-                ? `${name} started a break at ${clock} on ${day} (until ${istClock(brk.planned_end).clock}).${note}`
-                : `${name} returned from break at ${clock} on ${day}.`,
+                ? nt("notify.attendance.breakStart.body", { name, clock, day, until: salonClock(brk.planned_end, tz).clock, note })
+                : nt("notify.attendance.breakEnd.body", { name, clock, day }),
             event_key: "otherUpdates",
         }, { deduplicate: true, persistWhenPushDisabled: true });
     } catch (error: any) {
@@ -189,6 +202,23 @@ function fmtDuration(hours: number): string {
     return parts.join(" ");
 }
 
+const fmtDayLong = (ymd: string) =>
+    new Date(`${ymd}T00:00:00Z`).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric", timeZone: "UTC" });
+
+// A staff member can't start a new attendance day while an earlier one still has a check-in and no check-out. Used by every way
+// of checking in (manual, biometric / QR / GPS push, the staff app), so the rule is the same everywhere. Nothing is changed here:
+// the caller gets a PREVIOUS_CHECKOUT_PENDING error carrying the open record so the admin can complete that check-out first.
+export async function assertNoOpenPreviousSession(staffId: string, date: string): Promise<void> {
+    const open = await attendanceRepository.findOpenSessionBefore(staffId, date);
+    if (!open) return;
+    throw new AppError(
+        409,
+        `You have an incomplete attendance record from ${fmtDayLong(open.date)}. Please complete the previous day's check-out before marking today's attendance.`,
+        "PREVIOUS_CHECKOUT_PENDING",
+        { attendance_id: open.id, staff_id: open.staff_id, staff_name: open.staff_name ?? "", date: open.date, check_in: open.check_in },
+    );
+}
+
 export const attendanceService = {
 
     // ── Settings ──────────────────────────────────────────────────────────────
@@ -222,18 +252,73 @@ export const attendanceService = {
     // attendance-rules permission just to be filtered by it. Staff with no row
     // today are simply absent from the list; callers treat that as not checked in.
     async getStaffPresence(salonId: string): Promise<StaffPresence> {
-        const date = todayIST();
-        const [presence, breaks] = await Promise.all([
+        const date = await todayInSalon(salonId);
+        const [presence, breaks, shifts] = await Promise.all([
             loadStaffPresence(salonId, date),
             attendanceRepository.findActiveBreaks(salonId, date),
+            attendanceRepository.findTodayShifts(salonId, date),
         ]);
-        if (!presence) return { enabled: false, date, staff: [], breaks };
+        if (!presence) return { enabled: false, date, staff: [], breaks, shifts };
         return {
             enabled: true,
             date,
             staff: Array.from(presence, ([staff_id, state]) => ({ staff_id, state })),
             breaks,
+            shifts,
         };
+    },
+
+    // ── Manager-driven breaks (Calendar staff menu) ───────────────────────────
+
+    async startBreakForStaff(salonId: string, staffId: string, minutes: number, note?: string): Promise<Attendance> {
+        if (!Number.isFinite(minutes) || minutes < 1 || minutes > 240) throw new AppError(400, "Break length must be between 1 and 240 minutes", "INVALID_BREAK");
+        const date = await todayInSalon(salonId);
+        const existing = await attendanceRepository.findByStaffAndDate(staffId, date);
+        if (!existing?.check_in) throw new AppError(400, "Staff has not checked in yet", "NOT_CHECKED_IN");
+        if (existing.check_out) throw new AppError(400, "Staff has already checked out", "ALREADY_CHECKED_OUT");
+        if (existing.active_break) throw new AppError(409, "Staff is already on a break", "ALREADY_ON_BREAK");
+        const now = new Date();
+        const plannedEnd = new Date(now.getTime() + minutes * 60_000);
+        const trimmed = typeof note === "string" ? note.trim().slice(0, 500) || null : null;
+
+        // The database only accepts a break inside the attendance row's scheduled shift. A manager
+        // check-in leaves that window empty, so fill it from the staff member's assigned schedule.
+        let winStart = existing.scheduled_start ? new Date(existing.scheduled_start) : null;
+        let winEnd = existing.scheduled_end ? new Date(existing.scheduled_end) : null;
+        if (!winStart || !winEnd) {
+            const tz = await getSalonTimezone(salonId);
+            const win = shiftWindow(date, await attendanceRepository.findAssignedShift(staffId, date), tz);
+            // No assigned hours today: fall back to check-in .. end of the salon day so a manager can
+            // still record a break for someone who was checked in without a scheduled shift.
+            const start = win?.start ?? new Date(existing.check_in!);
+            const end = win?.end ?? zonedInstant(date, "23:59:59", tz);
+            await attendanceRepository.setScheduledWindow(existing.id, start.toISOString(), end.toISOString());
+            winStart = start; winEnd = end;
+        }
+        if (now < winStart || now >= winEnd) throw new AppError(400, "A break can only be taken during the scheduled shift.", "OUTSIDE_SHIFT");
+        if (plannedEnd > winEnd) throw new AppError(400, "The break would end after the scheduled shift ends. Choose an earlier return time.", "BREAK_PAST_SHIFT");
+
+        let brk;
+        try {
+            brk = await attendanceRepository.insertBreak(existing.id, now.toISOString(), plannedEnd.toISOString(), trimmed);
+        } catch (err: any) {
+            if (err?.code === "23505") throw new AppError(409, "Staff is already on a break", "ALREADY_ON_BREAK");
+            throw err;
+        }
+        logger.info("attendance.breakStart", { salonId, staffId, date, minutes });
+        void notifyAttendanceBreak(existing, brk, "start");
+        return existing;
+    },
+
+    async endBreakForStaff(salonId: string, staffId: string): Promise<Attendance> {
+        const date = await todayInSalon(salonId);
+        const existing = await attendanceRepository.findByStaffAndDate(staffId, date);
+        if (!existing?.active_break) throw new AppError(400, "Staff is not on a break", "NOT_ON_BREAK");
+        const brk = await attendanceRepository.endActiveBreak(existing.id, new Date().toISOString());
+        if (!brk) throw new AppError(409, "This break cannot be ended yet", "INVALID_RETURN");
+        logger.info("attendance.breakEnd", { salonId, staffId, date });
+        void notifyAttendanceBreak(existing, brk, "end");
+        return existing;
     },
 
     // ── Check In ──────────────────────────────────────────────────────────────
@@ -241,9 +326,10 @@ export const attendanceService = {
     async checkIn(salonId: string, body: CheckInBody): Promise<Attendance> {
         const { staff_id, check_in, status: clientStatus, note, location } = body;
         const checkInTs = check_in || new Date().toISOString();
-        const date = new Date(checkInTs).toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
+        const date = new Date(checkInTs).toLocaleDateString("en-CA", { timeZone: await getSalonTimezone(salonId) });
         const existing = await attendanceRepository.findByStaffAndDate(staff_id, date);
         if (existing?.check_in) throw new AppError(409, "Attendance already has a check-in. Staff on break must check in through their own app.", "ALREADY_CHECKED_IN");
+        await assertNoOpenPreviousSession(staff_id, date);
 
         const onLeave = await attendanceRepository.hasApprovedLeave(staff_id, date);
         if (onLeave) throw new AppError(400, "Staff member is on approved leave today", "ON_LEAVE");
@@ -275,7 +361,7 @@ export const attendanceService = {
     async checkOut(salonId: string, body: CheckOutBody): Promise<Attendance> {
         const { staff_id, check_out, note, location } = body;
         const checkOutTs = check_out || new Date().toISOString();
-        const date = new Date(checkOutTs).toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
+        const date = new Date(checkOutTs).toLocaleDateString("en-CA", { timeZone: await getSalonTimezone(salonId) });
 
         const existing = await attendanceRepository.findByStaffAndDate(staff_id, date);
         if (!existing) throw new AppError(400, "No check-in found for this staff today", "NOT_CHECKED_IN");
@@ -304,14 +390,51 @@ export const attendanceService = {
         return record;
     },
 
+    // ── Complete a forgotten check-out ────────────────────────────────────────
+
+    // Closes an earlier day that was left open (check-in, no check-out) with the check-out time the admin enters. It only fills
+    // in the missing check-out: the check-in and the day's date are untouched, hours are recomputed from the real check-in /
+    // check-out / breaks, and the status follows the same rule as a normal check-out. Never closes a day by itself.
+    async completeMissedCheckOut(salonId: string, id: string, checkOutTs: string, note?: string): Promise<Attendance> {
+        const existing = await attendanceRepository.findById(id);
+        if (!existing || existing.salon_id !== salonId) throw new AppError(404, "Attendance record not found", "NOT_FOUND");
+        if (!existing.check_in) throw new AppError(400, "This day has no check-in to close.", "NOT_CHECKED_IN");
+        if (existing.check_out) throw new AppError(409, "This day already has a check-out.", "ALREADY_CHECKED_OUT");
+        if (existing.active_break) throw new AppError(409, "Finish the break before checkout", "ON_BREAK");
+
+        const out = Date.parse(checkOutTs);
+        if (!Number.isFinite(out)) throw new AppError(400, "check_out must be a valid date and time", "VALIDATION_ERROR");
+        if (out <= Date.parse(existing.check_in)) throw new AppError(400, "You cannot check out before the check-in time. Select a time after check-in.", "INVALID_CHECKOUT");
+        if (out > Date.now() + 60_000) throw new AppError(400, "The check-out time cannot be in the future.", "INVALID_CHECKOUT");
+        // Overlap: the closed session must end before this staff member's next recorded check-in.
+        const nextIn = await attendanceRepository.findNextCheckInAfter(existing.staff_id, String(existing.date).slice(0, 10));
+        if (nextIn && out > Date.parse(nextIn)) {
+            throw new AppError(409, "That check-out is later than this staff member's next check-in. Choose an earlier time.", "OVERLAPPING_SESSION");
+        }
+
+        const hours = attendanceActivity(existing, existing.breaks, new Date(checkOutTs)).total_worked_seconds / 3600;
+        let status: AttendanceStatus = existing.status;
+        if (status !== "half_day") {
+            const settings = await attendanceService.getSettings(salonId);
+            status = calcStatus(existing.check_in, checkOutTs, settings, hours);
+        }
+        const record = await attendanceRepository.upsertCheckOut({
+            salonId, staffId: existing.staff_id, date: String(existing.date).slice(0, 10), checkOut: checkOutTs, status, hoursWorked: hours, note,
+        });
+        logger.info("attendance.completeMissedCheckOut", { salonId, staffId: existing.staff_id, attendanceId: id, status, hours });
+        emitAttendanceUpdated(salonId);
+        return record;
+    },
+
     // ── Device / Biometric Push ───────────────────────────────────────────────
 
     async push(salonId: string, body: PushAttendanceBody): Promise<Attendance> {
         const { staff_id, check_type, timestamp, source } = body;
         const ts = timestamp || new Date().toISOString();
-        const date = new Date(ts).toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
+        const date = new Date(ts).toLocaleDateString("en-CA", { timeZone: await getSalonTimezone(salonId) });
 
         if (check_type === "in") {
+            await assertNoOpenPreviousSession(staff_id, date);
             const onLeave = await attendanceRepository.hasApprovedLeave(staff_id, date);
             if (onLeave) {
                 const record = await attendanceRepository.upsert({
@@ -413,7 +536,7 @@ export const attendanceService = {
         summary: DailySummary;
         staff: TodayStaffRecord[];
     }> {
-        const date = dateParam || todayIST();
+        const date = dateParam || await todayInSalon(salonId);
         const dayOfWeek = new Date(date + "T12:00:00").getDay(); // 0=Sun…6=Sat, noon avoids DST edge cases
 
         const [allStaff, records, counts, scheduledMap] = await Promise.all([
@@ -523,6 +646,8 @@ export const attendanceService = {
 
     async exportCSV(salonId: string, year: number, month: number): Promise<{ buffer: Buffer; filename: string }> {
         const records = await attendanceRepository.getMonthlyForExport(salonId, year, month);
+        const tz = await getSalonTimezone(salonId);
+        const locale = await getSalonDateLocale(salonId);
 
         const headers = ["Date", "Staff Name", "Role", "Status", "Check In", "Check Out", "Break Time", "Actual Working Hours", "Source", "Note"];
         const rows = records.map(r => [
@@ -530,8 +655,8 @@ export const attendanceService = {
             r.staff_name ?? "",
             r.staff_role ?? "",
             r.status,
-            r.check_in  ? new Date(r.check_in).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })  : "",
-            r.check_out ? new Date(r.check_out).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" }) : "",
+            r.check_in  ? new Date(r.check_in).toLocaleString(locale, { timeZone: tz })  : "",
+            r.check_out ? new Date(r.check_out).toLocaleString(locale, { timeZone: tz }) : "",
             fmtDuration(Number((r as any).break_seconds ?? 0) / 3600),
             r.hours_worked != null ? fmtDuration(Number(r.hours_worked)) : "",
             r.source,

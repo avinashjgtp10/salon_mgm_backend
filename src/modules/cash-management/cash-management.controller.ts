@@ -3,10 +3,12 @@ import { NextFunction, Request, Response } from "express";
 import { AppError } from "../../middleware/error.middleware";
 import { sendSuccess } from "../utils/response.util";
 import { emailService } from "../utils/email.service";
+import { getSalonCurrency } from "../../config/currency";
 import { cashManagementService } from "./cash-management.service";
 import { checkDashboardSubPermission, redactFinancialSummaryFields } from "../salon-dashboard/salon-dashboard.controller";
 import type {
   CloseCounterBody,
+  EditCounterBody,
   CreateExpenseBody,
   OpenCounterBody,
   SummaryBundleBody,
@@ -235,6 +237,20 @@ export const cashManagementController = {
     }
   },
 
+  async editCounter(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const result = await cashManagementService.editCounter(
+        getSalonId(req),
+        getUserId(req),
+        String(req.params.id || ""),
+        (req.body ?? {}) as EditCounterBody,
+      );
+      return sendSuccess(res, 200, result, "Cash counter updated successfully");
+    } catch (error) {
+      return next(error);
+    }
+  },
+
   // Dashboard > Overall Collection's "Resend to WhatsApp" action — date is
   // the IST calendar date (YYYY-MM-DD) the counter OPENED on, matching how
   // that day's Cash Counter Closed message was originally computed.
@@ -294,8 +310,12 @@ export const cashManagementController = {
         return sendSuccess(res, 200, { sent: false }, "No recipient email provided");
       }
 
+      // The summary is for THIS salon: its language, and its currency (the amounts used to print in the default one).
+      const salonId = getSalonId(req);
       await emailService.sendDailySummaryEmail({
         to: recipientEmail,
+        salonId,
+        currency: await getSalonCurrency(salonId),
         summary: {
           openingBalance: Number(req.body?.opening_balance ?? req.body?.openingBalance ?? 0),
           cashRevenue: Number(req.body?.cash_revenue ?? req.body?.cashRevenue ?? 0),

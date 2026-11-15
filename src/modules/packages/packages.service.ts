@@ -7,6 +7,7 @@ import type {
   PackagesListQuery,
   Package,
 } from "./packages.types";
+import { getSalonCurrency, formatMoneyAscii } from "../../config/currency";
 
 export const packagesService = {
 
@@ -108,6 +109,7 @@ export const packagesService = {
     return new Promise(async (resolve, reject) => {
       try {
         const packages = await packagesRepository.listForExport(query);
+        const currency = await getSalonCurrency(query.salonId);
         const doc = new PDFDocument({ margin: 40, size: "A4" });
         const chunks: Buffer[] = [];
 
@@ -129,7 +131,7 @@ export const packagesService = {
               .text(`${i + 1}. ${p.name}`);
             doc.fontSize(10).font("Helvetica").fillColor("#333");
             doc.text(`  Category: ${p.category}   Duration: ${p.durationMinutes} min   Priority: ${p.priority}`);
-            doc.text(`  Base Price: Rs. ${p.basePrice}   Discount: ${p.discountValue} ${p.discountType}`);
+            doc.text(`  Base Price: ${formatMoneyAscii(p.basePrice, currency)}   Discount: ${p.discountValue} ${p.discountType}`);
             doc.text(`  Services: ${p.serviceIds.length}   Offers: ${p.offers.length}`);
             if (p.description) doc.text(`  ${p.description}`);
             doc.moveDown(0.6);

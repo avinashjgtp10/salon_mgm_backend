@@ -26,6 +26,8 @@ export type Salon = {
     pincode: string | null;
     timezone: string | null;
     currency: string | null;
+    /** The language the salon's screens, booking page, receipts and messages are shown in (src/config/language.ts). */
+    language: string | null;
     business_category: string | null;
     gst_registration_type: string | null;
     created_at: string;
@@ -54,6 +56,7 @@ export type CreateSalonBody = {
     pincode?: string;
     timezone?: string;
     currency?: string;
+    language?: string;
     business_category?: string;
     gst_registration_type?: string;
 };

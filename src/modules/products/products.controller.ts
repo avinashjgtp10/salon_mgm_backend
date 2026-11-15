@@ -330,6 +330,8 @@ export const productsController = {
             const file = (req.file as Express.Multer.File) ?? null;
             if (!file) throw new AppError(400, "No file uploaded", "VALIDATION_ERROR");
             const updateExisting = req.body?.updateExisting === "true" || req.body?.updateExisting === true;
+            // dry_run=true: run every check but save nothing (the import screen validates first, then asks the user to confirm).
+            const dryRun = String(req.body?.dry_run ?? req.query?.dry_run ?? "").toLowerCase() === "true";
             const result = await productsImportService.importProducts({
                 file: file.buffer,
                 filename: file.originalname,
@@ -337,8 +339,9 @@ export const productsController = {
                 requesterUserId: userId,
                 requesterRole: role,
                 updateExisting,
+                dryRun,
             });
-            return sendSuccess(res, 200, result, `Import completed: ${result.success} created, ${result.failed} failed, ${result.skipped} skipped`);
+            return sendSuccess(res, 200, result, `${dryRun ? "Dry run (nothing saved)" : "Import completed"}: ${result.success} created, ${result.failed} failed, ${result.skipped} skipped`);
         } catch (err) {
             logger.error("POST /products/import error", { err });
             return next(err);

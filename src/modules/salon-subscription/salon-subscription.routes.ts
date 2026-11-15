@@ -11,7 +11,16 @@ router.get("/plans", async (_req: Request, res: Response, next: NextFunction) =>
     } catch (err) { return next(err); }
 });
 
-router.get("/:salonId", async (req: Request, res: Response, next: NextFunction) => {
+// Registered owners who have no salon yet. Declared before "/:salonId" so that path isn't read as a salon id.
+router.get("/users-without-salon", async (req: Request, res: Response, next: NextFunction) => {
+    try {
+        const q = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : undefined);
+        const data = await salonSubscriptionService.usersWithoutSalon({ search: q(req.query.search), payment: q(req.query.payment), status: q(req.query.status) });
+        return res.json({ success: true, data });
+    } catch (err) { return next(err); }
+});
+
+router.get("/:salonId",async (req: Request, res: Response, next: NextFunction) => {
     try {
         return res.json({ success: true, data: await salonSubscriptionService.get(String(req.params.salonId)) });
     } catch (err) { return next(err); }
@@ -24,7 +33,15 @@ router.put("/:salonId/expiry", async (req: Request, res: Response, next: NextFun
     } catch (err) { return next(err); }
 });
 
-router.post("/:salonId", async (req: Request, res: Response, next: NextFunction) => {
+// For a user who has not created a salon yet; the plan is attached to the salon when onboarding creates it.
+router.post("/user/:userId", async (req: Request, res: Response, next: NextFunction) => {
+    try {
+        const data = await salonSubscriptionService.grantToUser(String(req.params.userId), req.body ?? {});
+        return res.status(201).json({ success: true, data });
+    } catch (err) { return next(err); }
+});
+
+router.post("/:salonId",async (req: Request, res: Response, next: NextFunction) => {
     try {
         const data = await salonSubscriptionService.grant(String(req.params.salonId), req.body ?? {});
         return res.status(201).json({ success: true, data });

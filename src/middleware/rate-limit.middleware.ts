@@ -25,7 +25,7 @@ export function makeLoginLimitKey(email: string, ip: string) {
  */
 export async function loginRateLimitCheck(req: any, res: any, next: any) {
   try {
-    const email = String(req.body?.email || "").toLowerCase().trim();
+    const email = String(req.body?.identifier || req.body?.email || "").toLowerCase().trim();
     const ip = req.ip;
 
     if (!email) return next(); // if no email, just continue

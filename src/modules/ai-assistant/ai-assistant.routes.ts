@@ -62,6 +62,25 @@ router.post(
     aiAssistantController.templateCopy
 );
 
+// Festival planner: the reminder card on the Marketing page. Read-only list + message drafts; nothing is ever sent from here.
+router.get(
+    "/festivals",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    requirePermission("use_ai_assistant"),
+    requireAnyPermission(MARKETING_PERMS),
+    aiAssistantController.festivals
+);
+
+router.post(
+    "/festival-copy",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    requirePermission("use_ai_assistant"),
+    requireAnyPermission(MARKETING_PERMS),
+    aiAssistantController.festivalCopy
+);
+
 router.post(
     "/campaign-insights",
     authMiddleware,

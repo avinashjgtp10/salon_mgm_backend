@@ -21,12 +21,13 @@ const FEEDBACK_FORM_BASE_URL =
 export const DEFAULT_PURCHASE_TEMPLATES: Record<
     | "client_welcome" | "package_purchased"
     | "membership_purchased" | "bill_receipt" | "appointment_confirmation" | "appointment_rescheduled"
-    | "appointment_cancelled" | "payment_received" | "package_expiring_7d" | "package_expiring_24h"
+    | "appointment_cancelled" | "appointment_no_show" | "payment_received" | "package_expiring_7d" | "package_expiring_24h"
     | "membership_expiring_7d" | "membership_expiring_24h" | "package_session_used"
     | "membership_session_used" | "package_appointment_reminder_24h" | "service_reminder_24h"
     | "reward_points_earned" | "referral_reward" | "ewallet_used" | "referral_credit_used" | "reward_points_used"
-    | "birthday_wishes" | "anniversary_wishes"
-    | "cash_counter_opened" | "cash_counter_closed",
+    | "birthday_wishes" | "anniversary_wishes" | "service_redo_reminder"
+    | "cash_counter_opened" | "cash_counter_closed"
+    | "cash_counter_opened_updated" | "cash_counter_closed_updated",
     {
         label: string;
         category: "UTILITY" | "MARKETING";
@@ -49,13 +50,13 @@ export const DEFAULT_PURCHASE_TEMPLATES: Record<
         label: "Package Purchased",
         category: "UTILITY",
         language: "en",
-        bodyText: "Hi {{customer_name}},\nThank you for purchasing our {{package_name}}!\n\nPackage: {{package_name}}\nServices: {{services}}\nSessions: {{total_sessions}}\nValid Until: {{expiry_date}}\nAmount: ₹{{package_value}}\nInvoice: {{invoice_number}}\n\nWe look forward to seeing you again. Book your next visit with us!",
+        bodyText: "Hi {{customer_name}},\nThank you for purchasing our {{package_name}}!\n\nPackage: {{package_name}}\nServices: {{services}}\nSessions: {{total_sessions}}\nValid Until: {{expiry_date}}\nAmount: ¤{{package_value}}\nInvoice: {{invoice_number}}\n\nWe look forward to seeing you again. Book your next visit with us!",
     },
     membership_purchased: {
         label: "Membership Purchased",
         category: "UTILITY",
         language: "en",
-        bodyText: "Hi {{customer_name}},\n\n🎉 Your {{membership_name}} is now active!\n\nMembership: {{membership_name}}\nBenefit: {{benefit}}\nStart Date: {{start_date}}\nValid Until: {{expiry_date}}\nMembership Price: ₹{{membership_price}}\nInvoice: {{invoice_number}}\n\nEnjoy your exclusive membership benefits on your future visits!",
+        bodyText: "Hi {{customer_name}},\n\n🎉 Your {{membership_name}} is now active!\n\nMembership: {{membership_name}}\nBenefit: {{benefit}}\nStart Date: {{start_date}}\nValid Until: {{expiry_date}}\nMembership Price: ¤{{membership_price}}\nInvoice: {{invoice_number}}\n\nEnjoy your exclusive membership benefits on your future visits!",
     },
     // Document-header Meta template — the bill PDF is submitted/sent as the
     // template's HEADER component (see wa-bill-receipt-template.helper.ts),
@@ -89,11 +90,19 @@ export const DEFAULT_PURCHASE_TEMPLATES: Record<
         language: "en",
         bodyText: "Hi {{customer_name}},\nYour appointment at {{salon_name}} has been cancelled.\nDate: {{appointment_date}}\nTime: {{appointment_time}}\nService: {{service_name}}\nIf you'd like to book another appointment, we're happy to help.",
     },
+    // Factual and non-promotional on purpose: submitted under UTILITY, and Meta
+    // rejects a UTILITY template that reads like a marketing message.
+    appointment_no_show: {
+        label: "Appointment Missed",
+        category: "UTILITY",
+        language: "en",
+        bodyText: "Hi {{customer_name}},\nWe missed you at {{salon_name}} for your appointment.\nDate: {{appointment_date}}\nTime: {{appointment_time}}\nService: {{service_name}}\nIf you would still like to visit, please reply to this message and we will be happy to reschedule.",
+    },
     payment_received: {
         label: "Payment Received (Appointment)",
         category: "UTILITY",
         language: "en",
-        bodyText: "Hi {{customer_name}},\nYour bill of ₹{{amount}} at {{salon_name}} has been successfully paid.\nAppointment: {{appointment_date}}\nTime: {{appointment_time}}\nThank you for choosing {{salon_name}} — we appreciate you!",
+        bodyText: "Hi {{customer_name}},\nYour bill of ¤{{amount}} at {{salon_name}} has been successfully paid.\nAppointment: {{appointment_date}}\nTime: {{appointment_time}}\nThank you for choosing {{salon_name}} — we appreciate you!",
     },
     package_expiring_7d: {
         label: "Package Expiring (7 Days)",
@@ -111,13 +120,13 @@ export const DEFAULT_PURCHASE_TEMPLATES: Record<
         label: "Membership Expiring (7 Days)",
         category: "UTILITY",
         language: "en",
-        bodyText: "Hi {{customer_name}},\nYour {{membership_name}} membership expires in 7 days.\nExpiry Date: {{expiry_date}}\nBalance Remaining: ₹{{remaining_balance}}\nMake the most of your remaining membership benefits before it expires.",
+        bodyText: "Hi {{customer_name}},\nYour {{membership_name}} membership expires in 7 days.\nExpiry Date: {{expiry_date}}\nBalance Remaining: ¤{{remaining_balance}}\nMake the most of your remaining membership benefits before it expires.",
     },
     membership_expiring_24h: {
         label: "Membership Expiring (Tomorrow)",
         category: "UTILITY",
         language: "en",
-        bodyText: "Hi {{customer_name}},\nYour {{membership_name}} membership expires tomorrow.\nRemaining Balance: ₹{{remaining_balance}}\nExpiry Date: {{expiry_date}}\nDon't let your remaining membership balance go unused.",
+        bodyText: "Hi {{customer_name}},\nYour {{membership_name}} membership expires tomorrow.\nRemaining Balance: ¤{{remaining_balance}}\nExpiry Date: {{expiry_date}}\nDon't let your remaining membership balance go unused.",
     },
     package_session_used: {
         label: "Package Session Used",
@@ -129,7 +138,7 @@ export const DEFAULT_PURCHASE_TEMPLATES: Record<
         label: "Membership Session Used",
         category: "UTILITY",
         language: "en",
-        bodyText: "Hi {{customer_name}},\nYour {{service_name}} service has been successfully redeemed from your membership.\nAmount Used: ₹{{amount_used}}\nRemaining Balance: ₹{{remaining_balance}}\nThank you for visiting {{salon_name}} — we appreciate you!",
+        bodyText: "Hi {{customer_name}},\nYour {{service_name}} service has been successfully redeemed from your membership.\nAmount Used: ¤{{amount_used}}\nRemaining Balance: ¤{{remaining_balance}}\nThank you for visiting {{salon_name}} — we appreciate you!",
     },
     package_appointment_reminder_24h: {
         label: "Package Appointment Reminder (Tomorrow)",
@@ -138,10 +147,11 @@ export const DEFAULT_PURCHASE_TEMPLATES: Record<
         bodyText: "Hi {{customer_name}},\nJust a reminder that you have an appointment tomorrow at {{salon_name}}.\nDate: {{appointment_date}}\nTime: {{appointment_time}}\nService: {{service_name}}\nThis appointment will use 1 session from your {{package_name}}.\nSee you tomorrow!",
     },
     service_reminder_24h: {
-        label: "Appointment Reminder (Tomorrow)",
+        label: "Appointment Reminder",
         category: "UTILITY",
         language: "en",
-        bodyText: "Hi {{customer_name}},\nThis is a reminder for your appointment tomorrow at {{salon_name}}.\nDate: {{appointment_date}}\nTime: {{appointment_time}}\nService: {{service_name}}\nStaff: {{staff_name}}\nWe look forward to seeing you tomorrow!",
+        // Sent 5 hours before the visit (see SERVICE_REMINDER_LEAD_HOURS), so the wording must not say "tomorrow".
+        bodyText: "Hi {{customer_name}},\nThis is a reminder for your upcoming appointment at {{salon_name}}.\nDate: {{appointment_date}}\nTime: {{appointment_time}}\nService: {{service_name}}\nStaff: {{staff_name}}\nWe look forward to seeing you!",
     },
     reward_points_earned: {
         label: "Reward Points Earned",
@@ -159,13 +169,13 @@ export const DEFAULT_PURCHASE_TEMPLATES: Record<
         label: "eWallet Used",
         category: "UTILITY",
         language: "en",
-        bodyText: "Hi {{customer_name}},\nYour eWallet was used for a payment at {{salon_name}}.\nAmount Used: ₹{{amount_used}}\nRemaining Balance: ₹{{remaining_balance}}\nThank you for choosing {{salon_name}} — we appreciate you!",
+        bodyText: "Hi {{customer_name}},\nYour eWallet was used for a payment at {{salon_name}}.\nAmount Used: ¤{{amount_used}}\nRemaining Balance: ¤{{remaining_balance}}\nThank you for choosing {{salon_name}} — we appreciate you!",
     },
     referral_credit_used: {
         label: "Referral Credit Used",
         category: "UTILITY",
         language: "en",
-        bodyText: "Hi {{customer_name}},\nYour Referral Balance was used for a payment at {{salon_name}}.\nAmount Used: ₹{{amount_used}}\nRemaining Referral Balance: ₹{{remaining_balance}}\nThank you for choosing {{salon_name}} — we appreciate you!",
+        bodyText: "Hi {{customer_name}},\nYour Referral Balance was used for a payment at {{salon_name}}.\nAmount Used: ¤{{amount_used}}\nRemaining Referral Balance: ¤{{remaining_balance}}\nThank you for choosing {{salon_name}} — we appreciate you!",
     },
     reward_points_used: {
         label: "Reward Points Used",
@@ -201,6 +211,13 @@ export const DEFAULT_PURCHASE_TEMPLATES: Record<
     // ones — same "one variable, multi-line value" trick bill_receipt's
     // {{items}} already uses, so the rendered message still shows each
     // payment method on its own line.
+    // Re-engagement nudge, so it goes to Meta as MARKETING (and honours the client's marketing opt-out).
+    service_redo_reminder: {
+        label: "Service Reminder (Time to Redo)",
+        category: "MARKETING",
+        language: "en",
+        bodyText: "Hi {{customer_name}},\nIt has been a while since your {{service_name}} at {{salon_name}} on {{last_visit_date}}.\nIt may be time for your next one. Reply to this message and we will help you book a slot.",
+    },
     cash_counter_opened: {
         label: "Cash Counter Opened",
         category: "UTILITY",
@@ -212,6 +229,19 @@ export const DEFAULT_PURCHASE_TEMPLATES: Record<
         category: "UTILITY",
         language: "en",
         bodyText: "*Cash Counter Closed — {{salon_name}}*\n\nYour cash counter has been closed for the day. Here is the collection summary for this session.\n\nDate: {{closing_date}}\nTime: {{closing_time}}\n\n*Collection Summary*\n{{collection_breakdown}}\n━━━━━━━━━━━━━━\n*Total Collection: {{total_collection}}*\nExpenses: {{expenses}}\nIn-Store Cash: {{in_store_cash}}\n\nThank you for reconciling today's cash counter.",
+    },
+    // Sent to the owner after an EDIT of an opened / closed counter is saved — carries the latest saved values.
+    cash_counter_opened_updated: {
+        label: "Cash Counter Updated (Opening)",
+        category: "UTILITY",
+        language: "en",
+        bodyText: "*Cash Counter Updated — {{salon_name}}*\n\nYour cash counter opening details have been updated successfully.\n\nDate: {{opening_date}}\nTime: {{opening_time}}\nOpening Cash Amount: {{opening_amount}}\n\nThank you!",
+    },
+    cash_counter_closed_updated: {
+        label: "Cash Counter Updated (Closing)",
+        category: "UTILITY",
+        language: "en",
+        bodyText: "*Cash Counter Updated — {{salon_name}}*\n\nYour cash counter closing details have been updated successfully.\n\nDate: {{closing_date}}\nTime: {{closing_time}}\n\n*Updated Collection Summary*\n{{collection_breakdown}}\n━━━━━━━━━━━━━━\n*Total Collection: {{total_collection}}*\nExpenses: {{expenses}}\nIn-Store Cash: {{in_store_cash}}\n\nThank you for reconciling today's cash counter.",
     },
 };
 
@@ -232,6 +262,7 @@ export const EVENT_VARIABLE_NAMES: Record<DefaultPurchaseEventType, string[]> = 
     appointment_confirmation: ["customer_name", "salon_name", "appointment_date", "appointment_time", "service_name", "staff_name"],
     appointment_rescheduled:  ["customer_name", "salon_name", "old_date", "old_time", "new_date", "new_time", "service_name", "staff_name"],
     appointment_cancelled:    ["customer_name", "salon_name", "appointment_date", "appointment_time", "service_name"],
+    appointment_no_show:      ["customer_name", "salon_name", "appointment_date", "appointment_time", "service_name"],
     payment_received:         ["customer_name", "amount", "salon_name", "appointment_date", "appointment_time"],
     package_expiring_7d:     ["customer_name", "package_name", "expiry_date", "remaining_sessions"],
     package_expiring_24h:    ["customer_name", "package_name", "remaining_sessions", "expiry_date"],
@@ -248,8 +279,11 @@ export const EVENT_VARIABLE_NAMES: Record<DefaultPurchaseEventType, string[]> = 
     reward_points_used:   ["customer_name", "points_used", "salon_name", "remaining_points"],
   birthday_wishes:      ["customer_name", "salon_name"],
   anniversary_wishes:   ["customer_name", "salon_name"],
+  service_redo_reminder: ["customer_name", "salon_name", "service_name", "last_visit_date"],
   cash_counter_opened:  ["salon_name", "opening_date", "opening_time", "opening_amount"],
   cash_counter_closed:  ["salon_name", "closing_date", "closing_time", "collection_breakdown", "total_collection", "expenses", "in_store_cash"],
+  cash_counter_opened_updated: ["salon_name", "opening_date", "opening_time", "opening_amount"],
+  cash_counter_closed_updated: ["salon_name", "closing_date", "closing_time", "collection_breakdown", "total_collection", "expenses", "in_store_cash"],
 };
 
 // Converts a salon's named-placeholder wording into Meta's required

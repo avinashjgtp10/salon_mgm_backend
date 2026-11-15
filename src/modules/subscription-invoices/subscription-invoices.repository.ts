@@ -2,6 +2,7 @@ import type { PoolClient } from "pg";
 import pool from "../../config/database";
 import { financialYearCode, round2 } from "./invoice-format";
 import { billingSchemaReady } from "../subscription-pricing/billing-schema";
+import { PLATFORM_BILLING_CURRENCY } from "../../config/currency";
 
 // Rows always reach callers with the salon's name/owner joined in (the list and the PDF both need them).
 // `currency` comes from the invoice once the country-billing columns exist, and is 'INR' before that (every older invoice is INR).
@@ -16,6 +17,8 @@ const selectInvoice = async () => `
     FROM subscription_invoices i
     JOIN salons sa ON sa.id = i.salon_id
     LEFT JOIN users ou ON ou.id = sa.owner_id`;
+
+let pdfColumn: Promise<boolean> | null = null;
 
 export interface InvoiceFilters {
     q?: string;
@@ -160,8 +163,8 @@ export const subscriptionInvoicesRepository = {
 
         // The payment is what the salon actually paid. In INR that includes GST, so it is split back into price + GST. A payment in
         // another currency is a plain invoice in that currency: no Indian GST is carved out of it.
-        const currency: string = p.currency ?? "INR";
-        const taxPercent = currency === "INR" ? gstPercent : 0;
+        const currency: string = p.currency ?? PLATFORM_BILLING_CURRENCY;
+        const taxPercent = currency === PLATFORM_BILLING_CURRENCY ? gstPercent : 0;
         const total = round2(Number(p.amount));
         const subtotal = taxPercent > 0 ? round2((total * 100) / (100 + taxPercent)) : total;
         const gst = round2(total - subtotal);
@@ -169,7 +172,7 @@ export const subscriptionInvoicesRepository = {
         const invoiceNo = await nextInvoiceNo(db, issued);
 
         // INR keeps the column default; another currency is written explicitly.
-        const withCurrency = currency !== "INR" && (await billingSchemaReady());
+        const withCurrency = currency !== PLATFORM_BILLING_CURRENCY && (await billingSchemaReady());
         const ins = await db.query(
             `INSERT INTO subscription_invoices
                 (invoice_no, salon_id, subscription_id, payment_id, plan_name, billing_cycle, period_start, period_end,
@@ -223,7 +226,7 @@ export const subscriptionInvoicesRepository = {
         if (existing.rows[0]) return { id: existing.rows[0].id as string, created: false };
 
         const invoiceNo = await nextInvoiceNo(db, u.issuedAt);
-        const overseas = !!u.currency && u.currency !== "INR";
+        const overseas = !!u.currency && u.currency !== PLATFORM_BILLING_CURRENCY;
         const ins = await db.query(
             `INSERT INTO subscription_invoices
                 (invoice_no, salon_id, subscription_id, payment_id, plan_name, billing_cycle, period_start, period_end,
@@ -250,6 +253,58 @@ export const subscriptionInvoicesRepository = {
 
     async markEmailed(id: string) {
         await pool.query(`UPDATE subscription_invoices SET emailed_at = NOW() WHERE id = $1`, [id]);
+    },
+
+    // The "send once" guard: only the caller whose UPDATE flips emailed_at from NULL gets true, so two webhook deliveries,
+    // a reconcile and a retry running together can never both send the email for the same invoice.
+    async claimEmail(id: string): Promise<boolean> {
+        const res = await pool.query(`UPDATE subscription_invoices SET emailed_at = NOW() WHERE id = $1 AND emailed_at IS NULL`, [id]);
+        return (res.rowCount ?? 0) > 0;
+    },
+
+    // The send failed: hand the claim back so a retry can send it. The invoice itself is never re-created.
+    async releaseEmailClaim(id: string) {
+        await pool.query(`UPDATE subscription_invoices SET emailed_at = NULL WHERE id = $1`, [id]);
+    },
+
+    // What the Payment Successful email prints beyond the invoice row: the owner, the payment date, and whether onboarding is done.
+    async paymentEmailContext(id: string) {
+        const { rows } = await pool.query(
+            `SELECT TRIM(CONCAT(ou.first_name, ' ', COALESCE(ou.last_name, ''))) AS owner_name,
+                    ou.first_name AS owner_first_name,
+                    COALESCE(ou.is_onboarding_complete, FALSE) AS onboarding_completed,
+                    p.paid_at, p.payment_status
+             FROM subscription_invoices i
+             JOIN salons sa ON sa.id = i.salon_id
+             LEFT JOIN users ou ON ou.id = sa.owner_id
+             LEFT JOIN subscription_payments p ON p.id = i.payment_id
+             WHERE i.id = $1`,
+            [id]
+        );
+        return rows[0] ?? null;
+    },
+
+    // Where the generated invoice PDF is kept (relative to the invoice storage folder). The column is added on first use, like the
+    // country-billing columns; if the database user may not alter tables, PDFs are simply regenerated on demand.
+    async pdfColumnReady(): Promise<boolean> {
+        if (pdfColumn === null) {
+            pdfColumn = pool
+                .query(`ALTER TABLE subscription_invoices ADD COLUMN IF NOT EXISTS pdf_path TEXT`)
+                .then(() => true)
+                .catch(() => false);
+        }
+        return pdfColumn;
+    },
+
+    async getPdfPath(id: string): Promise<string | null> {
+        if (!(await this.pdfColumnReady())) return null;
+        const { rows } = await pool.query(`SELECT pdf_path FROM subscription_invoices WHERE id = $1`, [id]);
+        return rows[0]?.pdf_path ?? null;
+    },
+
+    async setPdfPath(id: string, pdfPath: string) {
+        if (!(await this.pdfColumnReady())) return;
+        await pool.query(`UPDATE subscription_invoices SET pdf_path = $2 WHERE id = $1`, [id, pdfPath]);
     },
 
     async salonExists(salonId: string) {

@@ -3,8 +3,10 @@ import logger from "../../config/logger";
 import { AppError } from "../../middleware/error.middleware";
 import { staffCommissionsRepository, commissionSlabsRepository, commissionHistoryRepository } from "../staff/staffSettings.repository";
 import { commissionRulesRepository } from "../commissionRules/commissionRules.repository";
+import { getSalonTimezone } from "../../config/salonTimezone";
 import { clientMembershipsRepository } from "../client-memberships/client-memberships.repository";
 import { SaleItem } from "../sales/sales.types";
+import { normalizeDiscountAppliesTo, type DiscountScope } from "../pricing/pricing.engine";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -407,8 +409,10 @@ async function tryNewEngineRule(params: {
     // the caller in calculateForSale for the originalRevenue/revenue comparison.
     fullyCovered: boolean;
     inserts: Promise<any>[];
+    // Share of the bill received so far; scales a flat per-sale amount so a half-paid bill earns half of it.
+    paidRatio: number;
 }): Promise<boolean> {
-    const { salonId, saleId, appointmentId, staff_id, category, revenue, fullyCovered, inserts } = params;
+    const { salonId, saleId, appointmentId, staff_id, category, revenue, fullyCovered, inserts, paidRatio } = params;
     // services/products/memberships/packages map 1:1 onto the new engine's source enum
     const source = category as "services" | "products" | "memberships" | "packages";
 
@@ -441,20 +445,20 @@ async function tryNewEngineRule(params: {
     }
 
     // ── Milestone ladder ─────────────────────────────────────────────────────────
-    // Cumulative monthly revenue (IST month) unlocks one-time flat bonuses that STACK:
+    // Cumulative monthly revenue (salon-local month) unlocks one-time flat bonuses that STACK:
     // crossing ₹500 pays ₹50, then ₹1,000 adds ₹100, and so on. Owed = sum of rewards
     // for every step now reached; what to pay now = owed − already earned on this rule
     // this month. Using the SUM of commission_amount (not a row count) keeps this
     // correct even after a partial settlement splits a row in two.
     if (rule.type === "milestone_ladder") {
         const tiers = (rule.tiers ?? []) as { target: number; reward: number }[];
-        const IST = "Asia/Kolkata";
+        const salonTz = await getSalonTimezone(salonId);
         const { rows } = await pool.query(
             `SELECT COALESCE(SUM(revenue_amount),0)::float    AS revenue,
                     COALESCE(SUM(commission_amount),0)::float AS earned
              FROM commission_earned
              WHERE staff_id=$1 AND rule_id=$2
-               AND date_trunc('month', earned_at AT TIME ZONE '${IST}') = date_trunc('month', NOW() AT TIME ZONE '${IST}')`,
+               AND date_trunc('month', earned_at AT TIME ZONE '${salonTz}') = date_trunc('month', NOW() AT TIME ZONE '${salonTz}')`,
             [staff_id, rule.id]
         );
         const periodRevenue = parseFloat(rows[0]?.revenue ?? "0") + revenue;
@@ -489,12 +493,12 @@ async function tryNewEngineRule(params: {
     // "They receive [rate] when they generate [condition_target] based on [condition_metric]"
     let periodMetric: number | null = null;
     if (rule.condition_target && rule.condition_metric) {
-        const IST = "Asia/Kolkata";
+        const salonTz = await getSalonTimezone(salonId);
         // The threshold window follows the rule's Payout Frequency: a Daily rule's
-        // condition is a DAILY target (resets each IST day); anything else resets
+        // condition is a DAILY target (resets each salon-local day); anything else resets
         // monthly. It used to be monthly regardless, so a rule set to Daily with a
         // ₹5,000 condition was really asking for ₹5,000 over the whole month.
-        const dateClause = `AND date_trunc('${periodUnit}', earned_at AT TIME ZONE '${IST}') = date_trunc('${periodUnit}', NOW() AT TIME ZONE '${IST}')`;
+        const dateClause = `AND date_trunc('${periodUnit}', earned_at AT TIME ZONE '${salonTz}') = date_trunc('${periodUnit}', NOW() AT TIME ZONE '${salonTz}')`;
 
         const { rows: metricRows } = await pool.query(
             rule.condition_metric === "count"
@@ -562,8 +566,8 @@ async function tryNewEngineRule(params: {
         // already been paid out this period before awarding again. Only rows that
         // actually paid (commission_amount > 0) count — the ₹0 "remember this sale"
         // rows written below the threshold must not be mistaken for an award.
-        const IST = "Asia/Kolkata";
-        const dateClause = `AND date_trunc('${periodUnit}', earned_at AT TIME ZONE '${IST}') = date_trunc('${periodUnit}', NOW() AT TIME ZONE '${IST}')`;
+        const salonTz = await getSalonTimezone(salonId);
+        const dateClause = `AND date_trunc('${periodUnit}', earned_at AT TIME ZONE '${salonTz}') = date_trunc('${periodUnit}', NOW() AT TIME ZONE '${salonTz}')`;
         const { rows: alreadyPaidRows } = await pool.query(
             `SELECT 1 FROM commission_earned WHERE staff_id=$1 AND rule_id=$2 AND commission_amount > 0 ${dateClause} LIMIT 1`,
             [staff_id, rule.id]
@@ -614,7 +618,7 @@ async function tryNewEngineRule(params: {
     // percentage / fixed
     const commissionAmount = rule.type === "percentage"
         ? parseFloat((revenue * rate / 100).toFixed(2))
-        : rate;
+        : parseFloat((rate * paidRatio).toFixed(2));
 
     if (commissionAmount > 0) {
         inserts.push(
@@ -634,6 +638,82 @@ async function tryNewEngineRule(params: {
     }
 
     return true;
+}
+
+// ─── Eligible revenue: after discount, for what has actually been paid ─────────
+
+const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
+
+/** Pro-rata split of `amount` across `weights`; no entry is ever given more than its own weight. */
+function allocatePro(amount: number, weights: number[]): number[] {
+    const total = weights.reduce((sum, w) => sum + w, 0);
+    if (amount <= 0 || total <= 0) return weights.map(() => 0);
+    const capped = Math.min(amount, total);
+    return weights.map((w) => Math.min(w, round2((capped * w) / total)));
+}
+
+interface BillContext {
+    /** sales.discount_amount: manual + coupon + referral, PLUS membership wallet / membership discount used. */
+    discount: number;
+    /** The manual ("Bill Discount") part of it, the only part that follows the bill's "Apply to" scope. */
+    manualDiscount: number;
+    /** True when the sale's appointment (and so its "Apply to" selection) could be read. */
+    hasScope: boolean;
+    /** undefined = legacy bill (NULL discount_applies_to): everything except products. */
+    scope: DiscountScope[] | undefined;
+    /** Share of the bill already received, from the appointment's latest payment; null when unknown. */
+    paidRatio: number | null;
+}
+
+/**
+ * What the sale itself says about discount and payment. Every lookup is best-effort: on any failure the
+ * commission falls back to the sale items as they are (the behaviour before discount/partial support),
+ * never to a silent zero.
+ */
+async function loadBillContext(saleId: string, appointmentId?: string | null): Promise<BillContext> {
+    const ctx: BillContext = { discount: 0, manualDiscount: 0, hasScope: false, scope: undefined, paidRatio: null };
+    let total = 0;
+    try {
+        // SELECT * so a column an environment has not migrated yet (manual_discount_amount) just reads as undefined.
+        const { rows } = await pool.query(`SELECT * FROM sales WHERE id = $1`, [saleId]);
+        const sale = rows[0];
+        if (sale) {
+            ctx.discount = Math.max(0, Number(sale.discount_amount) || 0);
+            ctx.manualDiscount = Math.max(0, Number(sale.manual_discount_amount) || 0);
+            total = Number(sale.total_amount) || 0;
+        }
+    } catch (err) {
+        logger.warn("commissionCalculationService: sale discount lookup failed, using item prices as stored", { saleId, err });
+        return ctx;
+    }
+    if (!appointmentId) return ctx;
+
+    try {
+        const { rows } = await pool.query(`SELECT discount_applies_to FROM appointments WHERE id = $1`, [appointmentId]);
+        if (rows[0]) {
+            ctx.hasScope = true;
+            ctx.scope = normalizeDiscountAppliesTo(rows[0].discount_applies_to);
+        }
+    } catch (err) {
+        logger.warn("commissionCalculationService: discount scope lookup failed, spreading discount over the whole bill", { appointmentId, err });
+    }
+
+    try {
+        // due_amount is what was STILL owed after that payment, so it falls to 0 once the bill is settled.
+        const { rows } = await pool.query(
+            `SELECT due_amount FROM payments
+             WHERE appointment_id = $1 AND status IN ('completed', 'partial')
+             ORDER BY created_at DESC LIMIT 1`,
+            [appointmentId]
+        );
+        if (rows[0] && total > 0) {
+            const due = Math.max(0, Number(rows[0].due_amount) || 0);
+            ctx.paidRatio = Math.min(1, Math.max(0, 1 - due / total));
+        }
+    } catch (err) {
+        logger.warn("commissionCalculationService: payment lookup failed, treating the bill as fully paid", { appointmentId, err });
+    }
+    return ctx;
 }
 
 // ─── Calculation Service ──────────────────────────────────────────────────────
@@ -659,6 +739,10 @@ export const commissionCalculationService = {
         // those item_ids are actually packages, so they get the "packages" rate
         // instead of silently being billed at the "services" rate.
         packageItemIds?: Set<string>;
+        // Share of the bill actually received (0..1). Omit to read it from the appointment's latest payment;
+        // a sale with no payment on record counts as fully paid. Commission follows the money received:
+        // a half-paid bill earns half, and the rest is added when the balance is collected.
+        paidRatio?: number;
     }): Promise<void> {
         const { salonId, saleId, appointmentId, fallbackStaffId, items, packageItemIds } = params;
 
@@ -770,6 +854,57 @@ export const commissionCalculationService = {
                 commission: number;
             }[] = [];
 
+            // ── Eligible revenue per line ───────────────────────────────────────────
+            // sale_items.total_price is the line total after the ROW's own discount, but the bill-level
+            // discount (manual, coupon, referral, membership benefits) lives only on the sale, so the item
+            // prices still look full-price. Commission is on what the client was actually charged:
+            //   1. membership-wallet / package coverage comes off per line (as before),
+            //   2. the rest of the bill discount is spread over the lines it applies to,
+            //   3. the result is scaled by the share of the bill actually received.
+            const billCtx = await loadBillContext(saleId, appointmentId);
+            const ratio = Math.min(1, Math.max(0, params.paidRatio ?? billCtx.paidRatio ?? 1));
+
+            const lines = items.map((item) => {
+                const category = (item.item_id && packageItemIds?.has(item.item_id))
+                    ? "packages"
+                    : ITEM_TYPE_TO_CATEGORY[item.item_type];
+                // total_price already includes the quantity (quantity x unit price - row discount).
+                const original = parseFloat(String(item.total_price)) || 0;
+                let covered = original;
+                if (category === "services" && item.item_id && packageCoveredServiceIds.has(String(item.item_id))) {
+                    covered = 0;
+                } else if (category === "services" || category === "products") {
+                    const walletUsed = item.item_id ? (walletUsedByItem.get(String(item.item_id)) ?? 0) : 0;
+                    if (walletUsed > 0) covered = Math.max(0, covered - walletUsed);
+                }
+                return { category, original, covered };
+            });
+
+            // Wallet draws are already off the lines above, but they also sit inside sales.discount_amount.
+            const walletCovered = Array.from(walletUsedByItem.values()).reduce((sum, v) => sum + v, 0);
+            const residualDiscount = Math.max(0, billCtx.discount - walletCovered);
+            const manualPart = Math.min(residualDiscount, billCtx.manualDiscount);
+
+            const bucketOf = (c?: CommissionCategory): DiscountScope | null =>
+                c === "services" ? "service" : c === "packages" ? "packages"
+                    : c === "products" ? "product" : c === "memberships" ? "membership" : null;
+            const manualApplies = (c?: CommissionCategory): boolean => {
+                if (!c || c === "gift_cards") return false;
+                if (!billCtx.hasScope) return true;                   // no appointment: the whole bill
+                const bucket = bucketOf(c);
+                if (!bucket) return false;
+                if (billCtx.scope === undefined) return bucket !== "product"; // legacy bill: everything but products
+                return billCtx.scope.includes("bill") || billCtx.scope.includes(bucket);
+            };
+
+            const discountable = lines.map((l) => (l.category && l.category !== "gift_cards" ? l.covered : 0));
+            const manualShares = allocatePro(manualPart, discountable.map((w, i) => (manualApplies(lines[i].category) ? w : 0)));
+            const afterManual = discountable.map((w, i) => w - manualShares[i]);
+            // Coupon, referral and membership discounts (and any manual part nothing could absorb) reduce the
+            // whole bill pro rata.
+            const otherShares = allocatePro(residualDiscount - manualShares.reduce((sum, v) => sum + v, 0), afterManual);
+            const netRevenue = lines.map((l, i) => round2(Math.max(0, l.covered - manualShares[i] - otherShares[i]) * ratio));
+
             // Step 1: Group items by (staff_id, category) and sum revenue.
             // originalRevenue (pre-coverage) is tracked alongside revenue
             // (post-coverage) so Step 2 can tell "reduced to ₹0 by membership/
@@ -783,24 +918,17 @@ export const commissionCalculationService = {
                 originalRevenue: number;
             }>();
 
-            for (const item of items) {
+            for (let idx = 0; idx < items.length; idx++) {
+                const item = items[idx];
                 const staffId = item.staff_id || fallbackStaffId;
                 if (!staffId) continue; // no staff assigned — skip
 
-                const category = (item.item_id && packageItemIds?.has(item.item_id))
-                    ? "packages"
-                    : ITEM_TYPE_TO_CATEGORY[item.item_type];
+                const category = lines[idx].category;
                 if (!category) continue; // unknown item type — skip
 
                 const key            = `${staffId}::${category}`;
-                const originalRevenue = parseFloat(String(item.total_price)) * (item.quantity ?? 1);
-                let revenue           = originalRevenue;
-                if (category === "services" && item.item_id && packageCoveredServiceIds.has(String(item.item_id))) {
-                    revenue = 0;
-                } else if (category === "services" || category === "products") {
-                    const walletUsed = item.item_id ? (walletUsedByItem.get(String(item.item_id)) ?? 0) : 0;
-                    if (walletUsed > 0) revenue = Math.max(0, revenue - walletUsed);
-                }
+                const originalRevenue = lines[idx].original;
+                const revenue         = netRevenue[idx];
 
                 // A service with its own rate is settled here and deliberately
                 // kept OUT of the category grouping below — otherwise its revenue
@@ -818,7 +946,7 @@ export const commissionCalculationService = {
                         ? 0
                         : override.kind === "percentage"
                             ? parseFloat((revenue * override.rate / 100).toFixed(2))
-                            : parseFloat((override.rate * (item.quantity ?? 1)).toFixed(2));
+                            : parseFloat((override.rate * (item.quantity ?? 1) * ratio).toFixed(2));
                     overrideEarnings.push({
                         staff_id: staffId, revenue, rate: override.rate,
                         kind: override.kind, commission,
@@ -881,7 +1009,7 @@ export const commissionCalculationService = {
                     // fall through to the legacy path below. ──────────────────────────────────
                     if (category !== "gift_cards" && category !== "cancellation") {
                         const handled = await tryNewEngineRule({
-                            salonId, saleId, appointmentId, staff_id, category, revenue, fullyCovered, inserts,
+                            salonId, saleId, appointmentId, staff_id, category, revenue, fullyCovered, inserts, paidRatio: ratio,
                         });
                         if (handled) continue;
                     }
@@ -918,10 +1046,10 @@ export const commissionCalculationService = {
                     // Used for threshold checks; commission amount is always on current sale revenue.
                     let periodRevenue = revenue;
                     try {
-                        const IST = "Asia/Kolkata";
+                        const salonTz = await getSalonTimezone(salonId);
                         const dateClause = period === "daily"
-                            ? `AND date_trunc('day', earned_at AT TIME ZONE '${IST}') = date_trunc('day', NOW() AT TIME ZONE '${IST}')`
-                            : `AND date_trunc('month', earned_at AT TIME ZONE '${IST}') = date_trunc('month', NOW() AT TIME ZONE '${IST}')`;
+                            ? `AND date_trunc('day', earned_at AT TIME ZONE '${salonTz}') = date_trunc('day', NOW() AT TIME ZONE '${salonTz}')`
+                            : `AND date_trunc('month', earned_at AT TIME ZONE '${salonTz}') = date_trunc('month', NOW() AT TIME ZONE '${salonTz}')`;
 
                         const { rows: prevRows } = await pool.query(
                             `SELECT COALESCE(SUM(revenue_amount), 0)::float AS total
@@ -987,8 +1115,8 @@ export const commissionCalculationService = {
                                 // Fixed: for every ₹target in current sale → ₹value
                                 slabCommission = parseFloat((Math.floor(revenue / target) * value).toFixed(2));
                             } else {
-                                // Flat amount — always apply
-                                slabCommission = value;
+                                // Flat amount — always apply (scaled by the share of the bill received)
+                                slabCommission = parseFloat((value * ratio).toFixed(2));
                             }
                             totalCommission += slabCommission;
                         }
@@ -1037,7 +1165,7 @@ export const commissionCalculationService = {
                         } else if (revenueTarget > 0) {
                             commissionAmount = parseFloat((Math.floor(revenue / revenueTarget) * rate).toFixed(2));
                         } else {
-                            commissionAmount = rate;
+                            commissionAmount = parseFloat((rate * ratio).toFixed(2));
                         }
 
                         if (commissionAmount <= 0) continue;

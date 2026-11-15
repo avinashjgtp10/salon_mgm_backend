@@ -10,6 +10,7 @@ import { notificationsService } from '../../../notifications/notifications.servi
 import { getIO } from '../../../../config/socket'
 import { templatesService } from '../templates/templates.service'
 import { BookingFormConfig, DEFAULT_BOOKING_CONFIG, MAX_SERVICES as DROPDOWN_CAP, normalizeBookingConfig, timeOptions } from './booking-form.config'
+import { salonTranslator } from '../../../../config/i18n'
 
 // Flow JSON schema version. Meta freezes old versions (5.0 can no longer be
 // published as of Sept 2025) and currently recommends 7.3. If Meta rejects this
@@ -228,10 +229,11 @@ export const flowsService = {
     } catch (err: any) {
       // Never fail silently: the customer replied expecting the form, so tell
       // staff to send it by hand.
+      const nt = await salonTranslator(salonId)
       notificationsService.create({
         salon_id: salonId, type: 'whatsapp',
-        title: 'Booking form not sent',
-        body:  `Could not auto-send the booking form to ${normalizedPhone}. Open the chat and send it manually.`,
+        title: nt('notify.whatsapp.formNotSent.title'),
+        body:  nt('notify.whatsapp.formNotSent.body', { phone: normalizedPhone }),
         event_key: 'newMessage', contact_phone: phone,
       }).catch(() => {})
       throw err
@@ -417,7 +419,7 @@ export const flowsService = {
 
     notificationsService.create({
       salon_id: salonId, type: 'whatsapp',
-      title: `Booking request: ${name}`,
+      title: (await salonTranslator(salonId))('notify.whatsapp.bookingRequest.title', { name }),
       body:  summary.length > 80 ? summary.slice(0, 77) + '…' : summary,
       event_key: 'newMessage', contact_phone: fromPhone,
     }).catch(() => {})

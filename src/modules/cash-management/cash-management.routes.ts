@@ -20,6 +20,8 @@ const viewCash = requirePermission("view_cash_management");
 // cashManagement.export.ts) — no backend route to gate.
 const openCounter = requirePermission("open_counter");
 const closeCounter = requirePermission("close_counter");
+// Edit an already opened/closed counter (opening balance; in-store cash + remarks once closed).
+const editCounter = requirePermission("edit_counter");
 const addExpense = requirePermission("add_expense");
 const editExpense = requirePermission("edit_expense");
 const deleteExpense = requirePermission("delete_expense");
@@ -41,6 +43,7 @@ router.post("/expenses", ...guard, addExpense, cashManagementController.createEx
 router.put("/expenses/:id", ...guard, editExpense, cashManagementController.updateExpense);
 router.delete("/expenses/:id", ...guard, deleteExpense, cashManagementController.deleteExpense);
 router.post("/close", ...guard, closeCounter, cashManagementController.closeCounter);
+router.put("/counters/:id", ...guard, editCounter, cashManagementController.editCounter);
 router.post("/resend-closed-message", ...guard, viewCash, cashManagementController.resendClosedCounterMessage);
 router.post("/send-summary-email", ...guard, viewCash, upload.single("file"), cashManagementController.sendSummaryEmail);
 router.post("/email-summary", ...guard, viewCash, upload.single("file"), cashManagementController.sendSummaryEmail);

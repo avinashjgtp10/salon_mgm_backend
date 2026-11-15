@@ -45,6 +45,8 @@ export interface CreateClientPackageDTO {
   expiryDate:     string;
   basePrice:      number;
   gstPercentage:  number;
+  /** basePrice already contains the tax (price-inclusive VAT) — gstAmount is carved out of it and the total is not increased. */
+  taxInclusive?:  boolean;
   discount:       number;
   /** Optional override for the computed (basePrice − discount + gstAmount)
    *  total — pass the exact figure the caller displayed/confirmed (e.g. the

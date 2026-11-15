@@ -1,7 +1,7 @@
 import pool from '../../../../config/database'
 import { v4 as uuid } from 'uuid'
 import { WAConversation, WAMessage } from './inbox.types'
-import { clientPhoneKey } from '../../../clients/clients.phone'
+import { clientPhoneKey, clientPhoneKeySql } from '../../../clients/clients.phone'
 
 // ── Normalize phone to E.164 format — second layer of defense ─────────────────
 function normalizePhone(phone: string): string {
@@ -281,7 +281,7 @@ export const inboxRepository = {
       ) pay ON true
       LEFT JOIN client_memberships cm ON cm.client_id = c.id AND cm.status = 'active'
       WHERE c.salon_id = $1
-        AND RIGHT(REGEXP_REPLACE(COALESCE(c.phone_number, ''), '[^0-9]', '', 'g'), 10) = $2
+        AND ${clientPhoneKeySql('c.phone_number')} = $2
       LIMIT 1
     `, [salonId, key])
     return rows[0] ?? null

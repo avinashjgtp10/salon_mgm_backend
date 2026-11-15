@@ -13,6 +13,9 @@ import {
   PURCHASE_EVENTS,
 } from './whatsapp-automation.types'
 import { DEFAULT_PURCHASE_TEMPLATES, isPurchaseEventType } from './wa-automation-defaults'
+import { translationFor } from '../../config/i18n'
+import { DEFAULT_LANGUAGE, getSalonLanguage } from '../../config/language'
+import { applyCurrencyMarker, getSalonCurrency } from '../../config/currency'
 
 export const whatsappAutomationRepository = {
 
@@ -88,6 +91,13 @@ export const whatsappAutomationRepository = {
     if (!isPurchaseEventType(eventType)) throw new Error(`Not a purchase event type: ${eventType}`)
 
     const defaults = DEFAULT_PURCHASE_TEMPLATES[eventType]
+    // A salon whose language has wording for this event gets it (and the template is submitted to Meta in that
+    // language); otherwise it gets the English default exactly as before.
+    const salonLanguage = await getSalonLanguage(salonId)
+    const localized = salonLanguage === DEFAULT_LANGUAGE ? undefined : translationFor(salonLanguage, `messages.wa.${eventType}`)
+    const templateLanguage = localized ? salonLanguage : defaults.language
+    // The wording carries a currency marker (¤{{amount}}); the salon's own copy gets its currency's sign.
+    const bodyText = applyCurrencyMarker(localized ?? defaults.bodyText, await getSalonCurrency(salonId))
     const { rows: inserted } = await pool.query(
       `INSERT INTO wa_automation_templates
          (salon_id, event_type, template_name, language, is_active, status, category, body_text,
@@ -96,7 +106,7 @@ export const whatsappAutomationRepository = {
        ON CONFLICT (salon_id, event_type) WHERE salon_id IS NOT NULL DO NOTHING
        RETURNING *`,
       [
-        salonId, eventType, `${eventType}_draft`, defaults.language, defaults.category, defaults.bodyText,
+        salonId, eventType, `${eventType}_draft`, templateLanguage, defaults.category, bodyText,
         !!defaults.button, defaults.button?.text ?? null, defaults.button?.urlBase ?? null,
       ]
     )

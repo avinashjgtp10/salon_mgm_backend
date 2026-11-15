@@ -1,5 +1,6 @@
 import pool from "../../config/database";
 import { buildStaffNotificationContent, StaffAppointmentRow } from "./staffNotificationContent";
+import { salonTranslator } from "../../config/i18n";
 
 export const isStaffAccount = (role?: string | null) =>
   ["staff", "employee", "stylist", "team_member", "team-member"].includes((role ?? "").toLowerCase());
@@ -29,7 +30,7 @@ export async function appointmentStaffNotifications(salonId: string, appointment
            COALESCE(a.membership_items::jsonb, '[]'::jsonb)
          ) item
          WHERE item->>'staff_id' = s.id::text))`, [salonId, appointmentId]);
-  return buildStaffNotificationContent(rows);
+  return buildStaffNotificationContent(rows, await salonTranslator(salonId));
 }
 
 export async function ownStaffId(userId: string, salonId: string): Promise<string | null> {

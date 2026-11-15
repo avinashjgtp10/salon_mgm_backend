@@ -41,6 +41,8 @@ export type Client = {
     has_whatsapp: boolean;
 
     client_source: string | null;
+    // Set once staff answered the post-checkout "where did the client come from?" prompt.
+    source_asked_at?: string | null;
     referred_by_client_id: string | null;
 
     preferred_language: string | null;
@@ -183,6 +185,8 @@ export type CreateClientBody = {
     has_whatsapp?: boolean;
 
     client_source?: string | null;
+    // true = record that the checkout source prompt has been answered for this client (sets source_asked_at).
+    source_asked?: boolean;
     referred_by_client_id?: string | null;
     // Referral code of the client who referred this one — only meaningful at
     // creation time (a client's first visit); resolved to referred_by_client_id

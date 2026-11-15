@@ -231,6 +231,7 @@ export const staffService = {
 
                 emailService.sendStaffInvitation({
                     to: staff.email,
+                    salonId,
                     token: invitation.token,
                     staffFirstName: body.first_name,
                     salonName,
@@ -798,6 +799,7 @@ export const staffInvitationService = {
 
         emailService.sendStaffInvitation({
             to: staff.email,
+            salonId,
             token: invitation.token,
             staffFirstName: staff.first_name ?? "Team Member",
             salonName: resolvedSalonName,
@@ -1031,6 +1033,9 @@ export const staffSchedulesService = {
 // ─── Leaves ───────────────────────────────────────────────────────────────────
 
 export const staffLeavesService = {
+    async report(salonId: string, from?: string, to?: string) {
+        return staffLeavesRepository.listBySalon(salonId, from, to);
+    },
     async list(staffId: string, salonId: string, from?: string, to?: string): Promise<StaffLeave[]> {
         await _ensureStaff(staffId, salonId);
         return staffLeavesRepository.listByStaffId(staffId, from, to);

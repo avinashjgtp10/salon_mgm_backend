@@ -1,3 +1,4 @@
+import { getSalonTimezone } from "../../config/salonTimezone";
 import pool from "../../config/database";
 import { attendanceRepository } from "./attendance.repository";
 import { Request, Response, NextFunction } from "express";
@@ -64,7 +65,14 @@ export const attendanceController = {
                 ? (await staffSelfCheckIn(req.user!.userId, salonId)).record
                 : await attendanceService.checkIn(salonId, req.body as CheckInBody);
             return sendSuccess(res, 200, record, "Checked in successfully");
-        } catch (err) { return next(err); }
+        } catch (err) {
+            // The admin web screen resolves an unfinished earlier day in a dialog, so this is an answer, not a failure: 200 with the
+            // pending record and nothing checked in. (Biometric / QR pushes and the staff app keep getting the 409 error.)
+            if (err instanceof AppError && err.code === "PREVIOUS_CHECKOUT_PENDING" && !isMobileStaffRequest(req)) {
+                return sendSuccess(res, 200, { checked_in: false, requires_previous_checkout: true, pending: err.details }, err.message);
+            }
+            return next(err);
+        }
     },
 
     async checkOut(req: AuthRequest, res: Response, next: NextFunction) {
@@ -76,6 +84,50 @@ export const attendanceController = {
                 ? (await staffSelfCheckOut(req.user!.userId, salonId)).record
                 : await attendanceService.checkOut(salonId, req.body as CheckOutBody);
             return sendSuccess(res, 200, record, "Checked out successfully");
+        } catch (err) { return next(err); }
+    },
+
+    // Manager/owner starts or ends a break on a staff member's behalf (web Calendar). Staff on the
+    // mobile app use their own /mobile-staff break flow, so this is web-only.
+    async startBreak(req: AuthRequest, res: Response, next: NextFunction) {
+        try {
+            const salonId = req.user?.salonId;
+            if (!salonId) throw new AppError(403, "Salon context required", "NO_SALON_CONTEXT");
+            if (isMobileStaffRequest(req)) throw new AppError(403, "Use the staff app to take a break", "FORBIDDEN");
+            const staffId = String(req.body?.staff_id || "");
+            if (!staffId) throw new AppError(400, "staff_id is required", "VALIDATION_ERROR");
+            await assertStaffScope(req, staffId);
+            const record = await attendanceService.startBreakForStaff(salonId, staffId, Number(req.body?.minutes), req.body?.note);
+            return sendSuccess(res, 200, record, "Break started");
+        } catch (err) { return next(err); }
+    },
+
+    async endBreak(req: AuthRequest, res: Response, next: NextFunction) {
+        try {
+            const salonId = req.user?.salonId;
+            if (!salonId) throw new AppError(403, "Salon context required", "NO_SALON_CONTEXT");
+            if (isMobileStaffRequest(req)) throw new AppError(403, "Use the staff app to end a break", "FORBIDDEN");
+            const staffId = String(req.body?.staff_id || "");
+            if (!staffId) throw new AppError(400, "staff_id is required", "VALIDATION_ERROR");
+            await assertStaffScope(req, staffId);
+            const record = await attendanceService.endBreakForStaff(salonId, staffId);
+            return sendSuccess(res, 200, record, "Break ended");
+        } catch (err) { return next(err); }
+    },
+
+    // Completes a forgotten check-out on an earlier day (see attendanceService.completeMissedCheckOut).
+    async completeMissedCheckOut(req: AuthRequest, res: Response, next: NextFunction) {
+        try {
+            const salonId = req.user?.salonId;
+            if (!salonId) throw new AppError(403, "Salon context required", "NO_SALON_CONTEXT");
+            const id = String(req.params.id || "").trim();
+            const checkOut = String(req.body?.check_out || "").trim();
+            if (!id || !checkOut) throw new AppError(400, "id and check_out are required", "VALIDATION_ERROR");
+            const existing = await attendanceRepository.findById(id);
+            if (!existing) throw new AppError(404, "Attendance not found", "NOT_FOUND");
+            await assertStaffScope(req, existing.staff_id);
+            const record = await attendanceService.completeMissedCheckOut(salonId, id, checkOut, typeof req.body?.note === "string" ? req.body.note : undefined);
+            return sendSuccess(res, 200, record, "Previous check-out completed");
         } catch (err) { return next(err); }
     },
 
@@ -203,7 +255,7 @@ export const attendanceController = {
         try {
             const salonId = req.user?.salonId;
             if (!salonId) throw new AppError(403, "Salon context required", "NO_SALON_CONTEXT");
-            const date = String(req.query.date || "").trim() || new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
+            const date = String(req.query.date || "").trim() || new Date().toLocaleDateString("en-CA", { timeZone: await getSalonTimezone(salonId) });
             if (isMobileStaffRequest(req)) throw new AppError(403, "Use your own attendance history", "FORBIDDEN");
             const data = await attendanceService.getDailySummary(salonId, date);
             return sendSuccess(res, 200, data, "Daily summary fetched");

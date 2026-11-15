@@ -4,6 +4,7 @@ import { spotlightRepository } from "./spotlight.repository";
 import { salonsRepository } from "../salons/salons.repository";
 import { notificationsService } from "../notifications/notifications.service";
 import { SpotlightCreateBody, SpotlightFeature, SpotlightUpdateBody } from "./spotlight.types";
+import { salonTranslator } from "../../config/i18n";
 
 async function getOwned(id: string): Promise<SpotlightFeature> {
     const feature = await spotlightRepository.findById(id);
@@ -45,10 +46,11 @@ async function broadcastPublishNotification(feature: SpotlightFeature): Promise<
     logger.info("[SPOTLIGHT] broadcasting publish notification", { featureId: feature.id, salonCount: salonIds.length });
 
     for (const salonId of salonIds) {
+        const nt = await salonTranslator(salonId);
         notificationsService.create({
             salon_id: salonId,
             type: "spotlight",
-            title: "New Feature Added",
+            title: nt("notify.spotlight.title"),
             body: `${feature.featureName} — ${feature.shortDescription}`,
             event_key: "spotlightFeature",
             spotlight_feature_id: feature.id,

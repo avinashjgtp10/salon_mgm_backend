@@ -1,6 +1,7 @@
 import ExcelJS from "exceljs";
 import { randomUUID } from "crypto";
 import logger from "../../config/logger";
+import { getSalonTimezone } from "../../config/salonTimezone";
 import { AppError } from "../../middleware/error.middleware";
 import { assertModuleUnlocked } from "../../middleware/moduleLock.middleware";
 import { appointmentsRepository } from "./appointments.repository";
@@ -31,7 +32,7 @@ import { sendReceiptDocument } from "../sales/receipt-whatsapp.service";
 import { sendPurchaseReceipt, getPurchaseReceiptPdf } from "../sales/receipt-send.helper";
 import type { ActiveTaxRow } from "../pricing/pricing.engine";
 import { computeAppointmentTotals } from "./appointment-totals";
-import { getActiveTaxes } from "../settings/tax.util";
+import { getActiveTaxes, arePackageTaxesInclusive } from "../settings/tax.util";
 import { paymentsRepository } from "../payments/payments.repository";
 import { clientPackagesService } from "../client-packages/client-packages.service";
 import { clientPackagesRepository } from "../client-packages/client-packages.repository";
@@ -48,6 +49,8 @@ import {
     CancelAppointmentBody,
     TipBreakdownEntry,
 } from "./appointments.types";
+import { getBillRoundingUnit, formatSalonMoney, getSalonCurrency, getSalonDateLocale } from "../../config/currency";
+import { salonTranslator } from "../../config/i18n";
 
 // A "Booked" (never paid) appointment has no persisted, tax-inclusive total
 // anywhere — `appointments` only stores the raw inputs (discount, ex_charges,
@@ -107,9 +110,9 @@ function needsTaxBackfill(appt: Appointment): boolean {
     return !!appt.last_payment_at && toUtcMs(appt.updated_at) > toUtcMs(appt.last_payment_at);
 }
 
-function backfillTaxBreakdown(appt: Appointment, activeTaxes: ActiveTaxRow[]): Appointment {
+function backfillTaxBreakdown(appt: Appointment, activeTaxes: ActiveTaxRow[], roundingUnit: number = 1): Appointment {
     if (!needsTaxBackfill(appt)) return appt;
-    const result = computeAppointmentTotals(appt, activeTaxes);
+    const result = computeAppointmentTotals(appt, activeTaxes, roundingUnit);
     // result.grandTotal is the pure revenue figure (tip excluded, matches
     // sales.total_amount) — computed_grand_total is display-only (calendar
     // tooltip/chip, never written back), so tip is added back on for the
@@ -245,6 +248,7 @@ async function notifyNewlyReadyStaff(before: Appointment, after: Appointment, sa
         readyByStaff.set(row.staff_id, [...(readyByStaff.get(row.staff_id) ?? []), row.name]);
     });
 
+    const nt = await salonTranslator(salonId);
     for (const [staffId, serviceNames] of readyByStaff) {
         const staff = await staffService.getById(staffId, salonId).catch(() => null);
         if (!staff?.is_active || !staff.user_id) continue;
@@ -253,8 +257,8 @@ async function notifyNewlyReadyStaff(before: Appointment, after: Appointment, sa
             type: "appointment",
             reference_id: after.id,
             target_staff_user_id: staff.user_id,
-            title: "It's your turn",
-            body: `${after.client_name ?? "Walk-in"} is ready for ${serviceNames.join(", ")}`,
+            title: nt("notify.yourTurn.title"),
+            body: nt("notify.yourTurn.body", { client: after.client_name ?? nt("notify.walkIn"), services: serviceNames.join(", ") }),
         });
     }
 }
@@ -264,9 +268,9 @@ async function notifyNewlyReadyStaff(before: Appointment, after: Appointment, sa
 // DD-MM-YYYY — matches the frontend's app-wide standard date format (see
 // src/utils/dateFormat.ts's formatDateDDMMYYYY on the frontend), used here so
 // notification text (e.g. "New Appointment Booked") reads the same way.
-function formatDate(dateStr: string): string {
+function formatDate(dateStr: string, timeZone: string): string {
     const parts = new Intl.DateTimeFormat("en-GB", {
-        timeZone: "Asia/Kolkata",
+        timeZone,
         day: "2-digit", month: "2-digit", year: "numeric",
     }).formatToParts(new Date(dateStr));
     const day = parts.find(p => p.type === "day")?.value ?? "";
@@ -275,9 +279,9 @@ function formatDate(dateStr: string): string {
     return `${day}-${month}-${year}`;
 }
 
-function formatTime(dateStr: string): string {
-    return new Date(dateStr).toLocaleTimeString("en-IN", {
-        timeZone: "Asia/Kolkata",
+async function formatTime(dateStr: string, salonId: string): Promise<string> {
+    return new Date(dateStr).toLocaleTimeString(await getSalonDateLocale(salonId), {
+        timeZone: await getSalonTimezone(salonId),
         hour: "2-digit", minute: "2-digit", hour12: true,
     });
 }
@@ -609,12 +613,13 @@ export const appointmentsService = {
         // and checks out in one step, so nothing was "booked" for later and the
         // checkout's "Payment Complete" notification is the only one wanted.
         if (body.source !== "quick_sale") {
+            const nt = await salonTranslator(appointment.salon_id);
             notificationsService.create({
                 salon_id: appointment.salon_id,
                 type:     "appointment",
                 reference_id: appointment.id,
-                title:    "New Appointment Booked",
-                body:     `${full?.client_name ?? "Walk-in"} — ${formatDate(appointment.scheduled_at)} at ${formatTime(appointment.scheduled_at)}`,
+                title:    nt("notify.newAppointment.title"),
+                body:     nt("notify.appointmentLine", { client: full?.client_name ?? nt("notify.walkIn"), date: formatDate(appointment.scheduled_at, await getSalonTimezone(appointment.salon_id)), time: await formatTime(appointment.scheduled_at, appointment.salon_id) }),
                 event_key: "newAppointment",
                 scheduled_at: appointment.scheduled_at,
             }).catch((err: any) => {
@@ -650,8 +655,8 @@ export const appointmentsService = {
                             variables: {
                                 "1": full.client_name                      ?? "Valued Customer",
                                 "2": (full as any).salon_name              ?? "our salon",
-                                "3": formatDate(full.scheduled_at),
-                                "4": formatTime(full.scheduled_at),
+                                "3": formatDate(full.scheduled_at, await getSalonTimezone(full.salon_id)),
+                                "4": await formatTime(full.scheduled_at, full.salon_id),
                                 "5": full.services?.[0]?.name ?? full.title ?? "your service",
                                 "6": full.staff_name ?? "our team",
                             },
@@ -699,11 +704,12 @@ export const appointmentsService = {
                 if (!allowed) return;
                 await emailService.sendNewAppointmentEmail({
                     to:            ownerEmail,
+                    salonId:       full.salon_id,
                     salonName:     (full as any).salon_name  ?? "your salon",
                     clientName:    full.client_name          ?? "Walk-in",
                     services:      full.services?.map((s: any) => s.name).join(", ") ?? "Service",
-                    date:          formatDate(full.scheduled_at),
-                    time:          formatTime(full.scheduled_at),
+                    date:          formatDate(full.scheduled_at, await getSalonTimezone(full.salon_id)),
+                    time:          await formatTime(full.scheduled_at, full.salon_id),
                     appointmentId: full.id,
                 });
             } catch (err: any) { logger.error("[email] newAppointment failed:", err?.message ?? err); }
@@ -719,7 +725,7 @@ export const appointmentsService = {
         appointment = await attachConsumables(appointment);
         if (!needsTaxBackfill(appointment)) return appointment;
         const activeTaxes = await getActiveTaxes(appointment.salon_id).catch(() => []);
-        return backfillTaxBreakdown(appointment, activeTaxes);
+        return backfillTaxBreakdown(appointment, activeTaxes, await getBillRoundingUnit(appointment.salon_id));
     },
 
     // ── Staff handoff workflow ──────────────────────────────────────────────
@@ -857,13 +863,14 @@ export const appointmentsService = {
 
         await appointmentsRepository.update(appointmentId, { [arrayKey]: items } as UpdateAppointmentBody);
 
+        const nt = await salonTranslator(salonId);
         notificationsService.create({
             salon_id: salonId,
             type: "appointment",
             reference_id: appointmentId,
             target_staff_user_id: toStaff.user_id,
-            title: "It's your turn",
-            body: `${existing.client_name ?? "Walk-in"} is ready for ${handedOffItem.name}`,
+            title: nt("notify.yourTurn.title"),
+            body: nt("notify.yourTurn.body", { client: existing.client_name ?? nt("notify.walkIn"), services: handedOffItem.name }),
         }).catch((err: any) => {
             logger.error("Handoff notification failed", {
                 appointmentId, itemId, toStaffId, message: err?.message, stack: err?.stack, error: err,
@@ -892,7 +899,8 @@ export const appointmentsService = {
             const needsBackfill = appts.some(needsTaxBackfill);
             if (!needsBackfill || appts.length === 0) return appts;
             const activeTaxes = await getActiveTaxes(appts[0].salon_id).catch(() => []);
-            return appts.map((a) => backfillTaxBreakdown(a, activeTaxes));
+            const roundingUnit = await getBillRoundingUnit(appts[0].salon_id);
+            return appts.map((a) => backfillTaxBreakdown(a, activeTaxes, roundingUnit));
         }
         if (!salonId) throw new AppError(400, "salon_id or client_id is required", "VALIDATION_ERROR");
         const rawResult = await appointmentsRepository.listBySalonId(salonId, {
@@ -905,7 +913,8 @@ export const appointmentsService = {
         const needsBackfill = result.data.some(needsTaxBackfill);
         if (!needsBackfill) return result;
         const activeTaxes = await getActiveTaxes(salonId).catch(() => []);
-        return { ...result, data: result.data.map((a) => backfillTaxBreakdown(a, activeTaxes)) };
+        const roundingUnit = await getBillRoundingUnit(salonId);
+        return { ...result, data: result.data.map((a) => backfillTaxBreakdown(a, activeTaxes, roundingUnit)) };
     },
 
     async update(params: {
@@ -960,7 +969,7 @@ export const appointmentsService = {
                 include_gst:      patch.include_gst        ?? existing.include_gst,
             };
             const activeTaxes = await getActiveTaxes(existing.salon_id).catch(() => []);
-            const totals = computeAppointmentTotals(merged, activeTaxes);
+            const totals = computeAppointmentTotals(merged, activeTaxes, await getBillRoundingUnit(existing.salon_id));
             const newGrandTotal = totals.grandTotal;
             const existingPaid = await paymentsRepository.getTotalPaidForAppointment(appointmentId);
             logger.debug("[update() reprice]", {
@@ -1102,6 +1111,7 @@ export const appointmentsService = {
                             clientId: existing.client_id ?? undefined,
                             appointmentId,
                             gstPercent: existing.gst_percent ?? 0,
+                            taxInclusive: await arePackageTaxesInclusive(existing.salon_id, (existing as any).include_gst !== false),
                             saleId: sale.id,
                             staffId: existing.staff_id ?? undefined,
                             paidFraction,
@@ -1225,10 +1235,50 @@ export const appointmentsService = {
             patch.staff_id !== existing.staff_id &&
             (existing.status === "paid" || existing.status === "partial")
         ) {
-            salesRepository.reassignStaffForAppointment(appointmentId, patch.staff_id)
-                .catch(err => logger.warn("Sale staff reassignment failed (non-fatal)", {
+            // Awaited (still non-fatal) so the commission recalculation just below reads the sale_items
+            // that already carry the new staff.
+            try {
+                await salesRepository.reassignStaffForAppointment(appointmentId, patch.staff_id);
+            } catch (err: any) {
+                logger.warn("Sale staff reassignment failed (non-fatal)", {
                     appointmentId, newStaffId: patch.staff_id, err: err?.message,
-                }));
+                });
+            }
+        }
+
+        // ── Staff changed on a paid/partial bill: move the COMMISSION too ─────
+        // Changing who did a service (the appointment's staff, or any service/package/product/membership
+        // line's staff) rewrites sales/sale_items, but the commission_earned rows were written at payment
+        // time for the ORIGINAL staff and nothing refreshed them — Staff A kept the commission and Staff B
+        // never got it. Clear the sale's pending rows and calculate again from the sale's current lines,
+        // under the new staff's own commission rules. reverseForSale deletes the sale's rows before any
+        // insert, so this can never leave a duplicate set. Bill amount and payments are not touched.
+        // Commission already paid out / settled to Staff A is left alone (reverseForSale only clears pending rows).
+        const staffSignature = (a: any): string => [
+            a?.staff_id,
+            ...(a?.services ?? []).map((i: any) => i?.staff_id),
+            ...(a?.package_items ?? []).map((i: any) => i?.staff_id),
+            ...(a?.product_items ?? []).map((i: any) => i?.staff_id),
+            ...(a?.membership_items ?? []).map((i: any) => i?.staff_id),
+        ].map((v) => v ?? "").join("|");
+        if ((existing.status === "paid" || existing.status === "partial") && staffSignature(existing) !== staffSignature(updated)) {
+            try {
+                const linkedSale = await salesRepository.findByAppointmentId(appointmentId);
+                if (linkedSale) {
+                    const linkedItems = await salesRepository.findItemsBySaleId(linkedSale.id);
+                    await commissionCalculationService.reverseForSale(linkedSale.id);
+                    await commissionCalculationService.calculateForSale({
+                        salonId:         existing.salon_id,
+                        saleId:          linkedSale.id,
+                        appointmentId,
+                        fallbackStaffId: updated.staff_id ?? null,
+                        items:           linkedItems,
+                        packageItemIds:  new Set((updated.package_items ?? []).map((pk: any) => pk.package_id)),
+                    });
+                }
+            } catch (err: any) {
+                logger.warn("Commission recalculation after staff change failed (non-fatal)", { appointmentId, err: err?.message });
+            }
         }
 
         // Same idea for the DATE: moving a paid/partial appointment must carry
@@ -1297,12 +1347,13 @@ export const appointmentsService = {
             new Date(patch.scheduled_at).getTime() !== new Date(existing.scheduled_at).getTime();
         const staffChanged = !!patch.staff_id && patch.staff_id !== existing.staff_id;
         if (scheduledAtChanged || staffChanged) {
+            const nt = await salonTranslator(existing.salon_id);
             notificationsService.create({
                 salon_id: existing.salon_id,
                 type:     "appointment",
             reference_id: updated.id,
-                title:    "Appointment Updated",
-                body:     `${existing.client_name ?? "Walk-in"} — ${formatDate(updated.scheduled_at)} at ${formatTime(updated.scheduled_at)}`,
+                title:    nt("notify.appointmentUpdated.title"),
+                body:     nt("notify.appointmentLine", { client: existing.client_name ?? nt("notify.walkIn"), date: formatDate(updated.scheduled_at, await getSalonTimezone(updated.salon_id)), time: await formatTime(updated.scheduled_at, updated.salon_id) }),
                 scheduled_at: updated.scheduled_at,
             }).catch((err: any) => {
                 logger.error("Appointment update notification failed", {
@@ -1370,10 +1421,10 @@ export const appointmentsService = {
                         variables: {
                             "1": full.client_name         ?? "Valued Customer",
                             "2": (full as any).salon_name ?? "our salon",
-                            "3": formatDate(existing.scheduled_at),
-                            "4": formatTime(existing.scheduled_at),
-                            "5": formatDate(full.scheduled_at),
-                            "6": formatTime(full.scheduled_at),
+                            "3": formatDate(existing.scheduled_at, await getSalonTimezone(existing.salon_id)),
+                            "4": await formatTime(existing.scheduled_at, existing.salon_id),
+                            "5": formatDate(full.scheduled_at, await getSalonTimezone(full.salon_id)),
+                            "6": await formatTime(full.scheduled_at, full.salon_id),
                             "7": full.services?.[0]?.name ?? full.title ?? "your service",
                             "8": full.staff_name ?? "our team",
                         },
@@ -1387,7 +1438,45 @@ export const appointmentsService = {
             }
         }
 
+        // Staff marked it no-show by hand (the sweep covers the automatic case).
+        if (existing.status !== "no-show" && updated?.status === "no-show") {
+            void appointmentsService.notifyNoShow(appointmentId);
+        }
+
         return updated;
+    },
+
+    // Tells the client their appointment was missed. Runs for both ways an
+    // appointment becomes a no-show: the 10-minute sweep (appointments.scheduler.ts)
+    // and staff marking it by hand. Never throws; trigger() itself is a no-op
+    // when the salon has not had this template approved, or the client opted out.
+    async notifyNoShow(appointmentId: string): Promise<void> {
+        try {
+            const appt = await appointmentsRepository.findById(appointmentId);
+            if (!appt || appt.status !== "no-show" || !appt.client_id || !(appt as any).client_phone) return;
+            const tz = await getSalonTimezone(appt.salon_id);
+            await whatsappAutomationService.trigger({
+                salonId:       appt.salon_id,
+                eventType:     "appointment_no_show",
+                clientId:      appt.client_id,
+                phone:         (appt as any).client_phone,
+                countryCode:   (appt as any).client_phone_code ?? null,
+                variables: {
+                    "1": appt.client_name         ?? "Valued Customer",
+                    "2": (appt as any).salon_name ?? "our salon",
+                    "3": formatDate(appt.scheduled_at, tz),
+                    "4": await formatTime(appt.scheduled_at, appt.salon_id),
+                    "5": appt.services?.[0]?.name ?? appt.title ?? "your service",
+                },
+                // scheduled_at in the key: an appointment rescheduled after a
+                // no-show and missed again is a new miss and gets its own message.
+                referenceId:   `${appt.id}:${appt.scheduled_at}`,
+                referenceType: "appointment",
+                dedupeByReference: true,
+            });
+        } catch (err: any) {
+            logger.error("[WA-AUTO] appointment_no_show trigger failed:", err?.message ?? err);
+        }
     },
 
     async cancel(params: {
@@ -1421,12 +1510,13 @@ export const appointmentsService = {
         // nothing to give back.
 
         // ── Push Notification: Appointment Cancelled (to salon owner) ─────────
+        const nt = await salonTranslator(existing.salon_id);
         notificationsService.create({
             salon_id: existing.salon_id,
             type:     "appointment",
             reference_id: existing.id,
-            title:    "Appointment Cancelled",
-            body:     `${existing.client_name ?? "Walk-in"} — ${formatDate(existing.scheduled_at)} at ${formatTime(existing.scheduled_at)}`,
+            title:    nt("notify.appointmentCancelled.title"),
+            body:     nt("notify.appointmentLine", { client: existing.client_name ?? nt("notify.walkIn"), date: formatDate(existing.scheduled_at, await getSalonTimezone(existing.salon_id)), time: await formatTime(existing.scheduled_at, existing.salon_id) }),
             event_key: "appointmentCancelled",
             scheduled_at: existing.scheduled_at,
         }).catch((err: any) => {
@@ -1450,8 +1540,8 @@ export const appointmentsService = {
                 variables: {
                     "1": existing.client_name         ?? "Valued Customer",
                     "2": (existing as any).salon_name ?? "our salon",
-                    "3": formatDate(existing.scheduled_at),
-                    "4": formatTime(existing.scheduled_at),
+                    "3": formatDate(existing.scheduled_at, await getSalonTimezone(existing.salon_id)),
+                    "4": await formatTime(existing.scheduled_at, existing.salon_id),
                     "5": existing.services?.[0]?.name ?? existing.title ?? "your service",
                 },
                 referenceId:   existing.id,
@@ -1470,10 +1560,11 @@ export const appointmentsService = {
                 if (!allowed) { logger.debug("[email] appointmentCancelled (owner): skipped (preference off)"); return; }
                 await emailService.sendAppointmentCancelledOwnerEmail({
                     to:            ownerEmail,
+                    salonId:       existing.salon_id,
                     salonName:     (existing as any).salon_name ?? "your salon",
                     clientName:    existing.client_name         ?? "Walk-in",
-                    date:          formatDate(existing.scheduled_at),
-                    time:          formatTime(existing.scheduled_at),
+                    date:          formatDate(existing.scheduled_at, await getSalonTimezone(existing.salon_id)),
+                    time:          await formatTime(existing.scheduled_at, existing.salon_id),
                     appointmentId: existing.id,
                 });
                 logger.debug(`[email] appointmentCancelled (owner) sent to ${ownerEmail}`);
@@ -1654,8 +1745,8 @@ export const appointmentsService = {
                             '1': existing.client_name             ?? 'Valued Customer',
                             '2': String(preExistingSale.total_amount ?? '0'),
                             '3': (existing as any).salon_name ?? 'our salon',
-                            '4': formatDate(existing.scheduled_at),
-                            '5': formatTime(existing.scheduled_at),
+                            '4': formatDate(existing.scheduled_at, await getSalonTimezone(existing.salon_id)),
+                            '5': await formatTime(existing.scheduled_at, existing.salon_id),
                         },
                         referenceId:   preExistingSale.id,
                         referenceType: 'invoice',
@@ -1724,9 +1815,11 @@ export const appointmentsService = {
                     if (!allowed) return;
                     await emailService.sendNewPaymentEmail({
                         to:            ownerEmail,
+                        salonId:       existing.salon_id,
                         salonName:     (existing as any).salon_name ?? "your salon",
                         clientName:    existing.client_name         ?? "Walk-in",
                         amount:        String(preExistingSale.total_amount ?? "0"),
+                        currency:      await getSalonCurrency(existing.salon_id),
                         paymentMethod: params.payment_method        ?? "N/A",
                         invoiceId:     preExistingSale.invoice_number ?? "",
                     });
@@ -1736,12 +1829,13 @@ export const appointmentsService = {
             // ── Push Notification: Payment Complete (to salon staff) ──────────
             // Same pattern as "New Appointment Booked" — a calendar-facing push
             // so staff know a bill was just settled without needing to refresh.
+            const nt = await salonTranslator(existing.salon_id);
             notificationsService.create({
                 salon_id: existing.salon_id,
                 type:     "payment",
                 appointment_id: existing.id,
-                title:    "Payment Complete",
-                body:     `${existing.client_name ?? "Walk-in"} — ₹${preExistingSale.total_amount ?? 0}`,
+                title:    nt("notify.paymentComplete.title"),
+                body:     `${existing.client_name ?? nt("notify.walkIn")} — ${await formatSalonMoney(existing.salon_id, preExistingSale.total_amount ?? 0)}`,
                 event_key: "newPayment",
                 scheduled_at: existing.scheduled_at,
             }).catch((err: any) => {
@@ -1907,8 +2001,8 @@ export const appointmentsService = {
                     '1': existing.client_name         ?? 'Valued Customer',
                     '2': String(sale.total_amount     ?? '0'),
                     '3': (existing as any).salon_name ?? 'our salon',
-                    '4': formatDate(existing.scheduled_at),
-                    '5': formatTime(existing.scheduled_at),
+                    '4': formatDate(existing.scheduled_at, await getSalonTimezone(existing.salon_id)),
+                    '5': await formatTime(existing.scheduled_at, existing.salon_id),
                 },
                 referenceId:   sale.id,
                 referenceType: 'invoice',
@@ -1947,6 +2041,9 @@ export const appointmentsService = {
                         phone: salonRecord?.phone ?? null,
                         website_url: salonRecord?.website_url ?? null,
                         gst_number: salonRecord?.gst_number ?? null,
+                        timezone: (salonRecord as any)?.timezone ?? null,
+                        currency: (salonRecord as any)?.currency ?? null,
+                        country: (salonRecord as any)?.country ?? null,
                     },
                     salonAddress,
                     client: {
@@ -1990,9 +2087,11 @@ export const appointmentsService = {
                 if (!allowed) { logger.debug("[email] newPayment: skipped (preference off)"); return; }
                 await emailService.sendNewPaymentEmail({
                     to:            ownerEmail,
+                    salonId:       existing.salon_id,
                     salonName:     (existing as any).salon_name ?? "your salon",
                     clientName:    existing.client_name         ?? "Walk-in",
                     amount:        String(sale.total_amount     ?? "0"),
+                    currency:      await getSalonCurrency(existing.salon_id),
                     paymentMethod: params.payment_method        ?? "N/A",
                     invoiceId:     sale.invoice_number ?? "",
                 });
@@ -2001,12 +2100,13 @@ export const appointmentsService = {
         })();
 
         // ── Push Notification: Payment Complete (to salon staff) ──────────────
+        const nt = await salonTranslator(existing.salon_id);
         notificationsService.create({
             salon_id: existing.salon_id,
             type:     "payment",
                 appointment_id: existing.id,
-            title:    "Payment Complete",
-            body:     `${existing.client_name ?? "Walk-in"} — ₹${sale.total_amount ?? 0}`,
+            title:    nt("notify.paymentComplete.title"),
+            body:     `${existing.client_name ?? nt("notify.walkIn")} — ${await formatSalonMoney(existing.salon_id, sale.total_amount ?? 0)}`,
             event_key: "newPayment",
             scheduled_at: existing.scheduled_at,
         }).catch((err: any) => {

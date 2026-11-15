@@ -8,16 +8,19 @@ import { whatsappAutomationService } from "../whatsapp-automation/whatsapp-autom
 import { whatsappAutomationRepository } from "../whatsapp-automation/whatsapp-automation.repository";
 import { configRepository } from "../marketing/whatsapp/config/config.repository";
 import logger from "../../config/logger";
+import { getSalonTimezone } from "../../config/salonTimezone";
 import type {
   CloseCounterBody,
   CounterListFilters,
   CreateExpenseBody,
+  EditCounterBody,
   ExpenseListFilters,
   OpenCounterBody,
   SummaryBundleBody,
   SummaryBundleSection,
   UpdateExpenseBody,
 } from "./cash-management.types";
+import { getSalonMoneyFormatter, getSalonDateLocale } from "../../config/currency";
 
 const SUMMARY_BUNDLE_SECTIONS: SummaryBundleSection[] = [
   "cash_dashboard",
@@ -26,13 +29,12 @@ const SUMMARY_BUNDLE_SECTIONS: SummaryBundleSection[] = [
   "dashboard_summary",
 ];
 
-const formatDateIST = (d: Date | string) =>
-  new Date(d).toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", day: "2-digit", month: "short", year: "numeric" });
+const formatDateIST = (d: Date | string, timeZone: string, locale: string) =>
+  new Date(d).toLocaleDateString(locale, { timeZone, day: "2-digit", month: "short", year: "numeric" });
 
-const formatTimeIST = (d: Date | string) =>
-  new Date(d).toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit", hour12: true });
+const formatTimeIST = (d: Date | string, timeZone: string, locale: string) =>
+  new Date(d).toLocaleTimeString(locale, { timeZone, hour: "2-digit", minute: "2-digit", hour12: true });
 
-const formatMoney = (n: number) => `₹${(Number.isFinite(n) ? n : 0).toFixed(2)}`;
 
 // The owner's own "WhatsApp Alerts Number" (users.phone, Settings > Profile
 // & Business > Contact Details) is the first choice — it's specifically
@@ -81,7 +83,7 @@ async function triggerForOwnerPhones(phones: string[], payload: Omit<Parameters<
 // can never block or fail the open/close transaction that already committed.
 // referenceId is the counter's own row id — combined with dedupeByReference,
 // this can send at most once per (event, counter), even on a retry.
-async function notifyOwnerCashCounterOpened(salonId: string, counter: any): Promise<void> {
+async function notifyOwnerCashCounterOpened(salonId: string, counter: any, opts?: { updated?: boolean }): Promise<void> {
   try {
     const salon = await salonsRepository.findById(salonId);
     const ownerPhones = await resolveOwnerNotifyPhones(salon);
@@ -89,21 +91,23 @@ async function notifyOwnerCashCounterOpened(salonId: string, counter: any): Prom
       logger.info(`[WA-AUTO] cash_counter_opened skipped — salon ${salonId} has no owner WhatsApp number on file`);
       return;
     }
+    const formatMoney = await getSalonMoneyFormatter(salonId);
     const variables = {
       "1": salon?.business_name ?? "your salon",
-      "2": formatDateIST(counter.opened_at),
-      "3": formatTimeIST(counter.opened_at),
+      "2": formatDateIST(counter.opened_at, await getSalonTimezone(salonId), await getSalonDateLocale(salonId)),
+      "3": formatTimeIST(counter.opened_at, await getSalonTimezone(salonId), await getSalonDateLocale(salonId)),
       "4": formatMoney(parseFloat(counter.opening_balance ?? "0")),
     };
     await triggerForOwnerPhones(ownerPhones, {
       salonId,
-      eventType: "cash_counter_opened",
+      eventType: opts?.updated ? "cash_counter_opened_updated" : "cash_counter_opened",
       clientId: null,
       countryCode: null,
       variables,
       referenceId: counter.id,
       referenceType: "cash_management",
-      dedupeByReference: true,
+      // Every saved edit must announce its own values, so an "updated" message is never deduped.
+      dedupeByReference: !opts?.updated,
     });
   } catch (err: any) {
     logger.error("[WA-AUTO] cash_counter_opened trigger failed:", err?.message ?? err);
@@ -113,7 +117,7 @@ async function notifyOwnerCashCounterOpened(salonId: string, counter: any): Prom
 async function notifyOwnerCashCounterClosed(
   salonId: string,
   counter: any,
-  opts?: { dedupe?: boolean },
+  opts?: { dedupe?: boolean; updated?: boolean },
 ): Promise<void> {
   try {
     const salon = await salonsRepository.findById(salonId);
@@ -132,6 +136,7 @@ async function notifyOwnerCashCounterClosed(
     // (error 132018), independent of whether the template's own approved
     // BODY text has real line breaks. bill_receipt's {{items}} avoids this
     // the same way — a single-line, comma-joined value, never \n-joined.
+    const formatMoney = await getSalonMoneyFormatter(salonId);
     const cashAmt = Number(counter.cash_amount ?? 0);
     const cardAmt = Number(counter.card_amount ?? 0);
     const upiAmt  = Number(counter.upi_amount ?? 0);
@@ -152,8 +157,8 @@ async function notifyOwnerCashCounterClosed(
 
     const variables = {
       "1": salon?.business_name ?? "your salon",
-      "2": formatDateIST(counter.closed_at ?? new Date()),
-      "3": formatTimeIST(counter.closed_at ?? new Date()),
+      "2": formatDateIST(counter.closed_at ?? new Date(), await getSalonTimezone(salonId), await getSalonDateLocale(salonId)),
+      "3": formatTimeIST(counter.closed_at ?? new Date(), await getSalonTimezone(salonId), await getSalonDateLocale(salonId)),
       "4": collectionBreakdown,
       "5": formatMoney(cashAmt + cardAmt + upiAmt),
       "6": formatMoney(expenses),
@@ -161,7 +166,7 @@ async function notifyOwnerCashCounterClosed(
     };
     await triggerForOwnerPhones(ownerPhones, {
       salonId,
-      eventType: "cash_counter_closed",
+      eventType: opts?.updated ? "cash_counter_closed_updated" : "cash_counter_closed",
       clientId: null,
       countryCode: null,
       variables,
@@ -171,7 +176,7 @@ async function notifyOwnerCashCounterClosed(
       // WhatsApp") must always actually send, even though the original
       // automatic close already used this same counter.id as its dedupe key
       // — opts.dedupe: false skips that guard on purpose.
-      dedupeByReference: opts?.dedupe !== false,
+      dedupeByReference: opts?.updated ? false : opts?.dedupe !== false,
     });
   } catch (err: any) {
     logger.error("[WA-AUTO] cash_counter_closed trigger failed:", err?.message ?? err);
@@ -193,6 +198,39 @@ export const cashManagementService = {
     // Fire-and-forget — only reached once the open has actually committed, so
     // a validation/DB failure above (which throws) never triggers a message.
     notifyOwnerCashCounterOpened(salonId, counter).catch(() => {});
+
+    return counter;
+  },
+
+  // Edit an opened or closed counter (see cashManagementRepository.editCounter). The owner's WhatsApp "updated" message is
+  // sent only after the edit has been saved, carries the saved values, and never fails the edit itself.
+  async editCounter(salonId: string, editedBy: string, cashManagementId: string, body: EditCounterBody) {
+    if (!cashManagementId?.trim()) {
+      throw new AppError(400, "cash_management_id is required", "VALIDATION_ERROR");
+    }
+    const num = (v: unknown, name: string): number | undefined => {
+      if (v === undefined || v === null || v === "") return undefined;
+      const n = Number(v);
+      if (!Number.isFinite(n) || n < 0) throw new AppError(400, `${name} must be a non-negative number`, "VALIDATION_ERROR");
+      return n;
+    };
+    const openingBalance = num(body.opening_balance, "opening_balance");
+    const closingBalance = num(body.closing_balance, "closing_balance");
+    const inStoreCash = num(body.in_store_cash, "in_store_cash");
+    const remarks = body.remarks === undefined ? undefined : body.remarks === null ? null : String(body.remarks);
+    if (openingBalance === undefined && closingBalance === undefined && inStoreCash === undefined && remarks === undefined) {
+      throw new AppError(400, "Nothing to update", "VALIDATION_ERROR");
+    }
+
+    const counter = await cashManagementRepository.editCounter({
+      salonId,
+      cashManagementId: cashManagementId.trim(),
+      editedBy,
+      changes: { openingBalance, closingBalance, inStoreCash, remarks },
+    });
+
+    if (counter.status === "closed") notifyOwnerCashCounterClosed(salonId, counter, { updated: true }).catch(() => {});
+    else notifyOwnerCashCounterOpened(salonId, counter, { updated: true }).catch(() => {});
 
     return counter;
   },

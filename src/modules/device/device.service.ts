@@ -3,6 +3,8 @@ import { AppError } from "../../middleware/error.middleware";
 import { deviceRepository } from "./device.repository";
 import { attendanceService } from "../attendance/attendance.service";
 import { getIO, salonRoom } from "../../config/socket";
+import { getSalonTimezone } from "../../config/salonTimezone";
+import { zonedInstant } from "../attendance/staffAttendance.rules";
 import { Device, StaffBiometricMapping, CreateDeviceBody, UpdateDeviceBody, CreateMappingBody } from "./device.types";
 
 // In-memory store for machines that have connected but aren't registered yet.
@@ -120,8 +122,9 @@ export const deviceService = {
                     continue;
                 }
 
-                // Machine sends local IST time — append IST offset
-                const timestamp = new Date(timeStr.replace(" ", "T") + "+05:30").toISOString();
+                // The machine sends the salon's local wall-clock time — convert it with the salon timezone
+                const [punchDate, punchTime = "00:00:00"] = timeStr.trim().split(/[ T]/);
+                const timestamp = zonedInstant(punchDate, punchTime, await getSalonTimezone(device.salon_id)).toISOString();
 
                 // status 0/4 = check-in, 1/2/5 = check-out
                 const checkType: "in" | "out" = (status === 0 || status === 4) ? "in" : "out";

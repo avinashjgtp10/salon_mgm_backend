@@ -350,9 +350,10 @@ export const branchOwnerService = {
       // would use the server's own UTC day instead, which is wrong for the
       // first ~5.5 hours of every IST day (see that file's own comment on
       // this exact pitfall).
-      const todayIst = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
-      const effectiveFrom = from || todayIst;
-      const effectiveTo = to || todayIst;
+      // No range given => each salon's OWN today (branches can be in different timezones),
+      // resolved in SQL against that salon's timezone.
+      const effectiveFrom = from || null;
+      const effectiveTo = to || null;
       const rows = await branchOwnerRepository.getCashManagementBySalon(branchOwnerId, effectiveFrom, effectiveTo);
       const salons = rows.map((r: any) => ({
           salonId: r.salon_id,
