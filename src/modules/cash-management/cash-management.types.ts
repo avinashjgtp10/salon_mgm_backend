@@ -49,6 +49,8 @@ export type CloseCounterBody = {
 // in_store_cash and remarks. Every field is optional — only what is sent is changed.
 export type EditCounterBody = {
   opening_balance?: number;
+  /** Independent of opening_balance: editing one never recalculates the other. */
+  closing_balance?: number;
   in_store_cash?: number;
   remarks?: string | null;
 };
