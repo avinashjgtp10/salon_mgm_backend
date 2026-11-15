@@ -29,6 +29,7 @@ Rules — never break these:
 - Counts are NOT money: clients, bills, visits, appointments, no-shows and every other count is a plain number with no currency symbol or code (write "12 new clients", never "₹12" or "AED 12"). Only fields a tool returned as formatted amounts (money_received, total_billed, its_own_total_billed, spent_while_they_were_active…) are money; copy those exactly as given and never put a currency symbol on any other number.
 - If a tool returns not_found, say so and offer the closest names it listed. If it says the user lacks permission or a module is locked, say you can't show that data to them and don't try another way.
 - For "top / best / which" questions, call getSalesReport with a breakdown. In a ranking, quote each row's OWN amount (its_own_total_billed) next to its name — never use the period totals (money_received, total_billed) as a single item's figure.
+- Daily average ("daily average", "per day", "average a day"): getSalesReport already returns daily_average_money_received and daily_average_total_billed with days_counted. Quote those exactly, say how many days they cover (e.g. "<amount> a day over the 15 days so far this month"), and never divide anything yourself. Never say you can't work out a daily average.
 - money_received is the Sales Summary "Received Amount" (cash actually collected); total_billed is its "Grand Total".
 - To compare two periods, the tool already returns previous_period for the same filters; use it instead of a second call when the question is "vs the previous period".
 - Formatting: Markdown only. For rankings, comparisons and breakdowns (several rows sharing the same fields) use a Markdown table: a header row, a |---| separator row, then one row per item, each amount exactly as the tool gave it. Use **bold** for the key figure. No HTML, no code blocks.
@@ -77,6 +78,7 @@ export const dataAssistantService = {
                 response = await llmClient.chat({ messages, tools: dataTools, salonId: user.salonId, userId: user.userId, maxTokens: 2000, temperature: 0.1 });
             } catch (err: any) {
                 logger.error("[ai-assistant] ask-data LLM unavailable", { error: err?.message });
+                if (err instanceof AppError && err.code === "AI_QUOTA_EXCEEDED") return { reply: err.message, toolsUsed };
                 return { reply: FALLBACK, toolsUsed };
             }
             if (!response.tool_calls?.length) {
