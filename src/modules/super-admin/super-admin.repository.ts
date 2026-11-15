@@ -226,6 +226,9 @@ export const superAdminRepository = {
         ), 0)::numeric                                                                    AS revenue,
         sub.status                                                                        AS subscription_status,
         sp.name                                                                           AS plan_name,
+        -- monthly / quarterly / yearly; a trial has no billing cycle
+        CASE WHEN COALESCE(sub.is_trial, false) THEN NULL ELSE sp.billing_cycle END       AS plan_cycle,
+        COALESCE(sub.is_trial, false)                                                     AS plan_is_trial,
         COALESCE(sub.trial_end, sub.current_period_end)                                   AS plan_expires_at
       FROM salons s
       LEFT JOIN users u ON u.id = s.owner_id
@@ -336,6 +339,10 @@ export const superAdminRepository = {
         u.last_login,
         COALESCE(u.login_count, 0)                                AS login_count,
         0::numeric                                                AS revenue,
+        NULL::text AS designation, NULL::text AS employee_code, NULL::text AS employment_type, NULL::text AS gender,
+        NULL::text AS branch_name, NULL::text AS joined_date, NULL::text AS invitation_status, NULL::text AS login_role,
+        NULL::text AS commission_type, NULL::numeric AS commission_value, NULL::text[] AS specialization, NULL::numeric AS experience_years,
+        u.created_at AS created_at,
         0                                                          AS sort_rank
       FROM salons s
       JOIN users u ON u.id = s.owner_id
@@ -353,6 +360,11 @@ export const superAdminRepository = {
         su.last_login                                              AS last_login,
         COALESCE(su.login_count, 0)                                AS login_count,
         COALESCE(rbs.revenue, 0)::numeric                          AS revenue,
+        st.designation, st.employee_code, st.employment_type, st.gender,
+        (SELECT b.name FROM branches b WHERE b.id = st.branch_id LIMIT 1) AS branch_name,
+        st.joined_date::text AS joined_date, st.invitation_status, st.login_role,
+        st.commission_type, st.commission_value, st.specialization, st.experience_years,
+        st.created_at AS created_at,
         1                                                           AS sort_rank
       FROM staff st
       LEFT JOIN users su ON su.id = st.user_id
