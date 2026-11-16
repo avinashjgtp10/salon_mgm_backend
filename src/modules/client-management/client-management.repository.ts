@@ -98,6 +98,23 @@ export const clientManagementRepository = {
     const { rows } = await pool.query(`SELECT 1 FROM developers WHERE id = $1`, [id]);
     return rows.length > 0;
   },
+  /** The team member (developers row) a Super Admin login belongs to, or null when the login has none. */
+  async developerIdForUser(userId: string): Promise<string | null> {
+    const { rows } = await pool.query(`SELECT id FROM developers WHERE user_id = $1 AND is_active LIMIT 1`, [userId]);
+    return rows[0]?.id ?? null;
+  },
+  /** Which team member a meeting / task / activity / training record is assigned to (null = unassigned or no such record). */
+  async entityDeveloper(entityType: string, entityId: string): Promise<{ exists: boolean; developerId: string | null }> {
+    const table = { meeting: "client_meetings", training: "client_training_progress", activity: "client_activity_logs", task: "client_followup_tasks" }[entityType];
+    if (!table) return { exists: false, developerId: null };
+    const { rows } = await pool.query(`SELECT developer_id FROM ${table} WHERE id = $1`, [entityId]);
+    return { exists: rows.length > 0, developerId: rows[0]?.developer_id ?? null };
+  },
+  /** Who the (salon, module) training row belongs to, if one exists. */
+  async trainingRowDeveloper(salonId: string, moduleId: string): Promise<{ exists: boolean; developerId: string | null }> {
+    const { rows } = await pool.query(`SELECT developer_id FROM client_training_progress WHERE salon_id = $1 AND module_id = $2`, [salonId, moduleId]);
+    return { exists: rows.length > 0, developerId: rows[0]?.developer_id ?? null };
+  },
 
   // ── Meetings ────────────────────────────────────────────────────────────────
   async listMeetings(f: { salonId?: string[]; developerId?: string[]; type?: string[]; status?: string[]; from?: string; to?: string; search?: string } & Page) {
@@ -238,9 +255,11 @@ export const clientManagementRepository = {
   },
 
   /** Every active module for one salon, with its progress (modules never touched read as not_started). */
-  async salonTraining(salonId: string, f: { status?: string; developerId?: string }) {
+  async salonTraining(salonId: string, f: { status?: string; developerId?: string; viewerDeveloperId?: string | null }) {
     const x = q();
     x.params.push(salonId);
+    // A team member sees only the progress they recorded themselves; modules another member worked on read as not started for them.
+    const viewerJoin = f.viewerDeveloperId ? (x.params.push(f.viewerDeveloperId), `AND p.developer_id = $${x.params.length}`) : "";
     const extra: string[] = [];
     if (f.status === "not_started") extra.push(`(p.id IS NULL OR p.status = 'not_started')`);
     else if (f.status) { x.params.push(f.status); extra.push(`p.status = $${x.params.length}`); }
@@ -251,7 +270,7 @@ export const clientManagementRepository = {
               p.client_understanding, p.client_feedback, p.next_training_date::text AS next_training_date, p.completed_at, p.updated_at,
               (SELECT COUNT(*)::int FROM client_activity_attachments x WHERE x.entity_type='training' AND x.entity_id = p.id) AS attachment_count
          FROM client_training_modules m
-         LEFT JOIN client_training_progress p ON p.module_id = m.id AND p.salon_id = $1
+         LEFT JOIN client_training_progress p ON p.module_id = m.id AND p.salon_id = $1 ${viewerJoin}
          LEFT JOIN developers d ON d.id = p.developer_id
         WHERE m.is_active ${extra.length ? "AND " + extra.join(" AND ") : ""}
         ORDER BY m.sort_order, m.name`,
@@ -261,11 +280,12 @@ export const clientManagementRepository = {
   },
 
   /** Salon-by-salon completion overview for the Training page. */
-  async trainingOverview(f: { search?: string } & Page) {
+  async trainingOverview(f: { search?: string; developerId?: string | null } & Page) {
     const x = q();
     if (f.search) add(x, (i) => `(${SALON_NAME} ILIKE $${i} OR s.id::text ILIKE $${i})`, `%${f.search}%`);
     const w = whereSql(x);
     const countParams = [...x.params];
+    const devP = (x.params.push(f.developerId ?? null), x.params.length);
     const lim = paging(x, f);
     const [{ rows }, { rows: c }] = await Promise.all([
       pool.query(
@@ -276,7 +296,7 @@ export const clientManagementRepository = {
                 COUNT(p.id) FILTER (WHERE p.status = 'needs_retraining' AND m.is_active)::int AS needs_retraining,
                 MAX(p.updated_at) AS last_updated
            FROM salons s
-           LEFT JOIN client_training_progress p ON p.salon_id = s.id
+           LEFT JOIN client_training_progress p ON p.salon_id = s.id AND ($${devP}::uuid IS NULL OR p.developer_id = $${devP})
            LEFT JOIN client_training_modules m ON m.id = p.module_id
            ${w}
           GROUP BY s.id ORDER BY MAX(p.updated_at) DESC NULLS LAST, ${SALON_NAME} ${lim}`,
@@ -457,8 +477,9 @@ export const clientManagementRepository = {
     );
     return rows;
   },
-  async listAudit(f: { salonId?: string; entityType?: string; entityId?: string } & Page) {
+  async listAudit(f: { salonId?: string; entityType?: string; entityId?: string; changedBy?: string } & Page) {
     const x = q();
+    if (f.changedBy) add(x, (i) => `l.changed_by = $${i}`, f.changedBy);
     if (f.salonId) add(x, (i) => `l.salon_id = $${i}`, f.salonId);
     if (f.entityType) add(x, (i) => `l.entity_type = $${i}`, f.entityType);
     if (f.entityId) add(x, (i) => `l.entity_id = $${i}`, f.entityId);
@@ -474,48 +495,50 @@ export const clientManagementRepository = {
   },
 
   // ── Dashboard, salon summary, reports ──────────────────────────────────────
-  async dashboard() {
+  /** developerId = null: everything (the owner). Otherwise only that team member's own records. */
+  async dashboard(developerId: string | null = null) {
+    const D = [developerId];
     const [kpi, today, upcoming, recent, pendingTraining, overdue] = await Promise.all([
       pool.query(
         `SELECT
-           (SELECT COUNT(*)::int FROM client_meetings WHERE status IN ('scheduled','rescheduled')) AS scheduled_meetings,
-           (SELECT COUNT(*)::int FROM client_meetings WHERE status = 'completed') AS completed_meetings,
-           (SELECT COUNT(*)::int FROM client_meetings WHERE status IN ('scheduled','rescheduled') AND meeting_date >= CURRENT_DATE) AS upcoming_meetings,
-           (SELECT COUNT(*)::int FROM client_training_progress WHERE status <> 'completed') AS pending_training,
-           (SELECT COUNT(*)::int FROM client_training_progress WHERE status = 'completed') AS completed_training,
-           (SELECT COUNT(*)::int FROM client_followup_tasks WHERE status IN ('pending','in_progress') AND due_date < CURRENT_DATE) AS overdue_followups`,
+           (SELECT COUNT(*)::int FROM client_meetings WHERE status IN ('scheduled','rescheduled') AND ($1::uuid IS NULL OR developer_id = $1)) AS scheduled_meetings,
+           (SELECT COUNT(*)::int FROM client_meetings WHERE status = 'completed' AND ($1::uuid IS NULL OR developer_id = $1)) AS completed_meetings,
+           (SELECT COUNT(*)::int FROM client_meetings WHERE status IN ('scheduled','rescheduled') AND meeting_date >= CURRENT_DATE AND ($1::uuid IS NULL OR developer_id = $1)) AS upcoming_meetings,
+           (SELECT COUNT(*)::int FROM client_training_progress WHERE status <> 'completed' AND ($1::uuid IS NULL OR developer_id = $1)) AS pending_training,
+           (SELECT COUNT(*)::int FROM client_training_progress WHERE status = 'completed' AND ($1::uuid IS NULL OR developer_id = $1)) AS completed_training,
+           (SELECT COUNT(*)::int FROM client_followup_tasks WHERE status IN ('pending','in_progress') AND due_date < CURRENT_DATE AND ($1::uuid IS NULL OR developer_id = $1)) AS overdue_followups`, D,
       ),
-      pool.query(`SELECT ${MEETING_SELECT} WHERE m.meeting_date = CURRENT_DATE AND m.status IN ('scheduled','rescheduled','completed') ORDER BY m.start_time NULLS LAST LIMIT 20`),
-      pool.query(`SELECT ${MEETING_SELECT} WHERE m.meeting_date > CURRENT_DATE AND m.status IN ('scheduled','rescheduled') ORDER BY m.meeting_date, m.start_time NULLS LAST LIMIT 10`),
-      pool.query(`SELECT ${ACTIVITY_SELECT} ORDER BY a.activity_date DESC, a.created_at DESC LIMIT 10`),
+      pool.query(`SELECT ${MEETING_SELECT} WHERE m.meeting_date = CURRENT_DATE AND m.status IN ('scheduled','rescheduled','completed') AND ($1::uuid IS NULL OR m.developer_id = $1) ORDER BY m.start_time NULLS LAST LIMIT 20`, D),
+      pool.query(`SELECT ${MEETING_SELECT} WHERE m.meeting_date > CURRENT_DATE AND m.status IN ('scheduled','rescheduled') AND ($1::uuid IS NULL OR m.developer_id = $1) ORDER BY m.meeting_date, m.start_time NULLS LAST LIMIT 10`, D),
+      pool.query(`SELECT ${ACTIVITY_SELECT} WHERE ($1::uuid IS NULL OR a.developer_id = $1) ORDER BY a.activity_date DESC, a.created_at DESC LIMIT 10`, D),
       pool.query(
         `SELECT p.id, p.salon_id, ${SALON_NAME} AS salon_name, m.name AS module_name, p.status, p.training_date::text AS training_date, d.name AS developer_name
            FROM client_training_progress p JOIN salons s ON s.id = p.salon_id JOIN client_training_modules m ON m.id = p.module_id
            LEFT JOIN developers d ON d.id = p.developer_id
-          WHERE p.status <> 'completed' ORDER BY p.training_date NULLS LAST, p.updated_at DESC LIMIT 10`),
-      pool.query(`SELECT ${TASK_SELECT} WHERE t.status IN ('pending','in_progress') AND t.due_date < CURRENT_DATE ORDER BY t.due_date LIMIT 10`),
+          WHERE p.status <> 'completed' AND ($1::uuid IS NULL OR p.developer_id = $1) ORDER BY p.training_date NULLS LAST, p.updated_at DESC LIMIT 10`, D),
+      pool.query(`SELECT ${TASK_SELECT} WHERE t.status IN ('pending','in_progress') AND t.due_date < CURRENT_DATE AND ($1::uuid IS NULL OR t.developer_id = $1) ORDER BY t.due_date LIMIT 10`, D),
     ]);
     return { kpis: kpi.rows[0], today_meetings: today.rows, upcoming_meetings: upcoming.rows, recent_activities: recent.rows, pending_training: pendingTraining.rows, overdue_tasks: overdue.rows };
   },
 
-  async salonSummary(salonId: string) {
+  async salonSummary(salonId: string, developerId: string | null = null) {
     const { rows } = await pool.query(
       `SELECT
-         (SELECT COUNT(*)::int FROM client_meetings WHERE salon_id = $1) AS total_meetings,
-         (SELECT COUNT(*)::int FROM client_meetings WHERE salon_id = $1 AND status = 'completed') AS completed_meetings,
-         (SELECT COUNT(*)::int FROM client_meetings WHERE salon_id = $1 AND status IN ('scheduled','rescheduled') AND meeting_date >= CURRENT_DATE) AS upcoming_meetings,
-         (SELECT COUNT(*)::int FROM client_training_progress p JOIN client_training_modules m ON m.id = p.module_id WHERE p.salon_id = $1 AND p.status = 'completed' AND m.is_active) AS completed_training,
+         (SELECT COUNT(*)::int FROM client_meetings WHERE salon_id = $1 AND ($2::uuid IS NULL OR developer_id = $2)) AS total_meetings,
+         (SELECT COUNT(*)::int FROM client_meetings WHERE salon_id = $1 AND status = 'completed' AND ($2::uuid IS NULL OR developer_id = $2)) AS completed_meetings,
+         (SELECT COUNT(*)::int FROM client_meetings WHERE salon_id = $1 AND status IN ('scheduled','rescheduled') AND meeting_date >= CURRENT_DATE AND ($2::uuid IS NULL OR developer_id = $2)) AS upcoming_meetings,
+         (SELECT COUNT(*)::int FROM client_training_progress p JOIN client_training_modules m ON m.id = p.module_id WHERE p.salon_id = $1 AND p.status = 'completed' AND m.is_active AND ($2::uuid IS NULL OR p.developer_id = $2)) AS completed_training,
          (SELECT COUNT(*)::int FROM client_training_modules WHERE is_active) AS total_modules,
-         (SELECT COUNT(*)::int FROM client_followup_tasks WHERE salon_id = $1 AND status IN ('pending','in_progress')) AS pending_followups,
-         (SELECT COUNT(*)::int FROM client_followup_tasks WHERE salon_id = $1 AND status IN ('pending','in_progress') AND due_date < CURRENT_DATE) AS overdue_followups`,
-      [salonId],
+         (SELECT COUNT(*)::int FROM client_followup_tasks WHERE salon_id = $1 AND status IN ('pending','in_progress') AND ($2::uuid IS NULL OR developer_id = $2)) AS pending_followups,
+         (SELECT COUNT(*)::int FROM client_followup_tasks WHERE salon_id = $1 AND status IN ('pending','in_progress') AND due_date < CURRENT_DATE AND ($2::uuid IS NULL OR developer_id = $2)) AS overdue_followups`,
+      [salonId, developerId],
     );
-    const { rows: last } = await pool.query(`SELECT ${ACTIVITY_SELECT} WHERE a.salon_id = $1 ORDER BY a.activity_date DESC, a.created_at DESC LIMIT 1`, [salonId]);
+    const { rows: last } = await pool.query(`SELECT ${ACTIVITY_SELECT} WHERE a.salon_id = $1 AND ($2::uuid IS NULL OR a.developer_id = $2) ORDER BY a.activity_date DESC, a.created_at DESC LIMIT 1`, [salonId, developerId]);
     const s = rows[0];
     return { ...s, pending_training: Math.max(0, s.total_modules - s.completed_training), latest_activity: last[0] ?? null };
   },
 
-  async reports(f: { salonId?: string; from?: string; to?: string; search?: string } & Page) {
+  async reports(f: { salonId?: string; from?: string; to?: string; search?: string; developerId?: string | null } & Page) {
     const x = q();
     if (f.salonId) add(x, (i) => `s.id = $${i}`, f.salonId);
     if (f.search) add(x, (i) => `${SALON_NAME} ILIKE $${i}`, `%${f.search}%`);
@@ -523,21 +546,23 @@ export const clientManagementRepository = {
     const fromP = (x.params.push(f.from ?? null), x.params.length);
     const toP = (x.params.push(f.to ?? null), x.params.length);
     const countParams = x.params.slice(0, x.params.length - 2);
+    const devP = (x.params.push(f.developerId ?? null), x.params.length);   // null = everything (owner); else only that team member's records
     const lim = paging(x, f);
+    const own = (col: string) => `($${devP}::uuid IS NULL OR ${col} = $${devP})`;
     const inRange = (col: string) => `($${fromP}::date IS NULL OR ${col} >= $${fromP}::date) AND ($${toP}::date IS NULL OR ${col} <= $${toP}::date)`;
     const [{ rows }, { rows: c }] = await Promise.all([
       pool.query(
         `SELECT s.id AS salon_id, ${SALON_NAME} AS salon_name,
-           (SELECT COUNT(*)::int FROM client_meetings m WHERE m.salon_id = s.id AND ${inRange("m.meeting_date")}) AS meetings,
-           (SELECT COUNT(*)::int FROM client_meetings m WHERE m.salon_id = s.id AND m.status = 'completed' AND ${inRange("m.meeting_date")}) AS completed_meetings,
-           (SELECT COUNT(*)::int FROM client_meetings m WHERE m.salon_id = s.id AND m.status IN ('cancelled','not_conducted') AND ${inRange("m.meeting_date")}) AS missed_meetings,
-           (SELECT COUNT(*)::int FROM client_training_progress p JOIN client_training_modules mo ON mo.id = p.module_id WHERE p.salon_id = s.id AND p.status = 'completed' AND mo.is_active) AS training_completed,
+           (SELECT COUNT(*)::int FROM client_meetings m WHERE m.salon_id = s.id AND ${own("m.developer_id")} AND ${inRange("m.meeting_date")}) AS meetings,
+           (SELECT COUNT(*)::int FROM client_meetings m WHERE m.salon_id = s.id AND m.status = 'completed' AND ${own("m.developer_id")} AND ${inRange("m.meeting_date")}) AS completed_meetings,
+           (SELECT COUNT(*)::int FROM client_meetings m WHERE m.salon_id = s.id AND m.status IN ('cancelled','not_conducted') AND ${own("m.developer_id")} AND ${inRange("m.meeting_date")}) AS missed_meetings,
+           (SELECT COUNT(*)::int FROM client_training_progress p JOIN client_training_modules mo ON mo.id = p.module_id WHERE p.salon_id = s.id AND p.status = 'completed' AND mo.is_active AND ${own("p.developer_id")}) AS training_completed,
            (SELECT COUNT(*)::int FROM client_training_modules WHERE is_active) AS training_total,
-           (SELECT COUNT(*)::int FROM client_training_progress p WHERE p.salon_id = s.id AND p.client_understanding = 'needs_more_training') AS needs_more_training,
-           (SELECT COUNT(*)::int FROM client_followup_tasks t WHERE t.salon_id = s.id AND t.status IN ('pending','in_progress')) AS open_followups,
-           (SELECT COUNT(*)::int FROM client_followup_tasks t WHERE t.salon_id = s.id AND t.status IN ('pending','in_progress') AND t.due_date < CURRENT_DATE) AS overdue_followups,
-           (SELECT COUNT(*)::int FROM client_activity_logs a WHERE a.salon_id = s.id AND ${inRange("a.activity_date::date")}) AS activities,
-           (SELECT MAX(a.activity_date) FROM client_activity_logs a WHERE a.salon_id = s.id) AS last_activity_at
+           (SELECT COUNT(*)::int FROM client_training_progress p WHERE p.salon_id = s.id AND p.client_understanding = 'needs_more_training' AND ${own("p.developer_id")}) AS needs_more_training,
+           (SELECT COUNT(*)::int FROM client_followup_tasks t WHERE t.salon_id = s.id AND t.status IN ('pending','in_progress') AND ${own("t.developer_id")}) AS open_followups,
+           (SELECT COUNT(*)::int FROM client_followup_tasks t WHERE t.salon_id = s.id AND t.status IN ('pending','in_progress') AND t.due_date < CURRENT_DATE AND ${own("t.developer_id")}) AS overdue_followups,
+           (SELECT COUNT(*)::int FROM client_activity_logs a WHERE a.salon_id = s.id AND ${own("a.developer_id")} AND ${inRange("a.activity_date::date")}) AS activities,
+           (SELECT MAX(a.activity_date) FROM client_activity_logs a WHERE a.salon_id = s.id AND ${own("a.developer_id")}) AS last_activity_at
          FROM salons s ${w} ORDER BY last_activity_at DESC NULLS LAST, salon_name ${lim}`,
         x.params,
       ),
@@ -546,9 +571,9 @@ export const clientManagementRepository = {
     let breakdown = null;
     if (f.salonId) {
       const [byType, byStatus, byUnderstanding] = await Promise.all([
-        pool.query(`SELECT meeting_type AS key, COUNT(*)::int AS n FROM client_meetings WHERE salon_id = $1 GROUP BY 1`, [f.salonId]),
-        pool.query(`SELECT status AS key, COUNT(*)::int AS n FROM client_meetings WHERE salon_id = $1 GROUP BY 1`, [f.salonId]),
-        pool.query(`SELECT COALESCE(client_understanding, 'not_recorded') AS key, COUNT(*)::int AS n FROM client_training_progress WHERE salon_id = $1 GROUP BY 1`, [f.salonId]),
+        pool.query(`SELECT meeting_type AS key, COUNT(*)::int AS n FROM client_meetings WHERE salon_id = $1 AND ($2::uuid IS NULL OR developer_id = $2) GROUP BY 1`, [f.salonId, f.developerId ?? null]),
+        pool.query(`SELECT status AS key, COUNT(*)::int AS n FROM client_meetings WHERE salon_id = $1 AND ($2::uuid IS NULL OR developer_id = $2) GROUP BY 1`, [f.salonId, f.developerId ?? null]),
+        pool.query(`SELECT COALESCE(client_understanding, 'not_recorded') AS key, COUNT(*)::int AS n FROM client_training_progress WHERE salon_id = $1 AND ($2::uuid IS NULL OR developer_id = $2) GROUP BY 1`, [f.salonId, f.developerId ?? null]),
       ]);
       breakdown = { meetings_by_type: byType.rows, meetings_by_status: byStatus.rows, understanding: byUnderstanding.rows };
     }
