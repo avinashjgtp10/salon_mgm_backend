@@ -18,6 +18,7 @@ import paymentTrackingRoutes from "../payment-tracking/payment-tracking.routes";
 import paymentGatewayRoutes from "../payment-gateway/payment-gateway.routes";
 import subscriptionInvoiceRoutes from "../subscription-invoices/subscription-invoices.routes";
 import clientAnnouncementsRoutes from "../client-announcements/client-announcements.routes";
+import marketingLogsRoutes from "../marketing-logs/marketing-logs.routes";
 
 const router = Router();
 
@@ -52,6 +53,8 @@ router.use("/payment-gateway", paymentGatewayRoutes);
 router.use("/subscription-invoices", subscriptionInvoiceRoutes);
 // Client Announcements: picks the platform salon and copies salon owners into its client list.
 router.use("/client-announcements", clientAnnouncementsRoutes);
+// Marketing Logs: every message sent to clients (automation, campaigns, SMS, Email) across all salons.
+router.use("/marketing-logs", marketingLogsRoutes);
 
 // Salon-specific permissions
 router.get("/salon-permissions/search",       superAdminController.searchSalonsForPermissions);
