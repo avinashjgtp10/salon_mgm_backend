@@ -14,6 +14,9 @@ export type Enquiry = {
     phone: string;
     service_id: string | null;
     service_name: string | null;
+    /** Every service the enquiry is about (service_id is the first of them). */
+    service_ids: string[];
+    service_names: string[];
     staff_id: string | null;
     staff_name: string | null;
     status: EnquiryStatus;
@@ -28,6 +31,7 @@ export type CreateEnquiryBody = {
     name: string;
     phone: string;
     service_id?: string | null;
+    service_ids?: string[];
     staff_id?: string | null;
     status?: EnquiryStatus;
     notes?: string | null;
