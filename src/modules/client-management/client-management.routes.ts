@@ -72,6 +72,7 @@ async function checkRefs(salonId: string, developerId: string | null) {
 // Optional: a developer from the team directory can be given a Super Admin login (their email + a password shown once here).
 router.patch("/team/:id", superAdminOwnerOnly, wrap(async (req, res) => sendSuccess(res, 200, await updateDeveloper(uuid(req.params.id, "Developer"), req.body ?? {}), "Developer updated")));
 // Developer Activity page: only the Super Admin OWNER's own activity (developers are not listed there). See super-admin-activity.ts.
+const WORK_STATUSES = ["pending_client", "pending_us", "completed", "not_completed"];
 const OWNER_ACTIVITY_TYPES = ["user", "salon", "demo_request", "invoice", "meeting", "task", "activity", "training"] as const;
 router.get("/developer-activity", superAdminOwnerOnly, wrap(async (req, res) => sendSuccess(res, 200, await ownerActivity.feed({
   entityTypes: qEnums(req.query.entity_type, OWNER_ACTIVITY_TYPES), from: qDate(req.query.from), to: qDate(req.query.to), search: qs(req.query.search), ...page(req),
@@ -242,7 +243,7 @@ router.post("/activities", wrap(async (req, res) => {
   const input = {
     salon_id: uuid(b.salon_id, "Salon"), developer_id: scope ?? optUuid(b.developer_id, "Team member"), activity_type: oneOf(b.activity_type, ACTIVITY_TYPES, "Activity type"),
     activity_date: b.activity_date ? date(String(b.activity_date).slice(0, 10), "Activity date") : new Date().toISOString().slice(0, 10),
-    description: reqText(b.description, "Activity description"), work_completed: text(b.work_completed), pending_work: text(b.pending_work),
+    description: reqText(b.description, "Activity description"), work_completed: text(b.work_completed), pending_work: text(b.pending_work), work_status: oneOf(b.work_status, WORK_STATUSES, "Work status"),
     next_followup: optDate(b.next_followup, "Next follow-up"),
   };
   await checkRefs(input.salon_id, input.developer_id);
@@ -262,6 +263,7 @@ router.patch("/activities/:id", wrap(async (req, res) => {
   if ("activity_date" in b) patch.activity_date = date(String(b.activity_date).slice(0, 10), "Activity date");
   if ("description" in b) patch.description = reqText(b.description, "Activity description");
   for (const k of ["work_completed", "pending_work"]) if (k in b) patch[k] = text(b[k]);
+  if ("work_status" in b) patch.work_status = oneOf(b.work_status, WORK_STATUSES, "Work status");
   if ("next_followup" in b) patch.next_followup = optDate(b.next_followup, "Next follow-up");
   const r = await repo.updateActivity(uuid(req.params.id, "Activity"), patch, me(req));
   if ("error" in r) throw new AppError(404, "Activity not found", "NOT_FOUND");
