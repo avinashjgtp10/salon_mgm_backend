@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import { AppError } from '../../middleware/error.middleware';
 import { sendSuccess } from '../utils/response.util';
 import { paymentsService } from './payments.service';
+import { paymentMethodChangeService } from './payment-method-change.service';
 import { CreatePaymentBody } from './payments.types';
 
 type AuthRequest = Request & { user?: { userId: string; role?: string; salonId?: string | null } };
@@ -26,6 +27,25 @@ export const paymentsController = {
 
       const payment = await paymentsService.create(body, userId);
       return sendSuccess(res, 201, payment, 'Payment recorded successfully');
+    } catch (err) { return next(err); }
+  },
+
+  // PATCH /payments/appointment/:id/method  { from, to } — correct a wrongly chosen payment method on a paid bill
+  async changeMethod(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const userId = req.user?.userId;
+      const salonId = req.user?.salonId;
+      if (!userId) throw new AppError(401, 'Unauthorized', 'UNAUTHORIZED');
+      if (!salonId) throw new AppError(403, 'Salon context required', 'NO_SALON_CONTEXT');
+      const result = await paymentMethodChangeService.change({
+        salonId,
+        appointmentId: String(req.params.id || '').trim(),
+        from: req.body?.from,
+        to: req.body?.to,
+        amount: req.body?.amount,
+        userId,
+      });
+      return sendSuccess(res, 200, result, 'Payment method updated');
     } catch (err) { return next(err); }
   },
 
