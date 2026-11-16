@@ -25,7 +25,46 @@ async function resolveOwnedSalonId(req: Request): Promise<string> {
 
 const VALID_STATUSES: ScheduledMessageStatus[] = ['SCHEDULED', 'SENDING', 'SENT', 'FAILED', 'SKIPPED', 'CANCELLED']
 
+const HISTORY_STATUSES = ['SENT', 'DELIVERED', 'READ', 'FAILED', 'SKIPPED']
+const isDay = (v: unknown): v is string => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v)
+const toList = (v: unknown): string[] | undefined =>
+  v === undefined ? undefined : (Array.isArray(v) ? v as string[] : [v as string])
+
 export const waScheduledMessagesController = {
+
+  // GET /api/v1/wa-automation/scheduled/history/:salonId/summary?dateFrom=&dateTo=
+  async historySummary(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const salonId = await resolveOwnedSalonId(req)
+      const dateFrom = isDay(req.query.dateFrom) ? req.query.dateFrom : undefined
+      const dateTo   = isDay(req.query.dateTo)   ? req.query.dateTo   : undefined
+      const result = await waScheduledMessagesService.historySummary({ salonId, dateFrom, dateTo })
+      sendSuccess(res, 200, result, 'History summary fetched')
+    } catch (err) { next(err) }
+  },
+
+  // GET /api/v1/wa-automation/scheduled/history/:salonId?eventType=&status=&dateFrom=&dateTo=&search=&page=&limit=
+  async historyList(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const salonId = await resolveOwnedSalonId(req)
+      const status = toList(req.query.status)
+      const invalid = status?.find(s => !HISTORY_STATUSES.includes(s))
+      if (invalid) return next(new AppError(400, `Invalid status: ${invalid}`, 'VALIDATION_ERROR'))
+      const rawPage  = parseInt(req.query.page as string)
+      const rawLimit = parseInt(req.query.limit as string)
+      const result = await waScheduledMessagesService.historyList({
+        salonId,
+        dateFrom:  isDay(req.query.dateFrom) ? req.query.dateFrom : undefined,
+        dateTo:    isDay(req.query.dateTo)   ? req.query.dateTo   : undefined,
+        eventType: toList(req.query.eventType),
+        status,
+        search:    typeof req.query.search === 'string' ? req.query.search : undefined,
+        page:      Number.isFinite(rawPage)  && rawPage  > 0 ? rawPage : 1,
+        limit:     Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, 100) : 20,
+      })
+      sendSuccess(res, 200, result, 'History fetched')
+    } catch (err) { next(err) }
+  },
 
   // GET /api/v1/wa-automation/scheduled/:salonId
   async list(req: Request, res: Response, next: NextFunction): Promise<void> {

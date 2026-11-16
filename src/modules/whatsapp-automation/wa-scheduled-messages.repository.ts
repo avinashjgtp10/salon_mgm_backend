@@ -11,6 +11,20 @@ import {
   ListScheduledMessagesFilters,
 } from './whatsapp-automation.types'
 
+// WHERE for the History queries — aliased `l` so the list query can join clients. Owner-facing alerts and unsent
+// (QUEUED) rows are excluded; dates are inclusive days on the time the message went out (or was attempted).
+function historyWhere(params: { salonId: string; dateFrom?: string; dateTo?: string }): { where: string; values: any[] } {
+  const conditions = [
+    'l.salon_id = $1',
+    `l.status <> 'QUEUED'`,
+    `l.event_type NOT IN ('cash_counter_opened','cash_counter_closed','cash_counter_opened_updated','cash_counter_closed_updated')`,
+  ]
+  const values: any[] = [params.salonId]
+  if (params.dateFrom) { values.push(params.dateFrom); conditions.push(`COALESCE(l.sent_at, l.created_at) >= $${values.length}::date`) }
+  if (params.dateTo)   { values.push(params.dateTo);   conditions.push(`COALESCE(l.sent_at, l.created_at) < ($${values.length}::date + interval '1 day')`) }
+  return { where: conditions.join(' AND '), values }
+}
+
 export const waScheduledMessagesRepository = {
 
   // The one INSERT-or-move method — every Group A insertion point and Group
@@ -202,6 +216,68 @@ export const waScheduledMessagesRepository = {
       `UPDATE wa_scheduled_messages SET status = 'CANCELLED', cancelled_at = NOW(), updated_at = NOW() WHERE ${where}`,
       values
     )
+  },
+
+  // ── History ────────────────────────────────────────────────────────────────
+  // What was actually sent to clients, read from wa_automation_logs — the one table every WhatsApp automation message
+  // lands in (scheduled ones and the instant ones such as bill receipts), so the counts cover every template.
+  // Messages to the salon OWNER (cash counter alerts) are left out: this is about clients.
+  // QUEUED rows have not gone out yet and are not history.
+  async historySummary(params: { salonId: string; dateFrom?: string; dateTo?: string }): Promise<{
+    byEvent: { event_type: string; total: number; sent: number; delivered: number; read: number; failed: number; skipped: number }[]
+  }> {
+    const { where, values } = historyWhere(params)
+    const { rows } = await pool.query(
+      `SELECT l.event_type,
+              COUNT(*)::int                                                      AS total,
+              COUNT(*) FILTER (WHERE l.status IN ('SENT','DELIVERED','READ'))::int AS sent,
+              COUNT(*) FILTER (WHERE l.status IN ('DELIVERED','READ'))::int        AS delivered,
+              COUNT(*) FILTER (WHERE l.status = 'READ')::int                       AS read,
+              COUNT(*) FILTER (WHERE l.status = 'FAILED')::int                     AS failed,
+              COUNT(*) FILTER (WHERE l.status = 'SKIPPED')::int                    AS skipped
+       FROM wa_automation_logs l
+       WHERE ${where}
+       GROUP BY l.event_type
+       ORDER BY total DESC`,
+      values
+    )
+    return { byEvent: rows }
+  },
+
+  async historyList(params: {
+    salonId: string; dateFrom?: string; dateTo?: string
+    eventType?: string[]; status?: string[]; search?: string; page?: number; limit?: number
+  }): Promise<{ data: any[]; total: number }> {
+    const page   = Math.max(1, parseInt(String(params.page  ?? 1))  || 1)
+    const limit  = Math.min(100, Math.max(1, parseInt(String(params.limit ?? 20)) || 20))
+    const offset = (page - 1) * limit
+
+    const { where: base, values } = historyWhere(params)
+    const conditions = [base]
+    let idx = values.length + 1
+    if (params.eventType?.length) { conditions.push(`l.event_type = ANY($${idx++}::text[])`); values.push(params.eventType) }
+    if (params.status?.length)    { conditions.push(`l.status = ANY($${idx++}::text[])`);     values.push(params.status) }
+    if (params.search?.trim()) {
+      conditions.push(`(l.phone_number ILIKE $${idx} OR c.full_name ILIKE $${idx})`)
+      values.push(`%${params.search.trim()}%`)
+      idx++
+    }
+    const where = conditions.join(' AND ')
+
+    const countRes = await pool.query(
+      `SELECT COUNT(*)::int AS n FROM wa_automation_logs l LEFT JOIN clients c ON c.id = l.client_id WHERE ${where}`, values)
+    const dataRes = await pool.query(
+      `SELECT l.id, l.event_type, l.template_name, l.status, l.phone_number, l.failure_reason,
+              l.sent_at, l.delivered_at, l.read_at, l.created_at,
+              c.full_name AS client_name
+       FROM wa_automation_logs l
+       LEFT JOIN clients c ON c.id = l.client_id
+       WHERE ${where}
+       ORDER BY COALESCE(l.sent_at, l.created_at) DESC
+       LIMIT $${idx} OFFSET $${idx + 1}`,
+      [...values, limit, offset]
+    )
+    return { data: dataRes.rows, total: countRes.rows[0].n }
   },
 
   async list(filters: ListScheduledMessagesFilters): Promise<{ data: ScheduledMessage[]; total: number }> {

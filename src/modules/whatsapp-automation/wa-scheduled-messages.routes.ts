@@ -24,6 +24,10 @@ const deleteScheduledTemplate = requirePermission('delete_scheduled_template')
 const sendNowScheduledTemplate = requirePermission('send_now_scheduled_template')
 const resendScheduledTemplate = requirePermission('resend_scheduled_template')
 
+// History: every WhatsApp template actually sent to clients (counts per template + the list). Same view permission.
+router.get('/history/:salonId/summary', ownerAdminStaff, viewScheduledTemplates, waScheduledMessagesController.historySummary)
+router.get('/history/:salonId', ownerAdminStaff, viewScheduledTemplates, waScheduledMessagesController.historyList)
+
 // GET /api/v1/wa-automation/scheduled/:salonId?status=&eventType=&clientId=&dateFrom=&dateTo=&search=&page=&limit=
 router.get('/:salonId', ownerAdminStaff, viewScheduledTemplates, waScheduledMessagesController.list)
 
