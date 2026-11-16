@@ -193,6 +193,37 @@ export const attendanceRepository = {
         return rows[0] ? (await withActivity(rows))[0] : null;
     },
 
+    // Every earlier day of this staff member that still has a check-in and no check-out, oldest first (read-only).
+    async findOpenSessionsBefore(staffId: string, beforeDate: string): Promise<{ attendance_id: string; staff_id: string; staff_name: string; date: string; check_in: string; open_break: { id: string; actual_start: string } | null }[]> {
+        const { rows } = await pool.query(
+            `SELECT a.id AS attendance_id, a.staff_id, a.date::text AS date,
+                    to_char(a.check_in AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS check_in,
+                    (SELECT json_build_object('id', b.id, 'actual_start', to_char(b.actual_start AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'))
+                       FROM attendance_breaks b WHERE b.attendance_id = a.id AND b.actual_end IS NULL LIMIT 1) AS open_break,
+                    TRIM(CONCAT(st.first_name, ' ', COALESCE(st.last_name, ''))) AS staff_name
+             FROM attendance a JOIN staff st ON st.id = a.staff_id
+             WHERE a.staff_id = $1 AND a.date < $2::date AND a.check_in IS NOT NULL AND a.check_out IS NULL
+             ORDER BY a.date ASC`,
+            [staffId, beforeDate]
+        );
+        return rows;
+    },
+
+    // Same, for every staff member of a salon at once (the attendance list flags rows that still have an unfinished earlier day).
+    async findOpenSessionsBySalonBefore(salonId: string, beforeDate: string): Promise<{ attendance_id: string; staff_id: string; date: string; check_in: string; open_break: { id: string; actual_start: string } | null }[]> {
+        const { rows } = await pool.query(
+            `SELECT a.id AS attendance_id, a.staff_id, a.date::text AS date,
+                    to_char(a.check_in AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS check_in,
+                    (SELECT json_build_object('id', b.id, 'actual_start', to_char(b.actual_start AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'))
+                       FROM attendance_breaks b WHERE b.attendance_id = a.id AND b.actual_end IS NULL LIMIT 1) AS open_break
+             FROM attendance a
+             WHERE a.salon_id = $1 AND a.date < $2::date AND a.check_in IS NOT NULL AND a.check_out IS NULL
+             ORDER BY a.date ASC`,
+            [salonId, beforeDate]
+        );
+        return rows;
+    },
+
     // The staff member's next check-in after `afterDate`, so a late check-out can't run into it (overlapping sessions).
     async findNextCheckInAfter(staffId: string, afterDate: string): Promise<string | null> {
         const { rows } = await pool.query(
@@ -357,6 +388,47 @@ export const attendanceRepository = {
             [salonId, staffId, date, checkOut, hoursWorked, status, note ?? null, location ?? null]
         );
         return rows[0];
+    },
+
+    // Closes an earlier day that was left with an UNFINISHED BREAK, all in one transaction: the break is first ended at the time the admin
+    // gives (or removed, when the admin says no break was actually taken), then the day's check-out is saved. Either both happen or
+    // neither does. The attendance row is locked for the duration, so a repeated or concurrent request cannot double-apply: the
+    // second one finds the day already checked out. Only this attendance record (by id) and its own break are touched.
+    async closeDayWithBreakFix(p: {
+        salonId: string; attendanceId: string; breakId: string; breakAction: "end" | "discard"; breakEnd?: string;
+        checkOut: string; status: AttendanceStatus; hoursWorked: number; note?: string;
+    }): Promise<Attendance | null> {
+        const client = await pool.connect();
+        try {
+            await client.query("BEGIN");
+            const { rows: locked } = await client.query(
+                `SELECT id, check_out FROM attendance WHERE id = $1 AND salon_id = $2 FOR UPDATE`, [p.attendanceId, p.salonId]);
+            if (!locked[0]) { await client.query("ROLLBACK"); return null; }
+            if (locked[0].check_out) { await client.query("ROLLBACK"); throw Object.assign(new Error("already checked out"), { appCode: "ALREADY_CHECKED_OUT" }); }
+            if (p.breakAction === "end") {
+                const r = await client.query(
+                    `UPDATE attendance_breaks SET actual_end = $3::timestamptz, updated_at = NOW()
+                     WHERE id = $1 AND attendance_id = $2 AND actual_end IS NULL AND actual_start < $3::timestamptz RETURNING id`,
+                    [p.breakId, p.attendanceId, p.breakEnd]);
+                if (!r.rows[0]) { await client.query("ROLLBACK"); throw Object.assign(new Error("break no longer open"), { appCode: "BREAK_CHANGED" }); }
+            } else {
+                const r = await client.query(
+                    `DELETE FROM attendance_breaks WHERE id = $1 AND attendance_id = $2 AND actual_end IS NULL RETURNING id`,
+                    [p.breakId, p.attendanceId]);
+                if (!r.rows[0]) { await client.query("ROLLBACK"); throw Object.assign(new Error("break no longer open"), { appCode: "BREAK_CHANGED" }); }
+            }
+            const { rows } = await client.query(
+                `UPDATE attendance SET check_out = $2::timestamptz, hours_worked = $3, status = $4, note = COALESCE($5, note), updated_at = NOW()
+                 WHERE id = $1 RETURNING *`,
+                [p.attendanceId, p.checkOut, p.hoursWorked, p.status, p.note ?? null]);
+            await client.query("COMMIT");
+            return rows[0];
+        } catch (err) {
+            try { await client.query("ROLLBACK"); } catch { /* already rolled back */ }
+            throw err;
+        } finally {
+            client.release();
+        }
     },
 
     // ── Upsert (used by auto-attendance and device push) ─────────────────────

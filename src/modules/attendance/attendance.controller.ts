@@ -1,3 +1,4 @@
+import logger from "../../config/logger";
 import { getSalonTimezone } from "../../config/salonTimezone";
 import pool from "../../config/database";
 import { attendanceRepository } from "./attendance.repository";
@@ -61,16 +62,28 @@ export const attendanceController = {
             const salonId = req.user?.salonId;
             if (!salonId) throw new AppError(403, "Salon context required", "NO_SALON_CONTEXT");
             if (!isMobileStaffRequest(req)) await assertStaffScope(req, req.body.staff_id);
-            const record = isMobileStaffRequest(req)
-                ? (await staffSelfCheckIn(req.user!.userId, salonId)).record
-                : await attendanceService.checkIn(salonId, req.body as CheckInBody);
-            return sendSuccess(res, 200, record, "Checked in successfully");
-        } catch (err) {
-            // The admin web screen resolves an unfinished earlier day in a dialog, so this is an answer, not a failure: 200 with the
-            // pending record and nothing checked in. (Biometric / QR pushes and the staff app keep getting the 409 error.)
-            if (err instanceof AppError && err.code === "PREVIOUS_CHECKOUT_PENDING" && !isMobileStaffRequest(req)) {
-                return sendSuccess(res, 200, { checked_in: false, requires_previous_checkout: true, pending: err.details }, err.message);
+            if (isMobileStaffRequest(req)) {
+                const record = (await staffSelfCheckIn(req.user!.userId, salonId)).record;
+                return sendSuccess(res, 200, record, "Checked in successfully");
             }
+            const record = await attendanceService.checkIn(salonId, req.body as CheckInBody);
+            // Today's check-in is saved. Any earlier day still missing its check-out is reported alongside (oldest first) so the
+            // screen can now ask for it; it never blocks today's check-in.
+            // This lookup is secondary: today's check-in is already committed, so a failure here must not turn the request into a
+            // 500 (the screen would claim the check-in failed). It is logged as an error, and the response says the check could not
+            // run; the attendance list still flags the staff member's open earlier days on the next load.
+            let previous_incomplete: Awaited<ReturnType<typeof attendanceService.openPreviousSessions>> = [];
+            let previous_check_failed = false;
+            try {
+                previous_incomplete = await attendanceService.openPreviousSessions(salonId, record.staff_id, String(record.check_in));
+            } catch (lookupErr) {
+                previous_check_failed = true;
+                logger.error("attendance.checkIn: check-in saved, but the earlier-incomplete-days lookup failed", {
+                    salonId, staffId: record.staff_id, attendanceId: record.id, error: lookupErr instanceof Error ? lookupErr.message : String(lookupErr),
+                });
+            }
+            return sendSuccess(res, 200, { ...record, previous_incomplete, previous_check_failed }, "Checked in successfully");
+        } catch (err) {
             return next(err);
         }
     },
@@ -126,7 +139,12 @@ export const attendanceController = {
             const existing = await attendanceRepository.findById(id);
             if (!existing) throw new AppError(404, "Attendance not found", "NOT_FOUND");
             await assertStaffScope(req, existing.staff_id);
-            const record = await attendanceService.completeMissedCheckOut(salonId, id, checkOut, typeof req.body?.note === "string" ? req.body.note : undefined);
+            // Optional correction of an unfinished break on that day: "end" (with break_end) or "discard" (no break was taken).
+            const breakAction = req.body?.break_action;
+            if (breakAction !== undefined && breakAction !== "end" && breakAction !== "discard") throw new AppError(400, "break_action must be \"end\" or \"discard\"", "VALIDATION_ERROR");
+            if (breakAction === "end" && !String(req.body?.break_end || "").trim()) throw new AppError(400, "break_end is required to end the break", "VALIDATION_ERROR");
+            const record = await attendanceService.completeMissedCheckOut(salonId, id, checkOut, typeof req.body?.note === "string" ? req.body.note : undefined,
+                { action: breakAction, breakEnd: breakAction === "end" ? String(req.body.break_end).trim() : undefined });
             return sendSuccess(res, 200, record, "Previous check-out completed");
         } catch (err) { return next(err); }
     },

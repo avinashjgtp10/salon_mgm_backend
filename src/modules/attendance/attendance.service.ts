@@ -321,6 +321,14 @@ export const attendanceService = {
         return existing;
     },
 
+    /** Earlier days of this staff member that still have no check-out, oldest first (complete them in that order). */
+    // The attendance day is derived from the check-in instant in the salon's timezone, exactly as checkIn() does. It must NOT be taken
+    // from the saved row's `date` column: pg hands that back as a JS Date, and String(Date) is "Mon Nov 16 2026 ..." (not a date).
+    async openPreviousSessions(salonId: string, staffId: string, checkIn: string) {
+        const date = new Date(checkIn).toLocaleDateString("en-CA", { timeZone: await getSalonTimezone(salonId) });
+        return attendanceRepository.findOpenSessionsBefore(staffId, date);
+    },
+
     // ── Check In ──────────────────────────────────────────────────────────────
 
     async checkIn(salonId: string, body: CheckInBody): Promise<Attendance> {
@@ -329,7 +337,8 @@ export const attendanceService = {
         const date = new Date(checkInTs).toLocaleDateString("en-CA", { timeZone: await getSalonTimezone(salonId) });
         const existing = await attendanceRepository.findByStaffAndDate(staff_id, date);
         if (existing?.check_in) throw new AppError(409, "Attendance already has a check-in. Staff on break must check in through their own app.", "ALREADY_CHECKED_IN");
-        await assertNoOpenPreviousSession(staff_id, date);
+        // An unfinished EARLIER day never blocks today's check-in: today is saved first, and the caller then asks for the missing
+        // check-out(s) (see attendanceService.openPreviousSessions / completeMissedCheckOut). Nothing of the earlier day is touched here.
 
         const onLeave = await attendanceRepository.hasApprovedLeave(staff_id, date);
         if (onLeave) throw new AppError(400, "Staff member is on approved leave today", "ON_LEAVE");
@@ -395,12 +404,14 @@ export const attendanceService = {
     // Closes an earlier day that was left open (check-in, no check-out) with the check-out time the admin enters. It only fills
     // in the missing check-out: the check-in and the day's date are untouched, hours are recomputed from the real check-in /
     // check-out / breaks, and the status follows the same rule as a normal check-out. Never closes a day by itself.
-    async completeMissedCheckOut(salonId: string, id: string, checkOutTs: string, note?: string): Promise<Attendance> {
+    // A day that was left with an unfinished BREAK is never closed by ignoring that break: the caller must either give the time the break
+    // really ended (fix.action "end" + fix.breakEnd) or say that no break was taken (fix.action "discard"). Without one of these the
+    // ON_BREAK error stays, and carries the open break so the screen can ask for it.
+    async completeMissedCheckOut(salonId: string, id: string, checkOutTs: string, note?: string, fix: { action?: "end" | "discard"; breakEnd?: string } = {}): Promise<Attendance> {
         const existing = await attendanceRepository.findById(id);
         if (!existing || existing.salon_id !== salonId) throw new AppError(404, "Attendance record not found", "NOT_FOUND");
         if (!existing.check_in) throw new AppError(400, "This day has no check-in to close.", "NOT_CHECKED_IN");
         if (existing.check_out) throw new AppError(409, "This day already has a check-out.", "ALREADY_CHECKED_OUT");
-        if (existing.active_break) throw new AppError(409, "Finish the break before checkout", "ON_BREAK");
 
         const out = Date.parse(checkOutTs);
         if (!Number.isFinite(out)) throw new AppError(400, "check_out must be a valid date and time", "VALIDATION_ERROR");
@@ -412,15 +423,62 @@ export const attendanceService = {
             throw new AppError(409, "That check-out is later than this staff member's next check-in. Choose an earlier time.", "OVERLAPPING_SESSION");
         }
 
-        const hours = attendanceActivity(existing, existing.breaks, new Date(checkOutTs)).total_worked_seconds / 3600;
+        // Breaks of THIS attendance day only (existing.breaks is read by attendance id). The check-out must come after every break that ended.
+        const allBreaks: any[] = existing.breaks ?? [];
+        const open = allBreaks.find(b => !b.actual_end) ?? null;
+        const completed = allBreaks.filter(b => b.actual_end);
+        const lastEnd = completed.reduce((m, b) => Math.max(m, Date.parse(b.actual_end)), 0);
+        if (lastEnd && out <= lastEnd) throw new AppError(400, "Check-out must be after the last break ended.", "INVALID_CHECKOUT");
+
+        let breaksAfter: any[] = completed;
+        let breakAction: "end" | "discard" | null = null;
+        if (open) {
+            if (fix.action === "discard") {
+                breakAction = "discard";
+            } else if (fix.action === "end") {
+                const be = Date.parse(fix.breakEnd ?? "");
+                if (!Number.isFinite(be)) throw new AppError(400, "break_end must be a valid date and time", "VALIDATION_ERROR");
+                if (be <= Date.parse(open.actual_start)) throw new AppError(400, "The break must end after it started.", "INVALID_BREAK");
+                if (be >= out) throw new AppError(400, "The break must end before the check-out time.", "INVALID_BREAK");
+                if (be > Date.now() + 60_000) throw new AppError(400, "The break end time cannot be in the future.", "INVALID_BREAK");
+                breakAction = "end";
+                breaksAfter = [...completed, { ...open, actual_end: fix.breakEnd }];
+            } else {
+                throw new AppError(409, "Finish the break before checkout", "ON_BREAK", { open_break: { id: open.id, actual_start: open.actual_start } });
+            }
+        } else if (fix.action) {
+            throw new AppError(409, "There is no unfinished break to correct on this day.", "NO_OPEN_BREAK");
+        }
+
+        const hours = attendanceActivity(existing, breaksAfter, new Date(checkOutTs)).total_worked_seconds / 3600;
         let status: AttendanceStatus = existing.status;
         if (status !== "half_day") {
             const settings = await attendanceService.getSettings(salonId);
             status = calcStatus(existing.check_in, checkOutTs, settings, hours);
         }
-        const record = await attendanceRepository.upsertCheckOut({
-            salonId, staffId: existing.staff_id, date: String(existing.date).slice(0, 10), checkOut: checkOutTs, status, hoursWorked: hours, note,
-        });
+        let record: Attendance | null;
+        if (breakAction) {
+            // Break correction + check-out in one transaction (see closeDayWithBreakFix).
+            try {
+                record = await attendanceRepository.closeDayWithBreakFix({
+                    salonId, attendanceId: id, breakId: open.id, breakAction, breakEnd: fix.breakEnd, checkOut: checkOutTs, status, hoursWorked: hours, note,
+                });
+            } catch (err: any) {
+                if (err?.appCode === "ALREADY_CHECKED_OUT") throw new AppError(409, "This day already has a check-out.", "ALREADY_CHECKED_OUT");
+                if (err?.appCode === "BREAK_CHANGED") throw new AppError(409, "This break was changed meanwhile. Reload and try again.", "BREAK_CHANGED");
+                const m = String(err?.message ?? "");
+                // The database guards break history. A break saved without a scheduled shift cannot be edited, only removed.
+                if (/scheduled shift/i.test(m)) throw new AppError(409, "This break was recorded without a scheduled shift, so its end time cannot be set. Choose \"No break was taken\" to remove it.", "BREAK_NOT_EDITABLE");
+                if (/Overlapping|immutable|Finish the break|precedes|already/i.test(m)) throw new AppError(409, m, "BREAK_CONFLICT");
+                throw err;
+            }
+            if (!record) throw new AppError(404, "Attendance record not found", "NOT_FOUND");
+            logger.info("attendance.completeMissedCheckOut.breakFix", { salonId, attendanceId: id, staffId: existing.staff_id, breakAction, breakId: open.id });
+        } else {
+            record = await attendanceRepository.upsertCheckOut({
+                salonId, staffId: existing.staff_id, date: String(existing.date).slice(0, 10), checkOut: checkOutTs, status, hoursWorked: hours, note,
+            });
+        }
         logger.info("attendance.completeMissedCheckOut", { salonId, staffId: existing.staff_id, attendanceId: id, status, hours });
         emitAttendanceUpdated(salonId);
         return record;
@@ -434,7 +492,6 @@ export const attendanceService = {
         const date = new Date(ts).toLocaleDateString("en-CA", { timeZone: await getSalonTimezone(salonId) });
 
         if (check_type === "in") {
-            await assertNoOpenPreviousSession(staff_id, date);
             const onLeave = await attendanceRepository.hasApprovedLeave(staff_id, date);
             if (onLeave) {
                 const record = await attendanceRepository.upsert({
@@ -547,6 +604,15 @@ export const attendanceService = {
         ]);
 
         const recordMap = new Map(records.map(r => [r.staff_id, r]));
+        // Earlier days still missing a check-out, per staff (oldest first): lets the screen keep offering "complete previous check-out"
+        // after a refresh, without blocking anything.
+        const openBefore = await attendanceRepository.findOpenSessionsBySalonBefore(salonId, date);
+        const openByStaff = new Map<string, { attendance_id: string; date: string; check_in: string }[]>();
+        for (const o of openBefore) {
+            const list = openByStaff.get(o.staff_id) ?? [];
+            list.push({ attendance_id: o.attendance_id, date: o.date, check_in: o.check_in });
+            openByStaff.set(o.staff_id, list);
+        }
 
         const staff: TodayStaffRecord[] = allStaff.map(s => {
             const rec = recordMap.get(s.id);
@@ -564,6 +630,7 @@ export const attendanceService = {
                 scheduled_hours: scheduledMap.get(s.id)?.scheduled_hours ?? null,
                 shift_start: scheduledMap.get(s.id)?.shift_start ?? null,
                 attendance_id: rec?.id ?? null,
+                previous_incomplete: openByStaff.get(s.id) ?? [],
             };
         });
 
