@@ -9,7 +9,7 @@ export const MEETING_MODES = ["on_site", "online", "phone"] as const;
 export const MEETING_STATUSES = ["scheduled", "completed", "rescheduled", "cancelled", "not_conducted"] as const;
 export const TRAINING_STATUSES = ["not_started", "scheduled", "in_progress", "completed", "needs_retraining"] as const;
 export const UNDERSTANDING = ["good", "average", "needs_more_training"] as const;
-export const ACTIVITY_TYPES = ["meeting", "training", "salon_visit", "phone_call", "whatsapp_discussion", "technical_support", "implementation", "client_feedback", "general"] as const;
+export const ACTIVITY_TYPES = ["meeting", "training", "salon_visit", "phone_call", "checkup_call", "whatsapp_discussion", "technical_support", "implementation", "client_feedback", "general"] as const;
 export const TASK_STATUSES = ["pending", "in_progress", "completed", "cancelled"] as const;
 export const TASK_PRIORITIES = ["low", "medium", "high", "urgent"] as const;
 export const ATTACHMENT_ENTITIES = ["meeting", "training", "activity", "task"] as const;
@@ -41,7 +41,7 @@ const TASK_SELECT = `
 
 const ACTIVITY_SELECT = `
   a.id, a.salon_id, ${SALON_NAME} AS salon_name, a.developer_id, d.name AS developer_name, a.activity_type, a.activity_date,
-  a.description, a.work_completed, a.pending_work, a.next_followup::text AS next_followup, a.source_type, a.source_id,
+  a.description, a.work_completed, a.pending_work, a.work_status, a.next_followup::text AS next_followup, a.source_type, a.source_id,
   a.created_by, COALESCE(NULLIF(TRIM(CONCAT_WS(' ', u.first_name, u.last_name)), ''), u.email) AS created_by_name, a.created_at, a.updated_at,
   (SELECT COUNT(*)::int FROM client_activity_attachments x WHERE x.entity_type = 'activity' AND x.entity_id = a.id) AS attachment_count
   FROM client_activity_logs a
@@ -369,9 +369,9 @@ export const clientManagementRepository = {
   async createActivity(input: any, by: string) {
     return tx(async (c) => {
       const { rows } = await c.query(
-        `INSERT INTO client_activity_logs (salon_id, developer_id, activity_type, activity_date, description, work_completed, pending_work, next_followup, created_by, updated_by)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$9) RETURNING id`,
-        [input.salon_id, input.developer_id, input.activity_type, input.activity_date, input.description, input.work_completed, input.pending_work, input.next_followup, by],
+        `INSERT INTO client_activity_logs (salon_id, developer_id, activity_type, activity_date, description, work_completed, pending_work, next_followup, work_status, created_by, updated_by)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$10,$9,$9) RETURNING id`,
+        [input.salon_id, input.developer_id, input.activity_type, input.activity_date, input.description, input.work_completed, input.pending_work, input.next_followup, by, input.work_status ?? null],
       );
       await audit(c, input.salon_id, "activity", rows[0].id, "activity_created", null, { activity_type: input.activity_type, description: input.description }, by);
       return rows[0].id as string;
@@ -380,19 +380,19 @@ export const clientManagementRepository = {
   async updateActivity(id: string, patch: Record<string, any>, by: string) {
     return tx(async (c) => {
       const { rows: cur } = await c.query(
-        `SELECT id, salon_id, developer_id, activity_type, activity_date, description, work_completed, pending_work, next_followup::text AS next_followup, source_type
+        `SELECT id, salon_id, developer_id, activity_type, activity_date, description, work_completed, pending_work, work_status, next_followup::text AS next_followup, source_type
            FROM client_activity_logs WHERE id = $1 FOR UPDATE`, [id]);
       const before = cur[0];
       if (!before) return { error: "NOT_FOUND" as const };
-      const keys = ["developer_id", "activity_type", "activity_date", "description", "work_completed", "pending_work", "next_followup"];
+      const keys = ["developer_id", "activity_type", "activity_date", "description", "work_completed", "pending_work", "work_status", "next_followup"];
       const after: Record<string, any> = { ...before };
       for (const k of keys) if (k in patch) after[k] = patch[k];
       const d = diff(before, after, keys);
       if (!d.changed) return { id };
       await c.query(
         `UPDATE client_activity_logs SET developer_id=$2, activity_type=$3, activity_date=$4, description=$5, work_completed=$6, pending_work=$7,
-           next_followup=$8, updated_by=$9, updated_at=NOW() WHERE id=$1`,
-        [id, after.developer_id, after.activity_type, after.activity_date, after.description, after.work_completed, after.pending_work, after.next_followup, by],
+           next_followup=$8, work_status=$10, updated_by=$9, updated_at=NOW() WHERE id=$1`,
+        [id, after.developer_id, after.activity_type, after.activity_date, after.description, after.work_completed, after.pending_work, after.next_followup, by, after.work_status ?? null],
       );
       await audit(c, before.salon_id, "activity", id, "activity_updated", d.previous, d.next, by);
       return { id };
