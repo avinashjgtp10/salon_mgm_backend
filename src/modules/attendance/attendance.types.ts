@@ -146,4 +146,6 @@ export type TodayStaffRecord = Partial<ReturnType<typeof attendanceActivity>> & 
     // Start of the day's scheduled shift as "HH:MM", or null when none is scheduled.
     shift_start: string | null;
     attendance_id: string | null;
+    // Earlier days still missing a check-out (oldest first); never blocks today.
+    previous_incomplete?: { attendance_id: string; date: string; check_in: string; open_break?: { id: string; actual_start: string } | null }[];
 };
