@@ -1,7 +1,6 @@
 import { Request, Response, NextFunction } from "express";
 import { authService } from "./auth.service";
 import { authRepository } from "./auth.repository";
-import pool from "../../config/database";
 import { AppError } from "../../middleware/error.middleware";
 import { sendSuccess } from "../utils/response.util";
 ``
@@ -382,14 +381,25 @@ export const authController = {
     }
   },
 
-  // DELETE /api/v1/auth/account — soft-delete the account
+  // POST /api/v1/auth/account/delete-otp — e-mail the signed-in user a code that confirms deleting their account
+  async sendAccountDeletionOtp(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const userId = req.user?.userId;
+      if (!userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
+      const data = await authService.sendAccountDeletionOtp(userId);
+      sendSuccess(res, 200, data, "Code sent");
+    } catch (err) {
+      next(err);
+    }
+  },
+
+  // DELETE /api/v1/auth/account { otp } — soft-delete the account, only with the e-mailed code
   async deleteAccount(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const userId = req.user?.userId;
       if (!userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
-      await authRepository.deleteAllRefreshTokensForUser(userId);
-      await pool.query(`UPDATE users SET deleted_at = NOW(), updated_at = NOW() WHERE id = $1`, [userId]);
-      sendSuccess(res, 200, null, "Account deletion requested. Data will be erased within 30 days.");
+      await authService.deleteAccountWithOtp(userId, req.body?.otp);
+      sendSuccess(res, 200, null, "Your account has been deleted.");
     } catch (err) {
       next(err);
     }

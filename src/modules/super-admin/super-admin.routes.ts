@@ -2,6 +2,8 @@ import { Router } from "express";
 import { authMiddleware } from "../../middleware/auth.middleware";
 import { superAdminMiddleware } from "../../middleware/role.middleware";
 import { superAdminController } from "./super-admin.controller";
+import { superAdminActivityLogger } from "./super-admin-activity";
+import { superAdminOwnerOnly } from "./super-admin-owner.middleware";
 import { salonClientInvoicesController } from "../salon-client-invoices/salon-client-invoices.controller";
 import waConfigSuperAdminRoutes from "../marketing/whatsapp/config/config.super-admin.routes";
 import clientActivityRoutes from "../client-activity/client-activity.super-admin.routes";
@@ -16,6 +18,7 @@ import paymentTrackingRoutes from "../payment-tracking/payment-tracking.routes";
 import paymentGatewayRoutes from "../payment-gateway/payment-gateway.routes";
 import subscriptionInvoiceRoutes from "../subscription-invoices/subscription-invoices.routes";
 import clientAnnouncementsRoutes from "../client-announcements/client-announcements.routes";
+import marketingLogsRoutes from "../marketing-logs/marketing-logs.routes";
 
 const router = Router();
 
@@ -24,10 +27,13 @@ router.post("/login", superAdminController.login);
 
 // ── All routes below require valid JWT + super_admin role ─────────────────────
 router.use(authMiddleware, superAdminMiddleware);
+// Records the account / salon changes made by whoever is signed in (shown to the owner in Developer Activity).
+router.use(superAdminActivityLogger);
 
 // Client Activity Tracking: Web + App logins and usage per account (Super Admin only).
-router.use("/client-activity", clientActivityRoutes);
-router.use("/client-management", clientManagementRoutes);
+// Client Activity (web/app usage across accounts) is for the owner account only. Client Management is open to team members but scoped to their own records.
+router.use("/client-activity", superAdminOwnerOnly, clientActivityRoutes);
+router.use("/client-management", clientManagementRoutes);   // scoped per team member inside; see client-management.routes.ts
 
 // A salon's WhatsApp (Meta Cloud API) connection — managed here, by us, not by the salon.
 router.use("/salons/:salonId/wa-config", waConfigSuperAdminRoutes);
@@ -47,6 +53,8 @@ router.use("/payment-gateway", paymentGatewayRoutes);
 router.use("/subscription-invoices", subscriptionInvoiceRoutes);
 // Client Announcements: picks the platform salon and copies salon owners into its client list.
 router.use("/client-announcements", clientAnnouncementsRoutes);
+// Marketing Logs: every message sent to clients (automation, campaigns, SMS, Email) across all salons.
+router.use("/marketing-logs", marketingLogsRoutes);
 
 // Salon-specific permissions
 router.get("/salon-permissions/search",       superAdminController.searchSalonsForPermissions);

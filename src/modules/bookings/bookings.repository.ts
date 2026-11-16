@@ -310,23 +310,10 @@ export const bookingsRepository = {
              ) r ON r.staff_id = s.id
              WHERE s.salon_id = $1
                AND s.is_active = true
-               -- Independent of allow_calendar_bookings (that one gates the
-               -- internal Calendar column, a different concern per the Staff
-               -- Visibility ticket) — this is Marketplace Profile's own
-               -- per-staff "Show in Online Booking" toggle.
-               AND COALESCE(s.show_in_online_booking, true) = true
-               AND (
-                 $2::uuid[] IS NULL
-                 OR NOT EXISTS (
-                   SELECT 1
-                   FROM unnest($2::uuid[]) AS req(service_id)
-                   WHERE EXISTS (SELECT 1 FROM service_staff m WHERE m.service_id = req.service_id)
-                     AND NOT EXISTS (
-                       SELECT 1 FROM service_staff m2
-                       WHERE m2.service_id = req.service_id AND m2.staff_id = s.id
-                     )
-                 )
-               )
+               -- Simple rule: every ACTIVE staff member is shown online. The
+               -- "Show in Online Booking" toggle and the service_staff mapping
+               -- no longer hide anyone (the ids parameter is kept only so callers don't change).
+               AND ($2::uuid[] IS NULL OR TRUE)
              ORDER BY s.first_name ASC`,
             [salonId, ids]
         );
@@ -343,19 +330,7 @@ export const bookingsRepository = {
              FROM staff s
              WHERE s.id = $1 AND s.salon_id = $2
                AND s.is_active = true
-               AND COALESCE(s.allow_calendar_bookings, true) = true
-               AND (
-                 $3::uuid[] IS NULL
-                 OR NOT EXISTS (
-                   SELECT 1
-                   FROM unnest($3::uuid[]) AS req(service_id)
-                   WHERE EXISTS (SELECT 1 FROM service_staff m WHERE m.service_id = req.service_id)
-                     AND NOT EXISTS (
-                       SELECT 1 FROM service_staff m2
-                       WHERE m2.service_id = req.service_id AND m2.staff_id = s.id
-                     )
-                 )
-               )
+               AND ($3::uuid[] IS NULL OR TRUE)
              LIMIT 1`,
             [staffId, salonId, ids]
         );

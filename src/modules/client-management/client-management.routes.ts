@@ -5,7 +5,8 @@ import fs from "fs";
 import { AppError } from "../../middleware/error.middleware";
 import { sendSuccess } from "../utils/response.util";
 import { developerLogins, updateDeveloper } from "./developer-logins";
-import { developerActivity } from "./developer-activity";
+import { ownerActivity } from "../super-admin/super-admin-activity";
+import { isSuperAdminOwner, superAdminOwnerOnly } from "../super-admin/super-admin-owner.middleware";
 import {
   clientManagementRepository as repo,
   MEETING_TYPES, MEETING_MODES, MEETING_STATUSES, TRAINING_STATUSES, UNDERSTANDING, ACTIVITY_TYPES, TASK_STATUSES, TASK_PRIORITIES, ATTACHMENT_ENTITIES,
@@ -47,6 +48,20 @@ const qDate = (v: unknown) => (DATE.test(String(v ?? "")) ? String(v) : undefine
 const me = (r: Authed) => { if (!r.user?.userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED"); return r.user.userId; };
 const wrap = (fn: (req: Authed, res: Response) => Promise<unknown>) => (req: Request, res: Response, next: NextFunction) => { fn(req as Authed, res).catch(next); };
 
+// Who is asking. The Super Admin OWNER sees every team member's records; any other Super Admin login (a team member) only sees and
+// changes the records assigned to THEIR OWN team-member entry, so one developer's meetings are never visible to another.
+// scope === null -> the owner (no limit); otherwise the developers.id this login is limited to (NO_DEVELOPER matches nothing).
+const NO_DEVELOPER = "00000000-0000-0000-0000-000000000000";
+async function scopeOf(r: Authed): Promise<string | null> {
+  const uid = me(r);
+  if (await isSuperAdminOwner(uid)) return null;
+  return (await repo.developerIdForUser(uid)) ?? NO_DEVELOPER;
+}
+/** A record that belongs to someone else reads as "not found" for a team member, so its existence isn't revealed either. */
+function mustOwn(scope: string | null, owner: string | null, what: string) {
+  if (scope !== null && owner !== scope) throw new AppError(404, `${what} not found`, "NOT_FOUND");
+}
+
 async function checkRefs(salonId: string, developerId: string | null) {
   if (!(await repo.salonExists(salonId))) throw new AppError(404, "Salon not found", "NOT_FOUND");
   if (developerId && !(await repo.developerExists(developerId))) throw new AppError(404, "Team member not found", "NOT_FOUND");
@@ -55,31 +70,34 @@ async function checkRefs(salonId: string, developerId: string | null) {
 
 // ── Developer / team-member Super Admin logins ──────────────────────────────
 // Optional: a developer from the team directory can be given a Super Admin login (their email + a password shown once here).
-router.patch("/team/:id", wrap(async (req, res) => sendSuccess(res, 200, await updateDeveloper(uuid(req.params.id, "Developer"), req.body ?? {}), "Developer updated")));
-router.get("/developer-activity/summary", wrap(async (req, res) => sendSuccess(res, 200, await developerActivity.summary({ from: qDate(req.query.from), to: qDate(req.query.to) }), "Developer summary fetched")));
-router.get("/developer-activity", wrap(async (req, res) => sendSuccess(res, 200, await developerActivity.feed({
-  developerIds: qUuids(req.query.developer_id), entityTypes: qEnums(req.query.entity_type, ATTACHMENT_ENTITIES), from: qDate(req.query.from), to: qDate(req.query.to), search: qs(req.query.search), ...page(req),
-}), "Developer activity fetched")));
-router.get("/developer-logins", wrap(async (_req, res) => sendSuccess(res, 200, await developerLogins.list(), "Developer logins fetched")));
-router.post("/team/:id/login", wrap(async (req, res) => sendSuccess(res, 201, await developerLogins.create(uuid(req.params.id, "Developer"), req.body?.password), "Login created")));
-router.post("/team/:id/login/reset-password", wrap(async (req, res) => sendSuccess(res, 200, await developerLogins.resetPassword(uuid(req.params.id, "Developer"), req.body?.password), "Password reset")));
-router.patch("/team/:id/login", wrap(async (req, res) => {
+router.patch("/team/:id", superAdminOwnerOnly, wrap(async (req, res) => sendSuccess(res, 200, await updateDeveloper(uuid(req.params.id, "Developer"), req.body ?? {}), "Developer updated")));
+// Developer Activity page: only the Super Admin OWNER's own activity (developers are not listed there). See super-admin-activity.ts.
+const WORK_STATUSES = ["pending_client", "pending_us", "completed", "not_completed"];
+const OWNER_ACTIVITY_TYPES = ["user", "salon", "demo_request", "invoice", "meeting", "task", "activity", "training"] as const;
+router.get("/developer-activity", superAdminOwnerOnly, wrap(async (req, res) => sendSuccess(res, 200, await ownerActivity.feed({
+  entityTypes: qEnums(req.query.entity_type, OWNER_ACTIVITY_TYPES), from: qDate(req.query.from), to: qDate(req.query.to), search: qs(req.query.search), ...page(req),
+}), "Activity fetched")));
+router.get("/developer-logins", superAdminOwnerOnly, wrap(async (_req, res) => sendSuccess(res, 200, await developerLogins.list(), "Developer logins fetched")));
+router.post("/team/:id/login", superAdminOwnerOnly, wrap(async (req, res) => sendSuccess(res, 201, await developerLogins.create(uuid(req.params.id, "Developer"), req.body?.password), "Login created")));
+router.post("/team/:id/login/reset-password", superAdminOwnerOnly, wrap(async (req, res) => sendSuccess(res, 200, await developerLogins.resetPassword(uuid(req.params.id, "Developer"), req.body?.password), "Password reset")));
+router.patch("/team/:id/login", superAdminOwnerOnly, wrap(async (req, res) => {
   if (typeof req.body?.is_active !== "boolean") throw bad("is_active must be true or false");
   return sendSuccess(res, 200, await developerLogins.setActive(uuid(req.params.id, "Developer"), req.body.is_active), "Login updated");
 }));
 // ── Dashboard + salon summary ────────────────────────────────────────────────
-router.get("/dashboard", wrap(async (_req, res) => sendSuccess(res, 200, await repo.dashboard(), "Dashboard fetched")));
+router.get("/dashboard", wrap(async (req, res) => sendSuccess(res, 200, await repo.dashboard(await scopeOf(req)), "Dashboard fetched")));
 
 router.get("/salons/:salonId/summary", wrap(async (req, res) => {
   const salonId = uuid(req.params.salonId, "Salon");
   if (!(await repo.salonExists(salonId))) throw new AppError(404, "Salon not found", "NOT_FOUND");
-  return sendSuccess(res, 200, await repo.salonSummary(salonId), "Summary fetched");
+  return sendSuccess(res, 200, await repo.salonSummary(salonId, await scopeOf(req)), "Summary fetched");
 }));
 
 // ── Meetings ─────────────────────────────────────────────────────────────────
 router.get("/meetings", wrap(async (req, res) => {
+  const scope = await scopeOf(req);
   const data = await repo.listMeetings({
-    salonId: qUuids(req.query.salon_id), developerId: qUuids(req.query.developer_id), type: qEnums(req.query.type, MEETING_TYPES),
+    salonId: qUuids(req.query.salon_id), developerId: scope ? [scope] : qUuids(req.query.developer_id), type: qEnums(req.query.type, MEETING_TYPES),
     status: qEnums(req.query.status, MEETING_STATUSES), from: qDate(req.query.from), to: qDate(req.query.to), search: qs(req.query.search), ...page(req),
   });
   return sendSuccess(res, 200, data, "Meetings fetched");
@@ -88,6 +106,7 @@ router.get("/meetings", wrap(async (req, res) => {
 router.get("/meetings/:id", wrap(async (req, res) => {
   const m = await repo.getMeeting(uuid(req.params.id, "Meeting"));
   if (!m) throw new AppError(404, "Meeting not found", "NOT_FOUND");
+  mustOwn(await scopeOf(req), m.developer_id ?? null, "Meeting");
   return sendSuccess(res, 200, m, "Meeting fetched");
 }));
 
@@ -97,8 +116,10 @@ function meetingTimes(start: string | null, end: string | null, label: string) {
 
 router.post("/meetings", wrap(async (req, res) => {
   const b = req.body ?? {};
+  const scope = await scopeOf(req);
   const input = {
-    salon_id: uuid(b.salon_id, "Salon"), developer_id: optUuid(b.developer_id, "Team member"),
+    // A team member can only schedule meetings for themselves; the owner chooses.
+    salon_id: uuid(b.salon_id, "Salon"), developer_id: scope ?? optUuid(b.developer_id, "Team member"),
     title: text(b.title, 200) ?? MEETING_TYPE_LABELS[String(b.meeting_type)] ?? "Meeting", meeting_type: oneOf(b.meeting_type, MEETING_TYPES, "Meeting type"),
     meeting_date: date(b.meeting_date, "Meeting date"), start_time: optTime(b.start_time, "Start time"), end_time: optTime(b.end_time, "End time"),
     meeting_mode: oneOf(b.meeting_mode, MEETING_MODES, "Meeting mode"), location_or_link: text(b.location_or_link, 1000),
@@ -113,8 +134,12 @@ router.post("/meetings", wrap(async (req, res) => {
 router.patch("/meetings/:id", wrap(async (req, res) => {
   const id = uuid(req.params.id, "Meeting");
   const b = req.body ?? {};
+  const scope = await scopeOf(req);
+  const cur = await repo.entityDeveloper("meeting", id);
+  if (!cur.exists) throw new AppError(404, "Meeting not found", "NOT_FOUND");
+  mustOwn(scope, cur.developerId, "Meeting");
   const patch: Record<string, any> = {};
-  if ("developer_id" in b) patch.developer_id = optUuid(b.developer_id, "Team member");
+  if ("developer_id" in b) patch.developer_id = scope ?? optUuid(b.developer_id, "Team member");   // a team member can't hand a meeting to someone else
   if ("title" in b) patch.title = reqText(b.title, "Meeting title", 200);
   if ("meeting_type" in b) patch.meeting_type = oneOf(b.meeting_type, MEETING_TYPES, "Meeting type");
   if ("meeting_date" in b) patch.meeting_date = date(b.meeting_date, "Meeting date");
@@ -140,6 +165,9 @@ router.patch("/meetings/:id", wrap(async (req, res) => {
 router.post("/meetings/:id/complete", wrap(async (req, res) => {
   const id = uuid(req.params.id, "Meeting");
   const b = req.body ?? {};
+  const cur = await repo.entityDeveloper("meeting", id);
+  if (!cur.exists) throw new AppError(404, "Meeting not found", "NOT_FOUND");
+  mustOwn(await scopeOf(req), cur.developerId, "Meeting");
   const input = {
     actual_date: date(b.actual_date, "Actual meeting date"),
     actual_start_time: optTime(b.actual_start_time, "Actual start time"), actual_end_time: optTime(b.actual_end_time, "Actual end time"),
@@ -169,19 +197,21 @@ router.post("/training/modules", wrap(async (req, res) => {
   return sendSuccess(res, 201, created, "Module added");
 }));
 
-router.get("/training/overview", wrap(async (req, res) => sendSuccess(res, 200, await repo.trainingOverview({ search: qs(req.query.search), ...page(req) }), "Training overview fetched")));
+router.get("/training/overview", wrap(async (req, res) => sendSuccess(res, 200, await repo.trainingOverview({ search: qs(req.query.search), developerId: await scopeOf(req), ...page(req) }), "Training overview fetched")));
 
 router.get("/training/salons/:salonId", wrap(async (req, res) => {
   const salonId = uuid(req.params.salonId, "Salon");
   if (!(await repo.salonExists(salonId))) throw new AppError(404, "Salon not found", "NOT_FOUND");
-  return sendSuccess(res, 200, await repo.salonTraining(salonId, { status: qEnum(req.query.status, TRAINING_STATUSES), developerId: qUuid(req.query.developer_id) }), "Training fetched");
+  const scope = await scopeOf(req);
+  return sendSuccess(res, 200, await repo.salonTraining(salonId, { status: qEnum(req.query.status, TRAINING_STATUSES), developerId: scope ? undefined : qUuid(req.query.developer_id), viewerDeveloperId: scope }), "Training fetched");
 }));
 
 // One row per salon + module, so POST and PUT both create-or-update it (POST answers 201 when the row is new).
 const saveTraining = wrap(async (req, res) => {
   const b = req.body ?? {};
+  const scope = await scopeOf(req);
   const input = {
-    salon_id: uuid(b.salon_id, "Salon"), module_id: uuid(b.module_id, "Training module"), developer_id: optUuid(b.developer_id, "Team member"),
+    salon_id: uuid(b.salon_id, "Salon"), module_id: uuid(b.module_id, "Training module"), developer_id: scope ?? optUuid(b.developer_id, "Team member"),
     training_date: optDate(b.training_date, "Training date"), status: oneOf(b.status, TRAINING_STATUSES, "Training status"),
     notes: text(b.notes), attending_staff: text(b.attending_staff, 1000),
     duration_minutes: b.duration_minutes === undefined || b.duration_minutes === null || b.duration_minutes === "" ? null : num(b.duration_minutes, 0, 0, 24 * 60),
@@ -189,6 +219,11 @@ const saveTraining = wrap(async (req, res) => {
     next_training_date: optDate(b.next_training_date, "Next training date"),
   };
   if (input.status === "scheduled" && !input.training_date) throw bad("Pick the training date to schedule it");
+  if (scope) {
+    // One training row exists per salon + module: a team member can't overwrite one another member recorded.
+    const row = await repo.trainingRowDeveloper(input.salon_id, input.module_id);
+    if (row.exists && row.developerId !== scope) throw new AppError(403, "This training was recorded by another team member.", "FORBIDDEN");
+  }
   await checkRefs(input.salon_id, input.developer_id);
   const { id, created } = await repo.upsertTraining(input, me(req));
   return sendSuccess(res, req.method === "POST" && created ? 201 : 200, { id }, created ? "Training added" : "Training updated");
@@ -198,16 +233,17 @@ router.put("/training/progress", saveTraining);
 
 // ── Activity timeline ────────────────────────────────────────────────────────
 router.get("/activities", wrap(async (req, res) => sendSuccess(res, 200, await repo.listActivities({
-  salonId: qUuids(req.query.salon_id), type: qEnums(req.query.type, ACTIVITY_TYPES), developerId: qUuids(req.query.developer_id),
+  salonId: qUuids(req.query.salon_id), type: qEnums(req.query.type, ACTIVITY_TYPES), developerId: await scopeOf(req).then((s) => (s ? [s] : qUuids(req.query.developer_id))),
   from: qDate(req.query.from), to: qDate(req.query.to), search: qs(req.query.search), ...page(req),
 }), "Activities fetched")));
 
 router.post("/activities", wrap(async (req, res) => {
   const b = req.body ?? {};
+  const scope = await scopeOf(req);
   const input = {
-    salon_id: uuid(b.salon_id, "Salon"), developer_id: optUuid(b.developer_id, "Team member"), activity_type: oneOf(b.activity_type, ACTIVITY_TYPES, "Activity type"),
+    salon_id: uuid(b.salon_id, "Salon"), developer_id: scope ?? optUuid(b.developer_id, "Team member"), activity_type: oneOf(b.activity_type, ACTIVITY_TYPES, "Activity type"),
     activity_date: b.activity_date ? date(String(b.activity_date).slice(0, 10), "Activity date") : new Date().toISOString().slice(0, 10),
-    description: reqText(b.description, "Activity description"), work_completed: text(b.work_completed), pending_work: text(b.pending_work),
+    description: reqText(b.description, "Activity description"), work_completed: text(b.work_completed), pending_work: text(b.pending_work), work_status: oneOf(b.work_status, WORK_STATUSES, "Work status"),
     next_followup: optDate(b.next_followup, "Next follow-up"),
   };
   await checkRefs(input.salon_id, input.developer_id);
@@ -217,12 +253,17 @@ router.post("/activities", wrap(async (req, res) => {
 
 router.patch("/activities/:id", wrap(async (req, res) => {
   const b = req.body ?? {};
+  const scope = await scopeOf(req);
+  const cur = await repo.entityDeveloper("activity", uuid(req.params.id, "Activity"));
+  if (!cur.exists) throw new AppError(404, "Activity not found", "NOT_FOUND");
+  mustOwn(scope, cur.developerId, "Activity");
   const patch: Record<string, any> = {};
-  if ("developer_id" in b) patch.developer_id = optUuid(b.developer_id, "Team member");
+  if ("developer_id" in b) patch.developer_id = scope ?? optUuid(b.developer_id, "Team member");
   if ("activity_type" in b) patch.activity_type = oneOf(b.activity_type, ACTIVITY_TYPES, "Activity type");
   if ("activity_date" in b) patch.activity_date = date(String(b.activity_date).slice(0, 10), "Activity date");
   if ("description" in b) patch.description = reqText(b.description, "Activity description");
   for (const k of ["work_completed", "pending_work"]) if (k in b) patch[k] = text(b[k]);
+  if ("work_status" in b) patch.work_status = oneOf(b.work_status, WORK_STATUSES, "Work status");
   if ("next_followup" in b) patch.next_followup = optDate(b.next_followup, "Next follow-up");
   const r = await repo.updateActivity(uuid(req.params.id, "Activity"), patch, me(req));
   if ("error" in r) throw new AppError(404, "Activity not found", "NOT_FOUND");
@@ -231,14 +272,15 @@ router.patch("/activities/:id", wrap(async (req, res) => {
 
 // ── Follow-up tasks ──────────────────────────────────────────────────────────
 router.get("/tasks", wrap(async (req, res) => sendSuccess(res, 200, await repo.listTasks({
-  salonId: qUuids(req.query.salon_id), developerId: qUuids(req.query.developer_id), status: qEnums(req.query.status, TASK_STATUSES),
+  salonId: qUuids(req.query.salon_id), developerId: await scopeOf(req).then((s) => (s ? [s] : qUuids(req.query.developer_id))), status: qEnums(req.query.status, TASK_STATUSES),
   priority: qEnums(req.query.priority, TASK_PRIORITIES), bucket: qs(req.query.bucket), search: qs(req.query.search), ...page(req),
 }), "Tasks fetched")));
 
 router.post("/tasks", wrap(async (req, res) => {
   const b = req.body ?? {};
+  const scope = await scopeOf(req);
   const input = {
-    salon_id: uuid(b.salon_id, "Salon"), developer_id: optUuid(b.developer_id, "Assigned team member"), title: reqText(b.title, "Task title", 200),
+    salon_id: uuid(b.salon_id, "Salon"), developer_id: scope ?? optUuid(b.developer_id, "Assigned team member"), title: reqText(b.title, "Task title", 200),
     description: text(b.description), priority: b.priority ? oneOf(b.priority, TASK_PRIORITIES, "Priority") : "medium", due_date: optDate(b.due_date, "Due date"),
   };
   await checkRefs(input.salon_id, input.developer_id);
@@ -248,8 +290,12 @@ router.post("/tasks", wrap(async (req, res) => {
 
 router.patch("/tasks/:id", wrap(async (req, res) => {
   const b = req.body ?? {};
+  const scope = await scopeOf(req);
+  const cur = await repo.entityDeveloper("task", uuid(req.params.id, "Task"));
+  if (!cur.exists) throw new AppError(404, "Task not found", "NOT_FOUND");
+  mustOwn(scope, cur.developerId, "Task");
   const patch: Record<string, any> = {};
-  if ("developer_id" in b) patch.developer_id = optUuid(b.developer_id, "Assigned team member");
+  if ("developer_id" in b) patch.developer_id = scope ?? optUuid(b.developer_id, "Assigned team member");
   if ("title" in b) patch.title = reqText(b.title, "Task title", 200);
   if ("description" in b) patch.description = text(b.description);
   if ("priority" in b) patch.priority = oneOf(b.priority, TASK_PRIORITIES, "Priority");
@@ -283,6 +329,9 @@ router.post("/attachments", upload.single("file"), wrap(async (req, res) => {
   try {
     const entityType = oneOf(req.body?.entity_type, ATTACHMENT_ENTITIES, "Entity type");
     const entityId = uuid(req.body?.entity_id, "Record");
+    const owner = await repo.entityDeveloper(entityType, entityId);
+    if (!owner.exists) throw new AppError(404, "Record not found", "NOT_FOUND");
+    mustOwn(await scopeOf(req), owner.developerId, "Record");
     const salonId = await repo.entitySalon(entityType, entityId);
     if (!salonId) throw new AppError(404, "Record not found", "NOT_FOUND");
     const row = await repo.addAttachment({
@@ -298,16 +347,27 @@ router.post("/attachments", upload.single("file"), wrap(async (req, res) => {
 
 router.get("/attachments", wrap(async (req, res) => {
   const entityType = oneOf(req.query.entity_type, ATTACHMENT_ENTITIES, "Entity type");
-  return sendSuccess(res, 200, await repo.listAttachments(entityType, uuid(req.query.entity_id, "Record")), "Attachments fetched");
+  const entityId = uuid(req.query.entity_id, "Record");
+  const owner = await repo.entityDeveloper(entityType, entityId);
+  mustOwn(await scopeOf(req), owner.developerId, "Record");
+  return sendSuccess(res, 200, await repo.listAttachments(entityType, entityId), "Attachments fetched");
 }));
 
 // ── Audit trail + reports ────────────────────────────────────────────────────
-router.get("/audit", wrap(async (req, res) => sendSuccess(res, 200, await repo.listAudit({
-  salonId: qUuid(req.query.salon_id), entityType: qs(req.query.entity_type), entityId: qUuid(req.query.entity_id), ...page(req),
-}), "Audit fetched")));
+router.get("/audit", wrap(async (req, res) => {
+  // A team member only sees the trail of records that are theirs.
+  const scope = await scopeOf(req);
+  const entityId = qUuid(req.query.entity_id);
+  const entityType = qs(req.query.entity_type);
+  if (scope) {
+    if (!entityId || !entityType) return sendSuccess(res, 200, [], "Audit fetched");
+    mustOwn(scope, (await repo.entityDeveloper(entityType, entityId)).developerId, "Record");
+  }
+  return sendSuccess(res, 200, await repo.listAudit({ salonId: qUuid(req.query.salon_id), entityType, entityId, ...page(req) }), "Audit fetched");
+}));
 
 router.get("/reports", wrap(async (req, res) => sendSuccess(res, 200, await repo.reports({
-  salonId: qUuid(req.query.salon_id), from: qDate(req.query.from), to: qDate(req.query.to), search: qs(req.query.search), ...page(req),
+  salonId: qUuid(req.query.salon_id), from: qDate(req.query.from), to: qDate(req.query.to), search: qs(req.query.search), developerId: await scopeOf(req), ...page(req),
 }), "Reports fetched")));
 
 export default router;

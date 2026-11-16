@@ -185,6 +185,25 @@ export const emailService = {
     });
   },
 
+  // One-time code that confirms a signed-in user really wants their account deleted.
+  async sendAccountDeletionOtpEmail(email: string, otp: string, minutes: number) {
+    await transporter.sendMail({
+      from: config.smtp.from,
+      to: email,
+      subject: "SalonOx - Confirm account deletion",
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+          <h2 style="color: #b91c1c;">Confirm account deletion</h2>
+          <p style="color: #666; font-size: 16px;">Someone asked to permanently delete your SalonOx account. Enter this code to confirm:</p>
+          <div style="background-color: #f4f4f7; padding: 20px; border-radius: 8px; text-align: center; margin: 20px 0;">
+            <h1 style="letter-spacing: 6px; color: #b91c1c; margin: 0; font-size: 32px;">${otp}</h1>
+          </div>
+          <p style="color: #666; font-size: 14px;">The code expires in ${minutes} minutes. If this wasn't you, ignore this email and change your password — your account has not been deleted.</p>
+        </div>
+      `,
+    });
+  },
+
   async sendPasswordResetOtpEmail(email: string, otp: string, options: { language?: string | null; salonId?: string | null } = {}) {
     const lang = await emailLanguage(options);
     const t = translator(lang);

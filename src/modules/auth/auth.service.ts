@@ -17,6 +17,7 @@ import logger from "../../config/logger";
 import crypto from "crypto";
 import axios from "axios";
 import redis from "../../config/redis";
+import pool from "../../config/database";
 import type { GoogleOAuthProfile, GoogleStatePayload } from "./auth.types";
 import { getSalonDateLocale } from "../../config/currency";
 
@@ -544,6 +545,55 @@ export const authService = {
 
     logger.info("[authService.verifyEmailOtp] Email verified successfully", { email, userId: user.id });
     return { message: "Email verified successfully", success: true };
+  },
+
+  // ================= DELETE MY ACCOUNT =================
+  // A signed-in user confirms deletion with a code e-mailed to the address on their account. The code lives in Redis
+  // (hashed, 10 min), so it needs no table; wrong guesses are capped so it can't be brute-forced.
+  _deleteOtpKey(userId: string) { return `otp:account-delete:${userId}`; },
+
+  async sendAccountDeletionOtp(userId: string) {
+    const user = await authRepository.findUserById(userId);
+    if (!user || user.deleted_at) throw new AppError(404, "Account not found", "USER_NOT_FOUND");
+
+    // 30 s between sends so the button can't be used to flood an inbox.
+    const fresh = await redis.set(`${this._deleteOtpKey(userId)}:cooldown`, "1", "EX", 30, "NX");
+    if (!fresh) throw new AppError(429, "Please wait a few seconds before asking for another code.", "OTP_COOLDOWN");
+
+    const otp = generateOtp();
+    await redis.set(this._deleteOtpKey(userId), await hashOtp(otp), "EX", 10 * 60);
+    await redis.del(`${this._deleteOtpKey(userId)}:tries`);
+    try {
+      await emailService.sendAccountDeletionOtpEmail(user.email, otp, 10);
+    } catch (emailErr: any) {
+      logger.error("[authService.sendAccountDeletionOtp] Failed to send email", { userId, error: emailErr?.message });
+      await redis.del(this._deleteOtpKey(userId), `${this._deleteOtpKey(userId)}:cooldown`);
+      throw new AppError(500, "Failed to send the code. Please try again.", "EMAIL_SEND_FAILED");
+    }
+    return { email: user.email };
+  },
+
+  /** Checks the e-mailed code and, only if it is right, soft-deletes the account and ends every session. */
+  async deleteAccountWithOtp(userId: string, otpRaw: string) {
+    const otp = String(otpRaw || "").trim();
+    if (!otp) throw new AppError(400, "Enter the code we e-mailed you.", "VALIDATION_ERROR");
+
+    const key = this._deleteOtpKey(userId);
+    const tries = await redis.incr(`${key}:tries`);
+    if (tries === 1) await redis.expire(`${key}:tries`, 10 * 60);
+    if (tries > 5) {
+      await redis.del(key);
+      throw new AppError(429, "Too many wrong codes. Ask for a new code.", "OTP_LOCKED");
+    }
+
+    const stored = await redis.get(key);
+    if (!stored) throw new AppError(400, "Code expired. Ask for a new code.", "OTP_EXPIRED");
+    if (!(await compareOtp(otp, stored))) throw new AppError(400, "That code is not correct.", "OTP_INVALID");
+
+    await redis.del(key, `${key}:tries`, `${key}:cooldown`);
+    await authRepository.deleteAllRefreshTokensForUser(userId);
+    await pool.query(`UPDATE users SET deleted_at = NOW(), updated_at = NOW() WHERE id = $1`, [userId]);
+    logger.info("[authService.deleteAccountWithOtp] Account deletion confirmed", { userId });
   },
 
   // ================= FORGOT PASSWORD =================
