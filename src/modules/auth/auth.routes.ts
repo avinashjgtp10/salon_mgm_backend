@@ -16,6 +16,7 @@ router.post("/login", loginRateLimitCheck, authController.login);
 router.post("/refresh", authController.refresh);
 router.post("/logout", authController.logout);
 router.post("/logout-all", authMiddleware, authController.logoutAll);
+router.post("/account/delete-otp", authMiddleware, authController.sendAccountDeletionOtp);
 router.delete("/account", authMiddleware, authController.deleteAccount);
 
 // Email OTP
