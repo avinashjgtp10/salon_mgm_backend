@@ -388,6 +388,8 @@ export const attendanceService = {
         if (status !== "half_day") {
             const settings = await attendanceService.getSettings(salonId);
             status = calcStatus(existing.check_in, checkOutTs, settings, hours);
+            // A Late mark given at check-in (manually or by rule) is kept; only too few hours can still turn the day into half day / absent.
+            if (existing.status === "late" && status === "present") status = "late";
         }
 
         const record = await attendanceRepository.upsertCheckOut({
@@ -455,6 +457,7 @@ export const attendanceService = {
         if (status !== "half_day") {
             const settings = await attendanceService.getSettings(salonId);
             status = calcStatus(existing.check_in, checkOutTs, settings, hours);
+            if (existing.status === "late" && status === "present") status = "late";
         }
         let record: Attendance | null;
         if (breakAction) {

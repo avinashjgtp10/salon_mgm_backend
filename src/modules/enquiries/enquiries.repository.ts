@@ -1,11 +1,31 @@
 import pool from "../../config/database";
 import { CreateEnquiryBody, Enquiry, EnquiryListResponse, ListEnquiriesQuery, UpdateEnquiryBody } from "./enquiries.types";
 
+// An enquiry can be about several services: service_ids holds all of them, service_id stays the first (reports and older screens read it).
+// Rows saved before service_ids existed only have service_id, so that one is used as the list. (service_ids / service_names below
+// replace the raw column of the same name that e.* brings along.)
 const SELECT_FIELDS = `
   e.*,
   s.name AS service_name,
+  CASE WHEN cardinality(e.service_ids) > 0 THEN e.service_ids
+       WHEN e.service_id IS NOT NULL THEN ARRAY[e.service_id]
+       ELSE ARRAY[]::uuid[] END AS service_ids,
+  COALESCE((SELECT json_agg(sv.name ORDER BY sv.name) FROM services sv
+             WHERE sv.id = ANY(e.service_ids) OR sv.id = e.service_id), '[]'::json) AS service_names,
   CONCAT(st.first_name, ' ', st.last_name) AS staff_name
 `;
+
+// Added on first use (migrations are applied by hand; Migration/add_enquiry_service_ids.sql is the same statement).
+let serviceIdsColumn: Promise<void> | null = null;
+function ensureServiceIdsColumn(): Promise<void> {
+  if (!serviceIdsColumn) {
+    serviceIdsColumn = pool
+      .query(`ALTER TABLE enquiries ADD COLUMN IF NOT EXISTS service_ids UUID[] NOT NULL DEFAULT '{}'`)
+      .then(() => undefined)
+      .catch((e) => { serviceIdsColumn = null; throw e; });
+  }
+  return serviceIdsColumn;
+}
 
 const buildWhere = (query: ListEnquiriesQuery, salonId: string) => {
     const where: string[] = [];
@@ -48,7 +68,15 @@ const buildWhere = (query: ListEnquiriesQuery, salonId: string) => {
 };
 
 export const enquiriesRepository = {
+    /** How many of these services exist in this salon (a service of another salon must never be attached). */
+    async countSalonServices(ids: string[], salonId: string): Promise<number> {
+        if (!ids.length) return 0;
+        const { rows } = await pool.query(`SELECT COUNT(*)::int AS n FROM services WHERE id = ANY($1::uuid[]) AND salon_id = $2`, [ids, salonId]);
+        return rows[0]?.n ?? 0;
+    },
+
     async findById(id: string, salonId: string): Promise<Enquiry | null> {
+        await ensureServiceIdsColumn();
         const { rows } = await pool.query(
             `SELECT ${SELECT_FIELDS}
              FROM enquiries e
@@ -61,6 +89,7 @@ export const enquiriesRepository = {
     },
 
     async list(query: ListEnquiriesQuery, salonId: string): Promise<EnquiryListResponse> {
+        await ensureServiceIdsColumn();
         const page = Math.max(1, Number(query.page ?? 1));
         const limit = Math.min(100, Math.max(1, Number(query.limit ?? 10)));
         const offset = (page - 1) * limit;
@@ -87,6 +116,7 @@ export const enquiriesRepository = {
     },
 
     async create(data: CreateEnquiryBody, salonId: string): Promise<Enquiry> {
+        await ensureServiceIdsColumn();
         // Per-salon sequential enquiry numbers (1, 2, 3, ...) — same
         // UPDATE...RETURNING counter pattern as sales.repository.ts's
         // invoice numbers. The row-level lock Postgres takes on the
@@ -103,8 +133,8 @@ export const enquiriesRepository = {
             const enquiryNo = seqRows[0].seq;
 
             const { rows } = await client.query(
-                `INSERT INTO enquiries (salon_id, enquiry_no, name, phone, service_id, staff_id, status, notes, source, follow_up_at)
-                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+                `INSERT INTO enquiries (salon_id, enquiry_no, name, phone, service_id, staff_id, status, notes, source, follow_up_at, service_ids)
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::uuid[])
                  RETURNING id`,
                 [
                     salonId,
@@ -117,6 +147,7 @@ export const enquiriesRepository = {
                     data.notes ?? null,
                     data.source ?? null,
                     data.follow_up_at ?? null,
+                    data.service_ids ?? (data.service_id ? [data.service_id] : []),
                 ],
             );
             await client.query("COMMIT");
@@ -130,13 +161,14 @@ export const enquiriesRepository = {
     },
 
     async update(id: string, patch: UpdateEnquiryBody, salonId: string): Promise<Enquiry | null> {
-        const ALLOWED: ReadonlySet<string> = new Set(["name", "phone", "service_id", "staff_id", "status", "notes", "source", "follow_up_at"]);
+        await ensureServiceIdsColumn();
+        const ALLOWED: ReadonlySet<string> = new Set(["name", "phone", "service_id", "service_ids", "staff_id", "status", "notes", "source", "follow_up_at"]);
         const raw = patch as Record<string, unknown>;
         const keys = Object.keys(raw).filter((k) => ALLOWED.has(k) && raw[k] !== undefined);
 
         if (!keys.length) return this.findById(id, salonId);
 
-        const setParts = keys.map((k, i) => `${k} = $${i + 1}`);
+        const setParts = keys.map((k, i) => (k === "service_ids" ? `${k} = $${i + 1}::uuid[]` : `${k} = $${i + 1}`));
         const values: unknown[] = keys.map((k) => raw[k]);
         setParts.push(`updated_at = NOW()`);
         values.push(id, salonId);
