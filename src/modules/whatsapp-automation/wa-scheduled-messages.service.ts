@@ -51,6 +51,14 @@ export const waScheduledMessagesService = {
     return waScheduledMessagesRepository.list(filters)
   },
 
+  // ── History (what was actually sent to clients) ───────────────────────────
+  async historySummary(params: { salonId: string; dateFrom?: string; dateTo?: string }) {
+    return waScheduledMessagesRepository.historySummary(params)
+  },
+  async historyList(params: Parameters<typeof waScheduledMessagesRepository.historyList>[0]) {
+    return waScheduledMessagesRepository.historyList(params)
+  },
+
   // ── Group A — schedule a real row at source-entity-creation time ───────────
 
   async schedulePackageExpiry(params: {
