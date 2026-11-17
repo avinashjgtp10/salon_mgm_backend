@@ -1,5 +1,6 @@
 import type { NextFunction, Request, Response } from 'express';
 import { clientMembershipsService } from './client-memberships.service';
+import { redemptionOtpService } from '../redemption-otp/redemption-otp.service';
 import { sendSuccess } from '../utils/response.util';
 import { AppError } from '../../middleware/error.middleware';
 
@@ -49,6 +50,12 @@ export const clientMembershipsController = {
   async consume(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const salonId = getSalonId(req);
+      // Client WhatsApp OTP gate (Settings > Extras, default OFF).
+      if (await redemptionOtpService.isRequired(salonId, ['membership'])) {
+        const cm = await clientMembershipsService.getById(req.params.id as string, salonId);
+        if (!cm) return next(new AppError(404, 'Not found', 'NOT_FOUND'));
+        await redemptionOtpService.assertVerified(salonId, cm.clientId, ['membership']);
+      }
       const data = await clientMembershipsService.consume(req.params.id as string, salonId, req.body);
       return sendSuccess(res, 200, data, 'Session consumed');
     } catch (e: any) {

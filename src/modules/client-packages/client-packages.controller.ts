@@ -1,5 +1,6 @@
 import { NextFunction, Request, Response } from "express";
 import { clientPackagesService } from "./client-packages.service";
+import { redemptionOtpService } from "../redemption-otp/redemption-otp.service";
 import { sendSuccess } from "../utils/response.util";
 import { AppError } from "../../middleware/error.middleware";
 
@@ -58,6 +59,14 @@ export const clientPackagesController = {
   async completeSession(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const salonId = getSalonId(req);
+      // Client WhatsApp OTP gate (Settings > Extras, default OFF). Here at the
+      // route, not in the service: the service is also called by the no-show
+      // scheduler and the scheduled-appointment auto-redeem, where the client is
+      // not present to receive a code.
+      if (await redemptionOtpService.isRequired(salonId, ["package"])) {
+        const pkg = await clientPackagesService.getById(req.params.id as string, salonId);
+        await redemptionOtpService.assertVerified(salonId, pkg.clientId, ["package"]);
+      }
       const data = await clientPackagesService.completeSession(
         req.params.id as string,
         salonId,
