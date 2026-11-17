@@ -29,6 +29,7 @@ const KEY_TO_PERMISSION: Record<string, string> = {
   REFERRAL_CONFIG: "view_settings_referral",
   PRINT_CONFIG: "view_settings_print",
   package_no_show_policy: "view_settings_packages",
+  redeem_otp_required: "view_settings_integrations",
   [TAX_MODULE_KEY]: "view_settings_tax_mapping",
 };
 

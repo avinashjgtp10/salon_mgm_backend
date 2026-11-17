@@ -6,6 +6,7 @@ import { describePaymentMethod } from '../transactions/payment-method.util';
 import { paymentMethodsService } from '../payment-methods/payment-methods.service';
 import { membershipsRepository } from '../memberships/memberships.repository';
 import { clientMembershipsService } from '../client-memberships/client-memberships.service';
+import { redemptionOtpService } from '../redemption-otp/redemption-otp.service';
 import { clientMembershipsRepository } from '../client-memberships/client-memberships.repository';
 import { autoCreatePackagesForBill } from '../transactions/package-autocreate.helper';
 import { rewardPointsRepository } from '../reward-points/reward-points.repository';
@@ -188,6 +189,24 @@ export const paymentsService = {
     await paymentMethodsService.assertNotInactive(body.salon_id, body.payment_method, body.split_details, {
       includeBuiltIns: !posPaymentRequestId && Number(body.paid_amount ?? 0) > 0,
     });
+
+    // Client OTP gate (Settings > Extras, default OFF): a payment that redeems a
+    // package session or membership wallet/discount needs the client's WhatsApp
+    // OTP verified first. Done here, before the lock and before the membership
+    // block in recordPayment (which swallows its own errors), so a refusal is a
+    // clean 428 and nothing is deducted.
+    if (body.client_id && (await redemptionOtpService.isRequired(body.salon_id))) {
+      // Packages and memberships are separate switches, so work out which of the two this payment redeems.
+      const redeemKinds: Array<'package' | 'membership'> = [];
+      if (body.apply_membership_wallet || body.apply_membership_discount) redeemKinds.push('membership');
+      let redeemsPackage = (body.payment_method || '').toLowerCase() === 'package';
+      if (!redeemsPackage && body.appointment_id) {
+        const apptForOtp = await appointmentsRepository.findById(body.appointment_id);
+        redeemsPackage = !!apptForOtp?.services?.some((s: any) => !!s.is_package_service);
+      }
+      if (redeemsPackage) redeemKinds.push('package');
+      await redemptionOtpService.assertVerified(body.salon_id, body.client_id, redeemKinds);
+    }
 
     if (!body.appointment_id) return paymentsService.recordPayment(body, requesterUserId, async () => {});
     const lock = await posPaymentsRepository.acquireAppointmentPaymentLock(body.appointment_id);
