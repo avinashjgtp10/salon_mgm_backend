@@ -50,6 +50,7 @@ const EXPENSE_SORT_COLUMNS: Record<string, string> = {
   expense_date: "cme.expense_date",
   amount: "cme.amount",
   expense_type: "cme.expense_type",
+  payment_method: "cme.payment_method",
   created_at: "cme.created_at",
 };
 
@@ -138,7 +139,8 @@ async function recalculateCounterById(client: DbClient, counterId: string, salon
   const expenseRows = await client.query<{ total: string }>(
     `SELECT COALESCE(SUM(amount), 0)::numeric AS total
      FROM cash_management_expenses
-     WHERE cash_management_id = $1`,
+     WHERE cash_management_id = $1
+       AND COALESCE(payment_method, 'cash') = 'cash'`,   // UPI / Card / … expenses are recorded but never reduce the cash counter
     [counter.id],
   );
 
@@ -348,6 +350,11 @@ export async function ensureCashManagementTables(): Promise<void> {
         updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
     `),
+  );
+
+  // Payment method of an expense (Cash, UPI, Card…). Existing rows were all cash, hence the default.
+  await safeQuery(() =>
+    pool.query(`ALTER TABLE cash_management_expenses ADD COLUMN IF NOT EXISTS payment_method VARCHAR(20) NOT NULL DEFAULT 'cash'`),
   );
 
 }
@@ -739,6 +746,7 @@ export const cashManagementRepository = {
     if (filters.search) {
       where.push(`(
         cme.expense_type ILIKE $${idx}
+        OR COALESCE(cme.payment_method, 'cash') ILIKE $${idx}
         OR COALESCE(cme.description, '') ILIKE $${idx}
         OR COALESCE(u.full_name, TRIM(COALESCE(u.first_name, '') || ' ' || COALESCE(u.last_name, ''))) ILIKE $${idx}
       )`);
@@ -788,6 +796,7 @@ export const cashManagementRepository = {
         cash_management_id: row.cash_management_id,
         expense_date: row.expense_date,
         expense_type: row.expense_type,
+        payment_method: row.payment_method ?? "cash",
         description: row.description,
         amount: parseFloat(row.amount ?? "0"),
         created_by: row.created_by,
@@ -821,8 +830,8 @@ export const cashManagementRepository = {
 
       const { rows } = await client.query<CashManagementExpenseRecord>(
         `INSERT INTO cash_management_expenses (
-          cash_management_id, salon_id, expense_type, description, amount, expense_date, created_by
-        ) VALUES ($1, $2, $3, $4, $5, COALESCE($6::timestamptz, NOW()), $7)
+          cash_management_id, salon_id, expense_type, description, amount, expense_date, created_by, payment_method
+        ) VALUES ($1, $2, $3, $4, $5, COALESCE($6::timestamptz, NOW()), $7, $8)
         RETURNING *`,
         [
           params.body.cash_management_id,
@@ -832,6 +841,7 @@ export const cashManagementRepository = {
           params.body.amount.toFixed(2),
           normalizeExpenseDateInput(params.body.expense_date),
           params.createdBy,
+          params.body.payment_method ?? "cash",
         ],
       );
 
@@ -881,6 +891,7 @@ export const cashManagementRepository = {
         params.body.expense_type === undefined &&
         params.body.description === undefined &&
         params.body.amount === undefined &&
+        params.body.payment_method === undefined &&
         params.body.expense_date === undefined
       ) {
         throw new AppError(400, "At least one expense field is required", "VALIDATION_ERROR");
@@ -893,6 +904,10 @@ export const cashManagementRepository = {
       if (params.body.expense_type !== undefined) {
         setParts.push(`expense_type = $${idx++}`);
         values.push(params.body.expense_type.trim());
+      }
+      if (params.body.payment_method !== undefined) {
+        setParts.push(`payment_method = $${idx++}`);
+        values.push(params.body.payment_method);
       }
       if (params.body.description !== undefined) {
         setParts.push(`description = $${idx++}`);

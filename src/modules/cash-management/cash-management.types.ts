@@ -19,11 +19,16 @@ export type CashManagementRecord = {
   updated_at: string;
 };
  
+/** How an expense was paid. Only "cash" expenses come out of the cash counter; the rest are recorded but do not change the cash balance. */
+export const EXPENSE_PAYMENT_METHODS = ["cash", "upi", "card", "bank_transfer", "other"] as const;
+export type ExpensePaymentMethod = (typeof EXPENSE_PAYMENT_METHODS)[number];
+
 export type CashManagementExpenseRecord = {
   id: string;
   cash_management_id: string;
   salon_id: string;
   expense_type: string;
+  payment_method: string;
   description: string | null;
   amount: string;
   expense_date: string;
@@ -58,6 +63,8 @@ export type EditCounterBody = {
 export type CreateExpenseBody = {
   cash_management_id: string;
   expense_type: string;
+  /** Defaults to "cash" when omitted (older clients). */
+  payment_method?: string;
   description?: string;
   amount: number;
   expense_date?: string;
@@ -65,6 +72,7 @@ export type CreateExpenseBody = {
  
 export type UpdateExpenseBody = Partial<{
   expense_type: string;
+  payment_method: string;
   description: string;
   amount: number;
   expense_date: string;

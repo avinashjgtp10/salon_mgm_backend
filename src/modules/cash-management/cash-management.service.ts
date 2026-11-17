@@ -21,6 +21,17 @@ import type {
   UpdateExpenseBody,
 } from "./cash-management.types";
 import { getSalonMoneyFormatter, getSalonDateLocale } from "../../config/currency";
+import { EXPENSE_PAYMENT_METHODS } from "./cash-management.types";
+
+/** Lower-cases and validates an expense payment method; undefined when none was given, a 400 when it is not one of the allowed methods. */
+function normalizePaymentMethod(value: unknown): string | undefined {
+  if (value === undefined || value === null || String(value).trim() === "") return undefined;
+  const method = String(value).trim().toLowerCase().replace(/[\s-]+/g, "_");
+  if (!(EXPENSE_PAYMENT_METHODS as readonly string[]).includes(method)) {
+    throw new AppError(400, `payment_method must be one of: ${EXPENSE_PAYMENT_METHODS.join(", ")}`, "VALIDATION_ERROR");
+  }
+  return method;
+}
 
 const SUMMARY_BUNDLE_SECTIONS: SummaryBundleSection[] = [
   "cash_dashboard",
@@ -303,11 +314,12 @@ export const cashManagementService = {
     if (!Number.isFinite(body.amount) || body.amount < 0) {
       throw new AppError(400, "amount must be a non-negative number", "VALIDATION_ERROR");
     }
+    const paymentMethod = normalizePaymentMethod(body.payment_method) ?? "cash";
 
     return cashManagementRepository.createExpense({
       salonId,
       createdBy,
-      body,
+      body: { ...body, payment_method: paymentMethod },
     });
   },
 
@@ -321,11 +333,12 @@ export const cashManagementService = {
     if (body.expense_type !== undefined && !body.expense_type.trim()) {
       throw new AppError(400, "expense_type cannot be empty", "VALIDATION_ERROR");
     }
+    const paymentMethod = body.payment_method !== undefined ? normalizePaymentMethod(body.payment_method) : undefined;
 
     return cashManagementRepository.updateExpense({
       salonId,
       expenseId: expenseId.trim(),
-      body,
+      body: paymentMethod !== undefined ? { ...body, payment_method: paymentMethod } : body,
     });
   },
 
