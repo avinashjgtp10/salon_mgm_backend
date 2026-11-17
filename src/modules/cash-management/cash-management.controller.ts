@@ -166,6 +166,7 @@ export const cashManagementController = {
       const result = await cashManagementService.createExpense(salonId, userId, {
         cash_management_id: String(body.cash_management_id || "").trim(),
         expense_type: String(body.expense_type || "").trim(),
+        payment_method: body.payment_method ? String(body.payment_method) : undefined,
         description: body.description ? String(body.description) : undefined,
         amount: Number(body.amount),
         expense_date: body.expense_date ? String(body.expense_date) : undefined,
@@ -184,6 +185,7 @@ export const cashManagementController = {
 
       const result = await cashManagementService.updateExpense(salonId, String(req.params.id || ""), {
         expense_type: body.expense_type != null ? String(body.expense_type) : undefined,
+        payment_method: body.payment_method != null ? String(body.payment_method) : undefined,
         description: body.description != null ? String(body.description) : undefined,
         amount: body.amount != null ? Number(body.amount) : undefined,
         expense_date: body.expense_date != null ? String(body.expense_date) : undefined,
