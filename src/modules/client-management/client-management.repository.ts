@@ -4,12 +4,12 @@ import pool from "../../config/database";
 // Super Admin > Client Activity Management. Team members are the existing `developers` directory (no login).
 // DATE / TIME columns are cast to text in SQL so they reach the browser as "YYYY-MM-DD" / "HH:MM" with no timezone shift.
 
-export const MEETING_TYPES = ["client_meeting", "product_training", "technical_support", "on_site_visit", "online_meeting", "phone_discussion", "implementation", "follow_up"] as const;
+export const MEETING_TYPES = ["online_meeting", "product_training", "technical_support", "follow_up"] as const;
 export const MEETING_MODES = ["on_site", "online", "phone"] as const;
 export const MEETING_STATUSES = ["scheduled", "completed", "rescheduled", "cancelled", "not_conducted"] as const;
 export const TRAINING_STATUSES = ["not_started", "scheduled", "in_progress", "completed", "needs_retraining"] as const;
 export const UNDERSTANDING = ["good", "average", "needs_more_training"] as const;
-export const ACTIVITY_TYPES = ["meeting", "training", "salon_visit", "phone_call", "checkup_call", "whatsapp_discussion", "technical_support", "implementation", "client_feedback", "general"] as const;
+export const ACTIVITY_TYPES = ["meeting", "training", "phone_call", "checkup_call", "whatsapp_discussion", "technical_support", "client_feedback"] as const;
 export const TASK_STATUSES = ["pending", "in_progress", "completed", "cancelled"] as const;
 export const TASK_PRIORITIES = ["low", "medium", "high", "urgent"] as const;
 export const ATTACHMENT_ENTITIES = ["meeting", "training", "activity", "task"] as const;
@@ -20,7 +20,7 @@ const T = (col: string) => `to_char(${col}, 'HH24:MI')`;
 const MEETING_SELECT = `
   m.id, m.salon_id, ${SALON_NAME} AS salon_name, m.developer_id, d.name AS developer_name,
   NULLIF(CONCAT_WS(', ', NULLIF(TRIM(s.city), ''), NULLIF(TRIM(s.state), ''), NULLIF(TRIM(s.country), '')), '') AS salon_location,
-  m.title, m.meeting_type, m.meeting_date::text AS meeting_date, ${T("m.start_time")} AS start_time, ${T("m.end_time")} AS end_time,
+  m.title, m.meeting_type, m.training_module_ids, m.mom, u.phone AS salon_phone, m.meeting_date::text AS meeting_date, ${T("m.start_time")} AS start_time, ${T("m.end_time")} AS end_time,
   m.meeting_mode, m.location_or_link, m.purpose, m.agenda, m.internal_notes, m.status,
   m.actual_date::text AS actual_date, ${T("m.actual_start_time")} AS actual_start_time, ${T("m.actual_end_time")} AS actual_end_time,
   m.discussion_summary, m.training_provided, m.work_completed, m.client_feedback, m.issues_discussed, m.pending_actions,
@@ -29,7 +29,8 @@ const MEETING_SELECT = `
   COALESCE((SELECT json_agg(a.name ORDER BY a.created_at) FROM meeting_attendees a WHERE a.meeting_id = m.id AND a.kind = 'present'), '[]') AS attendees_present
   FROM client_meetings m
   JOIN salons s ON s.id = m.salon_id
-  LEFT JOIN developers d ON d.id = m.developer_id`;
+  LEFT JOIN developers d ON d.id = m.developer_id
+  LEFT JOIN users u ON u.id = s.owner_id`;
 
 const TASK_SELECT = `
   t.id, t.salon_id, ${SALON_NAME} AS salon_name, t.developer_id, d.name AS developer_name, t.title, t.description, t.priority,
@@ -145,10 +146,10 @@ export const clientManagementRepository = {
     return tx(async (c) => {
       const { rows } = await c.query(
         `INSERT INTO client_meetings (salon_id, developer_id, title, meeting_type, meeting_date, start_time, end_time, meeting_mode,
-           location_or_link, purpose, agenda, internal_notes, created_by, updated_by)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$13) RETURNING id`,
+           location_or_link, purpose, agenda, internal_notes, created_by, updated_by, training_module_ids, mom)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$13,$14,$15) RETURNING id`,
         [input.salon_id, input.developer_id, input.title, input.meeting_type, input.meeting_date, input.start_time, input.end_time,
-          input.meeting_mode, input.location_or_link, input.purpose, input.agenda, input.internal_notes, by],
+          input.meeting_mode, input.location_or_link, input.purpose, input.agenda, input.internal_notes, by, input.training_module_ids ?? [], input.mom ?? null],
       );
       const id = rows[0].id as string;
       for (const name of input.attendees as string[]) {
@@ -167,7 +168,7 @@ export const clientManagementRepository = {
       if (!before) return { error: "NOT_FOUND" as const };
       if (before.status === "completed") return { error: "COMPLETED" as const };
 
-      const fields = ["developer_id", "title", "meeting_type", "meeting_date", "start_time", "end_time", "meeting_mode", "location_or_link", "purpose", "agenda", "internal_notes", "status"];
+      const fields = ["developer_id", "title", "meeting_type", "meeting_date", "start_time", "end_time", "meeting_mode", "location_or_link", "purpose", "agenda", "internal_notes", "status", "training_module_ids", "mom"];
       const after: Record<string, any> = { ...before };
       for (const k of fields) if (k in patch) after[k] = patch[k];
       const timeMoved = ["meeting_date", "start_time", "end_time"].some((k) => k in patch && (patch[k] ?? null) !== (before[k] ?? null));
@@ -178,9 +179,9 @@ export const clientManagementRepository = {
 
       await c.query(
         `UPDATE client_meetings SET developer_id=$2, title=$3, meeting_type=$4, meeting_date=$5, start_time=$6, end_time=$7, meeting_mode=$8,
-           location_or_link=$9, purpose=$10, agenda=$11, internal_notes=$12, status=$13, updated_by=$14, updated_at=NOW() WHERE id=$1`,
+           location_or_link=$9, purpose=$10, agenda=$11, internal_notes=$12, status=$13, updated_by=$14, training_module_ids=$15, mom=$16, updated_at=NOW() WHERE id=$1`,
         [id, after.developer_id, after.title, after.meeting_type, after.meeting_date, after.start_time, after.end_time, after.meeting_mode,
-          after.location_or_link, after.purpose, after.agenda, after.internal_notes, after.status, by],
+          after.location_or_link, after.purpose, after.agenda, after.internal_notes, after.status, by, after.training_module_ids ?? [], after.mom ?? null],
       );
       if (Array.isArray(patch.attendees)) {
         await c.query(`DELETE FROM meeting_attendees WHERE meeting_id = $1 AND kind = 'invited'`, [id]);
