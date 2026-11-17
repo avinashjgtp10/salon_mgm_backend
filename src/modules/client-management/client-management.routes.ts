@@ -19,8 +19,9 @@ type Authed = Request & { user?: { userId: string } };
 
 // The form no longer asks for a title; a meeting without one is named after its type.
 const MEETING_TYPE_LABELS: Record<string, string> = {
-  client_meeting: "Client Meeting", product_training: "Product Training", technical_support: "Technical Support", on_site_visit: "On-site Visit",
-  online_meeting: "Online Meeting", phone_discussion: "Phone Discussion", implementation: "Implementation", follow_up: "Follow-up",
+  online_meeting: "Online Meeting", product_training: "Product Training", technical_support: "Technical Support", follow_up: "Follow-up Meeting",
+  // legacy values on meetings saved before the list was trimmed
+  client_meeting: "Client Meeting", on_site_visit: "On-site Visit", phone_discussion: "Phone Discussion", implementation: "Implementation",
 };
 const bad = (message: string) => new AppError(400, message, "VALIDATION_ERROR");
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -31,6 +32,8 @@ const text = (v: unknown, max = 4000): string | null => { const s = String(v ?? 
 const reqText = (v: unknown, label: string, max = 4000): string => { const s = text(v, max); if (!s) throw bad(`${label} is required`); return s; };
 const uuid = (v: unknown, label: string): string => { const s = String(v ?? "").trim(); if (!UUID.test(s)) throw bad(`${label} is invalid`); return s; };
 const optUuid = (v: unknown, label: string): string | null => (v === undefined || v === null || v === "" ? null : uuid(v, label));
+// One or more training modules, required for a Product Training meeting.
+const moduleIds = (v: unknown): string[] => { const ids = Array.isArray(v) ? [...new Set(v.map((x) => uuid(x, "Training module")))] : []; if (!ids.length) throw bad("Select at least one training module"); return ids; };
 const date = (v: unknown, label: string): string => { const s = String(v ?? "").trim(); if (!DATE.test(s) || isNaN(Date.parse(s))) throw bad(`${label} must be a date (YYYY-MM-DD)`); return s; };
 const optDate = (v: unknown, label: string): string | null => (v === undefined || v === null || v === "" ? null : date(v, label));
 const optTime = (v: unknown, label: string): string | null => { if (v === undefined || v === null || v === "") return null; const s = String(v).trim(); if (!TIME.test(s)) throw bad(`${label} must be a time (HH:MM)`); return s; };
@@ -72,7 +75,7 @@ async function checkRefs(salonId: string, developerId: string | null) {
 // Optional: a developer from the team directory can be given a Super Admin login (their email + a password shown once here).
 router.patch("/team/:id", superAdminOwnerOnly, wrap(async (req, res) => sendSuccess(res, 200, await updateDeveloper(uuid(req.params.id, "Developer"), req.body ?? {}), "Developer updated")));
 // Developer Activity page: only the Super Admin OWNER's own activity (developers are not listed there). See super-admin-activity.ts.
-const WORK_STATUSES = ["pending_client", "pending_us", "completed", "not_completed"];
+const WORK_STATUSES = ["pending", "in_progress", "completed", "cancelled", "pending_us", "pending_client", "not_completed", "phone_not_received", "client_busy", "callback"];
 const OWNER_ACTIVITY_TYPES = ["user", "salon", "demo_request", "invoice", "meeting", "task", "activity", "training"] as const;
 router.get("/developer-activity", superAdminOwnerOnly, wrap(async (req, res) => sendSuccess(res, 200, await ownerActivity.feed({
   entityTypes: qEnums(req.query.entity_type, OWNER_ACTIVITY_TYPES), from: qDate(req.query.from), to: qDate(req.query.to), search: qs(req.query.search), ...page(req),
@@ -123,7 +126,9 @@ router.post("/meetings", wrap(async (req, res) => {
     title: text(b.title, 200) ?? MEETING_TYPE_LABELS[String(b.meeting_type)] ?? "Meeting", meeting_type: oneOf(b.meeting_type, MEETING_TYPES, "Meeting type"),
     meeting_date: date(b.meeting_date, "Meeting date"), start_time: optTime(b.start_time, "Start time"), end_time: optTime(b.end_time, "End time"),
     meeting_mode: oneOf(b.meeting_mode, MEETING_MODES, "Meeting mode"), location_or_link: text(b.location_or_link, 1000),
-    attendees: names(b.attendees), purpose: text(b.purpose), agenda: text(b.agenda), internal_notes: text(b.internal_notes),
+    attendees: names(b.attendees), purpose: text(b.purpose), agenda: text(b.agenda), internal_notes: text(b.internal_notes), mom: text(b.mom, 8000),
+    // A Product Training meeting must say which training module it covers.
+    training_module_ids: b.meeting_type === "product_training" ? moduleIds(b.training_module_ids) : [],
   };
   meetingTimes(input.start_time, input.end_time, "Meeting");
   await checkRefs(input.salon_id, input.developer_id);
@@ -141,12 +146,15 @@ router.patch("/meetings/:id", wrap(async (req, res) => {
   const patch: Record<string, any> = {};
   if ("developer_id" in b) patch.developer_id = scope ?? optUuid(b.developer_id, "Team member");   // a team member can't hand a meeting to someone else
   if ("title" in b) patch.title = reqText(b.title, "Meeting title", 200);
-  if ("meeting_type" in b) patch.meeting_type = oneOf(b.meeting_type, MEETING_TYPES, "Meeting type");
+  if ("meeting_type" in b) {
+    patch.meeting_type = oneOf(b.meeting_type, MEETING_TYPES, "Meeting type");
+    patch.training_module_ids = patch.meeting_type === "product_training" ? moduleIds(b.training_module_ids) : [];
+  }
   if ("meeting_date" in b) patch.meeting_date = date(b.meeting_date, "Meeting date");
   if ("start_time" in b) patch.start_time = optTime(b.start_time, "Start time");
   if ("end_time" in b) patch.end_time = optTime(b.end_time, "End time");
   if ("meeting_mode" in b) patch.meeting_mode = oneOf(b.meeting_mode, MEETING_MODES, "Meeting mode");
-  for (const k of ["location_or_link", "purpose", "agenda", "internal_notes"]) if (k in b) patch[k] = text(b[k], k === "location_or_link" ? 1000 : 4000);
+  for (const k of ["location_or_link", "purpose", "agenda", "internal_notes", "mom"]) if (k in b) patch[k] = text(b[k], k === "location_or_link" ? 1000 : k === "mom" ? 8000 : 4000);
   if ("attendees" in b) patch.attendees = names(b.attendees);
   if ("status" in b) {
     if (b.status === "completed") throw bad("Use Mark as Completed to complete a meeting, so its completion details are recorded");
@@ -243,7 +251,7 @@ router.post("/activities", wrap(async (req, res) => {
   const input = {
     salon_id: uuid(b.salon_id, "Salon"), developer_id: scope ?? optUuid(b.developer_id, "Team member"), activity_type: oneOf(b.activity_type, ACTIVITY_TYPES, "Activity type"),
     activity_date: b.activity_date ? date(String(b.activity_date).slice(0, 10), "Activity date") : new Date().toISOString().slice(0, 10),
-    description: reqText(b.description, "Activity description"), work_completed: text(b.work_completed), pending_work: text(b.pending_work), work_status: oneOf(b.work_status, WORK_STATUSES, "Work status"),
+    description: text(b.description) ?? "", work_completed: text(b.work_completed), pending_work: text(b.pending_work), work_status: oneOf(b.work_status, WORK_STATUSES, "Work status"),
     next_followup: optDate(b.next_followup, "Next follow-up"),
   };
   await checkRefs(input.salon_id, input.developer_id);
@@ -261,7 +269,7 @@ router.patch("/activities/:id", wrap(async (req, res) => {
   if ("developer_id" in b) patch.developer_id = scope ?? optUuid(b.developer_id, "Team member");
   if ("activity_type" in b) patch.activity_type = oneOf(b.activity_type, ACTIVITY_TYPES, "Activity type");
   if ("activity_date" in b) patch.activity_date = date(String(b.activity_date).slice(0, 10), "Activity date");
-  if ("description" in b) patch.description = reqText(b.description, "Activity description");
+  if ("description" in b) patch.description = text(b.description) ?? "";
   for (const k of ["work_completed", "pending_work"]) if (k in b) patch[k] = text(b[k]);
   if ("work_status" in b) patch.work_status = oneOf(b.work_status, WORK_STATUSES, "Work status");
   if ("next_followup" in b) patch.next_followup = optDate(b.next_followup, "Next follow-up");
