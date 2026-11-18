@@ -1,6 +1,6 @@
 import pool from "../../config/database";
 import { productInventoryRepository, ProductInventoryRow } from "./product-inventory.repository";
-import { CreatePurchaseDTO, ListPurchaseFilters, Purchase, PurchaseItem, PurchaseChartFilters } from "./purchases.types";
+import { CreatePurchaseDTO, CreateHistoricalPurchaseDTO, ListPurchaseFilters, Purchase, PurchaseItem, PurchaseChartFilters } from "./purchases.types";
 import { inventoryAlertsService } from "./inventory-alerts.service";
 import { AppError } from "../../middleware/error.middleware";
 
@@ -258,6 +258,159 @@ export const purchasesRepository = {
         } finally {
             client.release();
         }
+    },
+
+    /**
+     * Records an OLD supplier bill for the books only. Same purchases + purchase_items rows as create(), so the bill shows in the
+     * supplier's Orders tab, totals, due amount and reports, but it NEVER touches products.amount, stock_movements or stock_ledger
+     * (stock_applied = FALSE, purchase_items.stock_movement_id stays NULL). Still one transaction.
+     */
+    async createHistorical(data: CreateHistoricalPurchaseDTO, salonId: string, createdBy: string): Promise<{ purchase: Purchase }> {
+        const productIds = Array.from(new Set(data.items.map((i) => i.product_id)));
+
+        const client = await pool.connect();
+        try {
+            await client.query("BEGIN");
+
+            // Never trust ids from the request body: the supplier and every product must belong to THIS salon.
+            const { rows: supplierRows } = await client.query(`SELECT 1 FROM suppliers WHERE id = $1 AND salon_id = $2`, [data.supplier_id, salonId]);
+            if (!supplierRows.length) throw new AppError(404, "Supplier not found", "SUPPLIER_NOT_FOUND");
+
+            const { rows: productRows } = await client.query(
+                `SELECT id FROM products WHERE id = ANY($1::uuid[]) AND salon_id = $2`,
+                [productIds, salonId],
+            );
+            if (productRows.length !== productIds.length) {
+                throw new AppError(404, "One or more products were not found in this salon", "PRODUCT_NOT_FOUND");
+            }
+
+            // Same per-salon sequential number + retry-on-collision pattern as create().
+            let purchase: any;
+            for (let attempt = 0; ; attempt++) {
+                const { rows: seqRows } = await client.query(
+                    `UPDATE salons SET next_purchase_seq = next_purchase_seq + 1 WHERE id = $1 RETURNING next_purchase_seq - 1 AS seq`,
+                    [salonId],
+                );
+                const purchaseNumber = `SUP-${String(seqRows[0].seq).padStart(5, "0")}`;
+
+                await client.query("SAVEPOINT historical_insert_attempt");
+                try {
+                    const result = await client.query(
+                        `INSERT INTO purchases (salon_id, supplier_id, purchase_number, purchase_date, created_by, stock_applied, bill_number, notes)
+                         VALUES ($1, $2, $3, $4, $5, FALSE, $6, $7)
+                         RETURNING *`,
+                        [salonId, data.supplier_id, purchaseNumber, data.purchase_date, createdBy, data.bill_number ?? null, data.notes ?? null],
+                    );
+                    await client.query("RELEASE SAVEPOINT historical_insert_attempt");
+                    purchase = result.rows[0];
+                    break;
+                } catch (insertErr: any) {
+                    await client.query("ROLLBACK TO SAVEPOINT historical_insert_attempt");
+                    const isCollision = insertErr?.code === "23505" && insertErr?.constraint === "purchases_salon_id_purchase_number_key";
+                    if (!isCollision || attempt >= 5) throw insertErr;
+                }
+            }
+
+            let totalAmount = 0;
+            const items: PurchaseItem[] = [];
+            for (const line of data.items) {
+                const lineTotal = line.quantity * line.purchase_price;
+                totalAmount += lineTotal;
+                const { rows: itemRows } = await client.query(
+                    `INSERT INTO purchase_items (purchase_id, product_id, quantity, purchase_price, total_price, expiry_date, stock_movement_id)
+                     VALUES ($1, $2, $3, $4, $5, NULL, NULL)
+                     RETURNING *`,
+                    [purchase.id, line.product_id, line.quantity, line.purchase_price, lineTotal],
+                );
+                items.push(itemRows[0]);
+            }
+
+            const { rows: updated } = await client.query(
+                `UPDATE purchases SET total_amount = $1, updated_at = NOW() WHERE id = $2 RETURNING *`,
+                [totalAmount, purchase.id],
+            );
+
+            await client.query("COMMIT");
+            return { purchase: { ...updated[0], items } };
+        } catch (err) {
+            await client.query("ROLLBACK");
+            throw err;
+        } finally {
+            client.release();
+        }
+    },
+
+    /**
+     * Edits a PAST bill (stock_applied = FALSE) only: date, bill number, notes and the product lines (replaced as a whole). The
+     * supplier cannot be changed (delete and re-add instead). A normal purchase or order receipt is never editable here, because it
+     * already moved stock; the WHERE ... stock_applied = FALSE guard is what keeps this endpoint from ever touching those.
+     */
+    async updateHistorical(id: string, data: Omit<CreateHistoricalPurchaseDTO, "supplier_id">, salonId: string): Promise<{ purchase: Purchase }> {
+        const productIds = Array.from(new Set(data.items.map((i) => i.product_id)));
+        const client = await pool.connect();
+        try {
+            await client.query("BEGIN");
+
+            const { rows: found } = await client.query(
+                `SELECT stock_applied FROM purchases WHERE id = $1 AND salon_id = $2 FOR UPDATE`,
+                [id, salonId],
+            );
+            if (!found.length) throw new AppError(404, "Bill not found", "PURCHASE_NOT_FOUND");
+            if (found[0].stock_applied !== false) {
+                throw new AppError(400, "Only past bills added with 'Add Past Bill' can be edited", "NOT_A_PAST_BILL");
+            }
+
+            const { rows: productRows } = await client.query(
+                `SELECT id FROM products WHERE id = ANY($1::uuid[]) AND salon_id = $2`,
+                [productIds, salonId],
+            );
+            if (productRows.length !== productIds.length) {
+                throw new AppError(404, "One or more products were not found in this salon", "PRODUCT_NOT_FOUND");
+            }
+
+            await client.query(`DELETE FROM purchase_items WHERE purchase_id = $1`, [id]);
+
+            let totalAmount = 0;
+            const items: PurchaseItem[] = [];
+            for (const line of data.items) {
+                const lineTotal = line.quantity * line.purchase_price;
+                totalAmount += lineTotal;
+                const { rows: itemRows } = await client.query(
+                    `INSERT INTO purchase_items (purchase_id, product_id, quantity, purchase_price, total_price, expiry_date, stock_movement_id)
+                     VALUES ($1, $2, $3, $4, $5, NULL, NULL)
+                     RETURNING *`,
+                    [id, line.product_id, line.quantity, line.purchase_price, lineTotal],
+                );
+                items.push(itemRows[0]);
+            }
+
+            const { rows: updated } = await client.query(
+                `UPDATE purchases
+                    SET purchase_date = $1, bill_number = $2, notes = $3, total_amount = $4, updated_at = NOW()
+                  WHERE id = $5 AND salon_id = $6
+              RETURNING *`,
+                [data.purchase_date, data.bill_number ?? null, data.notes ?? null, totalAmount, id, salonId],
+            );
+
+            await client.query("COMMIT");
+            return { purchase: { ...updated[0], items } };
+        } catch (err) {
+            await client.query("ROLLBACK");
+            throw err;
+        } finally {
+            client.release();
+        }
+    },
+
+    /** Deletes a PAST bill (stock_applied = FALSE) and its lines (ON DELETE CASCADE). Stock is untouched, because the bill never changed it. */
+    async deleteHistorical(id: string, salonId: string): Promise<void> {
+        const { rows: found } = await pool.query(`SELECT stock_applied FROM purchases WHERE id = $1 AND salon_id = $2`, [id, salonId]);
+        if (!found.length) throw new AppError(404, "Bill not found", "PURCHASE_NOT_FOUND");
+        if (found[0].stock_applied !== false) {
+            throw new AppError(400, "Only past bills added with 'Add Past Bill' can be deleted", "NOT_A_PAST_BILL");
+        }
+        // The guard is repeated in the DELETE itself so a row can never be removed unless it is still a past bill.
+        await pool.query(`DELETE FROM purchases WHERE id = $1 AND salon_id = $2 AND stock_applied = FALSE`, [id, salonId]);
     },
 
     async list(filters: ListPurchaseFilters, salonId: string): Promise<{ data: Purchase[]; total: number }> {

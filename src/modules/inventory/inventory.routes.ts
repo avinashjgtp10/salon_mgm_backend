@@ -29,7 +29,7 @@ import {
     validateCreateStockMovement,
     validateStockTake,
 } from "./inventory.validator";
-import { validateCreatePurchase, validateListPurchases } from "./purchases.validator";
+import { validateCreatePurchase, validateCreateHistoricalPurchase, validateListPurchases } from "./purchases.validator";
 import { validateCreateSupplierPayment } from "./supplier-payments.validator";
 import { validateCreateOrder, validateReceiveOrder } from "./orders.validator";
 import { validateResolveSupplierProduct } from "./supplier-products.validator";
@@ -356,6 +356,34 @@ router.post(
     adjustProductStock,
     validateCreatePurchase,
     purchasesController.create
+);
+
+// A past supplier bill recorded for the books only — never changes stock, so it needs the supplier-edit permission, not
+// adjust_product_stock. Registered before /purchases/:id (POST, so no clash today, but keeps the specific routes together).
+router.post(
+    "/product-inventory/purchases/historical",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    editSuppliers,
+    validateCreateHistoricalPurchase,
+    purchasesController.createHistorical
+);
+
+router.put(
+    "/product-inventory/purchases/historical/:id",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    editSuppliers,
+    validateCreateHistoricalPurchase,
+    purchasesController.updateHistorical
+);
+
+router.delete(
+    "/product-inventory/purchases/historical/:id",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    deleteSuppliers,
+    purchasesController.deleteHistorical
 );
 
 router.get(
