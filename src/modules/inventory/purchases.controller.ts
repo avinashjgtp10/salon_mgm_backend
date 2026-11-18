@@ -74,6 +74,69 @@ export const purchasesController = {
         }
     },
 
+    // POST /product-inventory/purchases/historical — a past bill, recorded without any stock change.
+    async createHistorical(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
+        try {
+            const salonId = getSalonId(req);
+            const userId = req.user?.userId;
+            if (!userId) throw new AppError(401, "Authentication required", "NO_USER");
+
+            const result = await purchasesRepository.createHistorical(
+                {
+                    supplier_id: req.body.supplier_id,
+                    purchase_date: req.body.purchase_date,
+                    bill_number: req.body.bill_number?.trim() || null,
+                    notes: req.body.notes?.trim() || null,
+                    items: req.body.items.map((i: any) => ({
+                        product_id: i.product_id,
+                        quantity: Number(i.quantity),
+                        purchase_price: Number(i.purchase_price),
+                    })),
+                },
+                salonId,
+                userId,
+            );
+
+            logger.info("Historical purchase recorded (no stock change)", {
+                salonId, userId, purchaseNumber: result.purchase.purchase_number,
+            });
+            sendSuccess(res, 201, result, "Past bill recorded");
+        } catch (err) { next(err); }
+    },
+
+    // PUT /product-inventory/purchases/historical/:id
+    async updateHistorical(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
+        try {
+            const salonId = getSalonId(req);
+            const result = await purchasesRepository.updateHistorical(
+                String(req.params.id),
+                {
+                    purchase_date: req.body.purchase_date,
+                    bill_number: req.body.bill_number?.trim() || null,
+                    notes: req.body.notes?.trim() || null,
+                    items: req.body.items.map((i: any) => ({
+                        product_id: i.product_id,
+                        quantity: Number(i.quantity),
+                        purchase_price: Number(i.purchase_price),
+                    })),
+                },
+                salonId,
+            );
+            logger.info("Historical purchase updated", { salonId, userId: req.user?.userId, purchaseNumber: result.purchase.purchase_number });
+            sendSuccess(res, 200, result, "Past bill updated");
+        } catch (err) { next(err); }
+    },
+
+    // DELETE /product-inventory/purchases/historical/:id
+    async deleteHistorical(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
+        try {
+            const salonId = getSalonId(req);
+            await purchasesRepository.deleteHistorical(String(req.params.id), salonId);
+            logger.info("Historical purchase deleted", { salonId, userId: req.user?.userId, purchaseId: req.params.id });
+            sendSuccess(res, 200, { id: String(req.params.id) }, "Past bill deleted");
+        } catch (err) { next(err); }
+    },
+
     async list(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
         try {
             const salonId = getSalonId(req);
