@@ -21,7 +21,6 @@ import { whatsappAutomationService } from "../whatsapp-automation/whatsapp-autom
 import { whatsappAutomationRepository } from "../whatsapp-automation/whatsapp-automation.repository";
 import { waScheduledMessagesService } from "../whatsapp-automation/wa-scheduled-messages.service";
 import { notificationsService } from "../notifications/notifications.service";
-import { ownStaffId } from "../notifications/staffNotificationScope";
 import { emailService } from "../utils/email.service";
 import { canSendEmail } from "../utils/notif-prefs";
 import { salonsRepository } from "../salons/salons.repository";
@@ -745,7 +744,7 @@ export const appointmentsService = {
         status: "in_progress" | "completed";
         requesterRole?: string;
     }): Promise<Appointment> {
-        const { appointmentId, itemId, salonId, status, requesterRole } = params;
+        const { appointmentId, itemId, salonId, status } = params;
         const existing = await appointmentsRepository.findById(appointmentId);
         if (!existing || existing.salon_id !== salonId) {
             throw new AppError(404, "Appointment not found", "NOT_FOUND");
@@ -756,20 +755,8 @@ export const appointmentsService = {
             .find((key) => (existing[key] as { id?: string }[] | undefined)?.some((row) => row.id === itemId));
         if (!arrayKey) throw new AppError(404, "Service/package/membership row not found", "NOT_FOUND");
 
-        // Job card: a staff member can only start their service once every
-        // earlier service owned by someone else is finished. Owners/admins
-        // can start any row; handoffItem() stays the explicit override.
-        if (status === "in_progress" && requesterRole !== "salon_owner" && requesterRole !== "admin") {
-            const rows = jobCardRows(existing);
-            const blocker = waitingOn(rows, rows.findIndex((row) => row.id === itemId));
-            if (blocker) {
-                throw new AppError(
-                    409,
-                    `Not ready yet: waiting for ${blocker.staff_name || "another staff member"} to finish ${blocker.name}.`,
-                    "NOT_READY"
-                );
-            }
-        }
+        // Job card runs in parallel: any staff member may start their own row
+        // at any time, regardless of earlier rows owned by someone else.
 
         const now = new Date().toISOString();
         const items = (existing[arrayKey] as (AppointmentServiceItem & { status?: string })[]).map((row) => {
@@ -821,26 +808,10 @@ export const appointmentsService = {
             .find((key) => (existing[key] as { id?: string }[] | undefined)?.some((row) => row.id === itemId));
         if (!arrayKey) throw new AppError(404, "Service/package/membership row not found", "NOT_FOUND");
 
-        // Owners/admins can hand off freely; a staff member must have
-        // already completed at least one of their own rows in this same
-        // appointment first — they're passing the client along, not
-        // reassigning someone else's unrelated work sight unseen. (Route-
-        // level requireParticipatingStaff already confirmed they own SOME
-        // row here; this confirms that row is actually done.)
-        if (requesterRole !== "salon_owner" && requesterRole !== "admin") {
-            const requesterStaffId = await ownStaffId(requesterUserId, salonId);
-            const hasCompletedOwnRow = requesterStaffId && (
-                [...existing.services, ...existing.package_items, ...existing.membership_items] as
-                    (AppointmentServiceItem & { status?: string })[]
-            ).some((row) => row.staff_id === requesterStaffId && row.status === "completed");
-            if (!hasCompletedOwnRow) {
-                throw new AppError(
-                    403,
-                    "Complete your own service before handing this appointment off.",
-                    "FORBIDDEN"
-                );
-            }
-        }
+        // Any participating staff can assign a pending row to themselves or
+        // another staff at any time (route-level requireParticipatingStaff
+        // already confirmed they own SOME row in this appointment).
+        void requesterUserId; void requesterRole;
 
         const toStaff = await staffService.getById(toStaffId, salonId);
         if (!toStaff.is_active) throw new AppError(400, "That staff member is inactive.", "VALIDATION_ERROR");
