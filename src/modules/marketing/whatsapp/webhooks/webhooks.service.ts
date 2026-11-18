@@ -9,6 +9,7 @@ import pool from '../../../../config/database'
 import logger from '../../../../config/logger'
 import { summarizeAccountUpdate } from './webhooks.log'
 import { salonTranslator } from '../../../../config/i18n'
+import { applyChainDeliveryStatus } from '../../../service-chains/service-chains.runner'
 
 export const webhooksService = {
 
@@ -264,6 +265,15 @@ export const webhooksService = {
     const contact = await webhooksRepository.findContactByWamid(wamid)
 
     if (!contact) {
+      // ── Service Chain: is this wamid one of its step messages? ──────────────
+      if (['SENT', 'DELIVERED', 'READ', 'FAILED'].includes(type) && typeof wamid === 'string' && wamid.length > 0) {
+        try {
+          if (await applyChainDeliveryStatus(wamid, type as 'SENT' | 'DELIVERED' | 'READ' | 'FAILED', type === 'FAILED' ? { code: errorCode, message: errorMsg } : null)) return
+        } catch (err: any) {
+          logger.warn('[service-chain] delivery status update failed:', err?.message)
+        }
+      }
+
       // ── WA-AUTO: Fallback — check if wamid belongs to automation logs ───────
       // Validate untrusted webhook fields before delegating
       const allowedTypes = ['SENT', 'DELIVERED', 'READ', 'FAILED']

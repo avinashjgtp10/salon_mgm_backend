@@ -54,6 +54,22 @@ router.post(
   templatesController.create
 )
 
+// POST /api/v1/templates/draft - save a text template without sending it to Meta
+router.post(
+  '/draft',
+  authMiddleware,
+  ownerAdminStaff, addTemplate,
+  templatesController.createDraft
+)
+
+// POST /api/v1/templates/:id/submit - send a saved draft to Meta for approval
+router.post(
+  '/:id/submit',
+  authMiddleware,
+  ownerAdminStaff, addTemplate,
+  templatesController.submitDraft
+)
+
 // POST /api/v1/templates/carousel - body + 2-10 image cards (fields card_0, card_1, ...)
 router.post(
   '/carousel',

@@ -1,4 +1,5 @@
-export type WATemplateStatus   = 'PENDING' | 'APPROVED' | 'REJECTED'
+// DRAFT = saved here only, never sent to Meta (see templatesService.createDraft / submitDraft)
+export type WATemplateStatus   = 'DRAFT' | 'PENDING' | 'APPROVED' | 'REJECTED'
 export type WATemplateCategory = 'MARKETING' | 'UTILITY' | 'AUTHENTICATION'
 export type WAHeaderType       = 'none' | 'text' | 'image' | 'video' | 'document'
 
