@@ -62,6 +62,16 @@ router.post(
     aiAssistantController.templateCopy
 );
 
+// Service Chains: LUNOX drafts one template for a step (saved/submitted separately through the templates API).
+router.post(
+    "/chain-template",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    requirePermission("use_ai_assistant"),
+    requirePermission("add_template"),
+    aiAssistantController.chainTemplate
+);
+
 // Festival planner: the reminder card on the Marketing page. Read-only list + message drafts; nothing is ever sent from here.
 router.get(
     "/festivals",

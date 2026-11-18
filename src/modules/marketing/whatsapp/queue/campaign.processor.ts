@@ -2,7 +2,7 @@ import { Worker, Job } from 'bullmq'
 import pool from '../../../../config/database'
 import { redisConnection, CampaignJobData } from './campaign.queue'
 import { whatsappMetaApi } from '../shared/whatsapp.api'
-import { buildOfferComponents } from '../shared/offer-components'
+import { buildTemplateSendComponents } from '../shared/template-components'
 import { inboxRepository } from '../inbox/inbox.repository'
 import { webhooksRepository } from '../webhooks/webhooks.repository'
 import { maskPhone } from '../../../utils/mask.util'
@@ -152,40 +152,18 @@ export const campaignWorker = new Worker<CampaignJobData>(
       }
 
       try {
-        const matches    = (campaign.body_text ?? '').match(/\{\{\d+\}\}/g) ?? []
-        const components: any[] = []
-
-        if (hasMediaHeader && campaign.header_media_id) {
-          const mt = campaign.header_type
-          components.push({
-            type:       'header',
-            parameters: [{ type: mt, [mt]: { id: campaign.header_media_id } }],
-          })
-        }
-
-        if (matches.length > 0) {
-          const variables = contact.variables ?? {}
-          const params    = matches.map((_: any, i: number) => ({
-            type: 'text',
-            text: String(
-              variables[`var${i + 1}`] ||
-              variables[String(i + 1)]  ||
-              (i === 0 && contact.name ? contact.name : null) ||
-              `Value${i + 1}`
-            ),
-          }))
-          components.push({ type: 'body', parameters: params })
-        }
-
-        // Offer templates: expiry countdown + copy-code button, per-contact values.
-        {
-          const cv = contact.variables ?? {}
-          const { afterBody } = buildOfferComponents(
-            { buttons: campaign.buttons, lto_text: campaign.lto_text, carousel: campaign.carousel },
-            { couponCode: cv.coupon_code, expiresAt: cv.offer_expires_at, flowToken: `${salonId}:${campaignId}` }
-          )
-          components.push(...afterBody)
-        }
+        // Header media + body variables + offer parts: shared with the Service Chain sender.
+        const components = buildTemplateSendComponents(
+          {
+            body_text:       campaign.body_text,
+            header_type:     campaign.header_type,
+            header_media_id: campaign.header_media_id,
+            buttons:         campaign.buttons,
+            lto_text:        campaign.lto_text,
+            carousel:        campaign.carousel,
+          },
+          { variables: contact.variables, fallbackName: contact.name, flowToken: `${salonId}:${campaignId}` }
+        )
 
         const result = await whatsappMetaApi.sendTemplateMessage({
           phoneNumberId: waConfig.phone_number_id,

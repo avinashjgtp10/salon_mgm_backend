@@ -11,7 +11,7 @@ import { dataAssistantService } from "./data/data-assistant.service";
 import { dailyInsightService } from "./data/daily-insight.service";
 import { explainReport, isReportKey, REPORT_PERMISSIONS } from "./report-insights.generic";
 import { userCanUse } from "./ai-assistant.service";
-import { explainCampaign, suggestInboxReplies, writeTemplateCopy } from "./marketing-ai.service";
+import { explainCampaign, suggestInboxReplies, writeChainTemplate, writeTemplateCopy } from "./marketing-ai.service";
 import { aiAssistantRepository } from "./ai-assistant.repository";
 import { festivalMessageDrafts, upcomingForSalon } from "../festivals/festivals.service";
 
@@ -100,6 +100,27 @@ export const aiAssistantController = {
             return sendSuccess(res, 200, result, "OK");
         } catch (err) {
             logger.error("POST /ai-assistant/template-copy error", { err });
+            return next(err);
+        }
+    },
+
+    // POST /api/v1/ai-assistant/chain-template  { kind, service_name?, brief?, language?, book_again? }
+    // Drafts one template for a Service Chain step. Nothing is saved or sent to Meta here.
+    async chainTemplate(req: AuthRequest, res: Response, next: NextFunction) {
+        try {
+            const user = req.user;
+            if (!user?.userId || !user.salonId) throw new AppError(403, "Salon context required", "NO_SALON_CONTEXT");
+            const service = String(req.body?.service_name ?? "").trim();
+            const brief = String(req.body?.brief ?? "").trim();
+            if (!service && brief.length < 8) throw new AppError(400, "Pick the service or describe the message in a few words.", "VALIDATION_ERROR");
+            if (brief.length > 400) throw new AppError(400, "Keep the description under 400 characters.", "VALIDATION_ERROR");
+            const result = await writeChainTemplate(
+                { userId: user.userId, role: user.role, salonId: user.salonId },
+                { kind: String(req.body?.kind ?? ""), service_name: service, brief, language: String(req.body?.language ?? "en_US"), book_again: req.body?.book_again === true }
+            );
+            return sendSuccess(res, 200, result, "OK");
+        } catch (err) {
+            logger.error("POST /ai-assistant/chain-template error", { err });
             return next(err);
         }
     },
