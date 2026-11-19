@@ -14,9 +14,30 @@ import { inboxRepository } from '../marketing/whatsapp/inbox/inbox.repository'
 import { formatPhone } from '../whatsapp-automation/whatsapp-automation.service'
 import { maskPhone } from '../utils/mask.util'
 import type { ChainVariableField } from './service-chains.types'
+import { BLOCK_CODES, decideEligibility, decidePostponed, isTemporaryFailure, nextRetryAt, type Eligibility, type PostponedState } from './service-chains.rules'
 
-// Meta says this recipient/account cannot receive it - not a fault worth retrying.
-const BLOCK_CODES = [131047, 131026, 131051, 131049, 131042]
+// Append-only audit trail: one row per state change of a step. Best effort - history must never break sending.
+async function logEvent(messageId: string, event: string, toStatus: string | null, reason?: string | null, appointmentId?: string | null) {
+  try {
+    await pool.query(
+      `INSERT INTO service_chain_message_events (salon_id, message_id, enrolment_id, event, from_status, to_status, reason, appointment_id)
+       SELECT salon_id, id, enrolment_id, $2, status, $3, $4, $5 FROM service_chain_messages WHERE id = $1`,
+      [messageId, event, toStatus, reason ?? null, appointmentId ?? null])
+  } catch (err: any) {
+    logger.warn('[service-chain] history write failed', { messageId, error: err?.message })
+  }
+}
+
+// Cancel every unsent (waiting or postponed) message of these journeys and record why, in one place so the history stays complete.
+async function cancelUnsent(enrolmentIds: string[], reason: string, db: { query: (sql: string, p?: any[]) => Promise<any> } = pool): Promise<void> {
+  await db.query(
+    `INSERT INTO service_chain_message_events (salon_id, message_id, enrolment_id, event, from_status, to_status, reason)
+     SELECT salon_id, id, enrolment_id, 'cancelled', status, 'CANCELLED', $2 FROM service_chain_messages
+     WHERE enrolment_id = ANY($1::uuid[]) AND status IN ('SCHEDULED', 'POSTPONED')`, [enrolmentIds, reason])
+  await db.query(
+    `UPDATE service_chain_messages SET status = 'CANCELLED', skip_reason = $2, updated_at = NOW()
+     WHERE enrolment_id = ANY($1::uuid[]) AND status IN ('SCHEDULED', 'POSTPONED')`, [enrolmentIds, reason])
+}
 
 // ── Date maths ────────────────────────────────────────────────────────────────
 // Purchase date in the salon's own calendar + N days, at the chain's send time, as a real instant.
@@ -95,9 +116,7 @@ async function enrol(hit: any): Promise<void> {
     // Restart: the old journey's unsent steps are cancelled before the new one is created.
     if (current) {
       await client.query(`UPDATE service_chain_enrolments SET status='replaced', updated_at=NOW() WHERE id=$1`, [current.id])
-      await client.query(
-        `UPDATE service_chain_messages SET status='CANCELLED', skip_reason='Journey restarted by a new purchase', updated_at=NOW()
-         WHERE enrolment_id=$1 AND status='SCHEDULED'`, [current.id])
+      await cancelUnsent([current.id], 'Journey restarted by a new purchase', client)
     }
 
     const { rows: created } = await client.query(
@@ -134,10 +153,16 @@ async function enrol(hit: any): Promise<void> {
         at = new Date(parentAt.getTime() + st.delay_minutes * 60_000)
         past = at.getTime() <= now
       }
-      await client.query(
+      const { rows: msg } = await client.query(
         `INSERT INTO service_chain_messages (salon_id, enrolment_id, step_id, scheduled_at, status, skip_reason)
-         VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING`,
+         VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING RETURNING id`,
         [hit.salon_id, created[0].id, st.id, at, past ? 'SKIPPED' : 'SCHEDULED', past ? 'Date already passed' : null])
+      if (msg[0]) {
+        await client.query(
+          `INSERT INTO service_chain_message_events (salon_id, message_id, enrolment_id, event, to_status, reason)
+           VALUES ($1,$2,$3,$4,$5,$6)`,
+          [hit.salon_id, msg[0].id, created[0].id, past ? 'skipped' : 'scheduled', past ? 'SKIPPED' : 'SCHEDULED', past ? 'Date already passed' : null])
+      }
     }
     await client.query('COMMIT')
     await maybeCompleteEnrolment(created[0].id)
@@ -166,34 +191,38 @@ async function maybeCompleteEnrolment(enrolmentId: string): Promise<void> {
   await pool.query(
     `UPDATE service_chain_enrolments e SET status='completed', updated_at=NOW()
      WHERE e.id = $1 AND e.status = 'active'
-       AND NOT EXISTS (SELECT 1 FROM service_chain_messages m WHERE m.enrolment_id = e.id AND m.status IN ('SCHEDULED','SENDING'))`,
+       AND NOT EXISTS (SELECT 1 FROM service_chain_messages m WHERE m.enrolment_id = e.id AND m.status IN ('SCHEDULED','POSTPONED','SENDING'))`,
     [enrolmentId])
 }
 
 // ── 2. Due-message executor ───────────────────────────────────────────────────
-async function setOutcome(id: string, status: string, fields: { reason?: string; code?: string; message?: string; wamid?: string } = {}) {
+async function setOutcome(id: string, status: string, fields: { reason?: string; code?: string; message?: string; wamid?: string; appointmentId?: string | null; attempts?: number } = {}) {
+  await logEvent(id, status.toLowerCase(), status, fields.reason ?? fields.message ?? null, fields.appointmentId ?? null)
   await pool.query(
     `UPDATE service_chain_messages
      SET status=$2, skip_reason=$3, error_code=$4, error_message=$5, wamid=COALESCE($6, wamid),
+         postponed_appointment_id = CASE WHEN $2 = 'POSTPONED' THEN $7::uuid ELSE postponed_appointment_id END,
+         recheck_at = CASE WHEN $2 = 'POSTPONED' THEN NULL ELSE recheck_at END,
+         attempt_count = COALESCE($8::int, attempt_count),
          sent_at = CASE WHEN $2 = 'SENT' THEN NOW() ELSE sent_at END, updated_at=NOW()
      WHERE id=$1`,
-    [id, status, fields.reason ?? null, fields.code ?? null, fields.message ?? null, fields.wamid ?? null])
+    [id, status, fields.reason ?? null, fields.code ?? null, fields.message ?? null, fields.wamid ?? null, fields.appointmentId ?? null, fields.attempts ?? null])
 }
 
-// Why a step's message should not be sent, or null to send it. All four rules look at the client's other bills for the
-// step's service (never the bill that started the journey):
-//   bought     paid for it since the journey began
-//   completed  had it done (service marked completed, or a paid visit that already happened) since the journey began
-//   upcoming   already has a future appointment for it
-//   recent     bought it in the last N days (per-step setting), counting purchases before the journey too
+// What to do with a step's message right now, from the client's other bills for the step's service (never the bill that
+// started the journey). Facts are read fresh from the database on every call; the decision itself is in service-chains.rules.ts.
+//   bought     paid for it since the journey began                                   -> skip
+//   completed  had it done (service marked completed, or a paid visit that happened) -> skip
+//   recent     bought it in the last N days (per-step setting), incl. before joining -> skip
+//   upcoming   already has a future appointment for it                               -> postpone (wait for it)
 // "bought" and "completed" are permanent facts, so `eagerOnly` (used to cancel future steps early) checks just those.
-async function skipReason(row: any, eagerOnly = false): Promise<string | null> {
-  if (!row.step_service_id) return null
+async function checkEligibility(row: any, eagerOnly = false): Promise<Eligibility> {
+  if (!row.step_service_id) return { kind: 'send' }
   const wantBought = row.skip_if_bought !== false
   const wantCompleted = row.skip_if_completed !== false
   const wantUpcoming = !eagerOnly && row.skip_if_upcoming !== false
   const days: number | null = !eagerOnly && row.skip_if_bought_days ? Number(row.skip_if_bought_days) : null
-  if (!wantBought && !wantCompleted && !wantUpcoming && days === null) return null
+  if (!wantBought && !wantCompleted && !wantUpcoming && days === null) return { kind: 'send' }
 
   const { rows } = await pool.query(
     `WITH m AS (
@@ -206,16 +235,28 @@ async function skipReason(row: any, eagerOnly = false): Promise<string | null> {
                  AND p.status IN ('partial','completed') AND p.created_at > $5)) AS bought,
        EXISTS (SELECT 1 FROM m WHERE m.status NOT IN ('cancelled','no-show','deleted')
                  AND m.scheduled_at > $5 AND m.scheduled_at <= NOW() AND (m.item_status = 'completed' OR m.status = 'paid')) AS completed,
-       EXISTS (SELECT 1 FROM m WHERE m.status IN ('booked','partial','paid') AND m.scheduled_at > NOW()) AS upcoming,
+       (SELECT m.id FROM m WHERE m.status IN ('booked','partial','paid') AND m.scheduled_at > NOW() ORDER BY m.scheduled_at LIMIT 1) AS upcoming_id,
        ($6::int IS NOT NULL AND EXISTS (SELECT 1 FROM m WHERE EXISTS (SELECT 1 FROM payments p WHERE p.appointment_id = m.id
                  AND p.status IN ('partial','completed') AND p.created_at > NOW() - ($6::int * INTERVAL '1 day')))) AS recent`,
     [row.salon_id, row.client_id, row.source_appointment_id, String(row.step_service_id), row.purchased_at, days])
   const f = rows[0]
-  if (wantBought && f.bought) return 'Client already bought this service'
-  if (wantCompleted && f.completed) return 'Client already completed this service'
-  if (wantUpcoming && f.upcoming) return 'Client already has an upcoming appointment for this service'
-  if (days !== null && f.recent) return `Client bought this service in the last ${days} days`
-  return null
+  return decideEligibility(
+    { bought: f.bought, completed: f.completed, upcoming: !!f.upcoming_id, upcomingAppointmentId: f.upcoming_id, recent: f.recent },
+    { wantBought, wantCompleted, wantUpcoming, recentDays: days })
+}
+
+// Skip a step for good, and its sub-steps with it, then close the journey if nothing is left.
+async function skipStep(r: { id: string; enrolment_id: string; step_id: string }, reason: string): Promise<boolean> {
+  await logEvent(r.id, 'skipped', 'SKIPPED', reason)
+  const { rowCount } = await pool.query(
+    `UPDATE service_chain_messages SET status='SKIPPED', skip_reason=$2, updated_at=NOW() WHERE id=$1 AND status IN ('SCHEDULED','POSTPONED')`, [r.id, reason])
+  if (!rowCount) return false
+  await pool.query(
+    `UPDATE service_chain_messages SET status='SKIPPED', skip_reason='The step before it was not sent', updated_at=NOW()
+     WHERE enrolment_id=$1 AND status IN ('SCHEDULED','POSTPONED')
+       AND step_id IN (SELECT id FROM service_chain_steps WHERE parent_step_id = $2)`, [r.enrolment_id, r.step_id])
+  await maybeCompleteEnrolment(r.enrolment_id)
+  return true
 }
 
 // If the bill that started a journey is later cancelled, deleted or fully refunded (no paid payment left), the client never
@@ -230,9 +271,7 @@ async function cancelRefundedJourneys(): Promise<number> {
             OR NOT EXISTS (SELECT 1 FROM payments p WHERE p.appointment_id = a.id AND p.status IN ('partial', 'completed')))
      RETURNING e.id`)
   if (!rows.length) return 0
-  await pool.query(
-    `UPDATE service_chain_messages SET status = 'CANCELLED', skip_reason = 'Bill was cancelled or refunded', updated_at = NOW()
-     WHERE status = 'SCHEDULED' AND enrolment_id = ANY($1::uuid[])`, [rows.map((r) => r.id)])
+  await cancelUnsent(rows.map((r) => r.id), 'Bill was cancelled or refunded')
   logger.info(`[service-chain] stopped ${rows.length} journey(s) whose bill was cancelled or refunded`)
   return rows.length
 }
@@ -252,23 +291,79 @@ async function evaluateEagerSkips(limit = 200): Promise<number> {
   let n = 0
   for (const r of rows) {
     try {
-      const why = await skipReason(r, true)
-      if (!why) continue
-      const { rowCount } = await pool.query(
-        `UPDATE service_chain_messages SET status='SKIPPED', skip_reason=$2, updated_at=NOW() WHERE id=$1 AND status='SCHEDULED'`, [r.id, why])
-      if (!rowCount) continue
-      n++
-      // Its sub-steps follow it: if the step is not sent, neither are they.
-      await pool.query(
-        `UPDATE service_chain_messages SET status='SKIPPED', skip_reason='The step before it was not sent', updated_at=NOW()
-         WHERE enrolment_id=$1 AND status='SCHEDULED'
-           AND step_id IN (SELECT id FROM service_chain_steps WHERE parent_step_id = $2)`, [r.enrolment_id, r.step_id])
-      await maybeCompleteEnrolment(r.enrolment_id)
+      const d = await checkEligibility(r, true)
+      if (d.kind !== 'skip') continue
+      if (await skipStep(r, d.reason)) n++
     } catch (err: any) {
       logger.error('[service-chain] eager skip failed', { messageId: r.id, error: err?.message })
     }
   }
   if (n) logger.info(`[service-chain] cancelled ${n} step(s) the client no longer needs`)
+  return n
+}
+
+// Postponed steps wait on one appointment. Every tick the appointment is read live (so a reschedule is followed
+// automatically) and the step is skipped, kept waiting, given a 24-hour recheck, or released to the normal sender.
+async function evaluatePostponed(limit = 200): Promise<number> {
+  const { rows } = await pool.query(
+    `SELECT m.id, m.enrolment_id, m.step_id, m.salon_id, m.postponed_appointment_id, m.recheck_at,
+            e.client_id, e.purchased_at, e.source_appointment_id,
+            st.service_id AS step_service_id, ch.skip_if_bought, ch.skip_if_completed, ch.skip_if_upcoming, st.skip_if_bought_days
+     FROM service_chain_messages m
+     JOIN service_chain_enrolments e ON e.id = m.enrolment_id AND e.status = 'active'
+     JOIN service_chains ch ON ch.id = e.chain_id AND ch.is_active AND ch.deleted_at IS NULL
+     JOIN service_chain_steps st ON st.id = m.step_id AND st.service_id IS NOT NULL
+     WHERE m.status = 'POSTPONED'
+     ORDER BY m.updated_at LIMIT $1`, [limit])
+  let n = 0
+  for (const r of rows) {
+    try {
+      let appointment: PostponedState = 'missing'
+      if (r.postponed_appointment_id) {
+        const { rows: ap } = await pool.query(
+          `SELECT a.status, a.scheduled_at, a.deleted_at,
+                  (SELECT bool_or(item->>'status' = 'completed') FROM jsonb_array_elements(COALESCE(a.services, '[]'::jsonb)) item
+                   WHERE item->>'service_id' = $2) AS item_done
+           FROM appointments a WHERE a.id = $1`, [r.postponed_appointment_id, String(r.step_service_id)])
+        const a = ap[0]
+        const live = a && !a.deleted_at && !['cancelled', 'no-show', 'deleted'].includes(a.status)
+        if (live) {
+          const past = new Date(a.scheduled_at).getTime() <= Date.now()
+          if (a.item_done || (a.status === 'paid' && past)) appointment = 'completed'
+          else if (!past) appointment = 'upcoming'
+          else appointment = 'cancelled'          // overdue and never done: treat like a cancellation and look again tomorrow
+        } else appointment = 'cancelled'
+      }
+
+      // Bought / completed by some other bill meanwhile (a paid upcoming appointment counts as bought).
+      const other = await checkEligibility(r, true)
+      let action = decidePostponed(
+        { appointment, boughtOrCompletedElsewhere: other.kind === 'skip', recheckAt: r.recheck_at ? new Date(r.recheck_at) : null }, new Date())
+
+      // The tracked appointment is gone but the client booked another one: follow that one instead of waiting a day.
+      if (appointment === 'cancelled' && action.kind !== 'skip') {
+        const next = await checkEligibility(r, false)
+        if (next.kind === 'postpone' && next.appointmentId && next.appointmentId !== r.postponed_appointment_id) {
+          await logEvent(r.id, 'postponed', 'POSTPONED', 'Client booked another appointment for this service', next.appointmentId)
+          await pool.query(`UPDATE service_chain_messages SET postponed_appointment_id=$2, recheck_at=NULL, skip_reason=$3, updated_at=NOW() WHERE id=$1`,
+            [r.id, next.appointmentId, next.reason])
+          continue
+        }
+      }
+
+      if (action.kind === 'skip') {
+        if (await skipStep(r, action.reason)) n++
+      } else if (action.kind === 'wait24h') {
+        await logEvent(r.id, 'recheck_scheduled', 'POSTPONED', action.reason, r.postponed_appointment_id)
+        await pool.query(`UPDATE service_chain_messages SET recheck_at=$2, skip_reason=$3, updated_at=NOW() WHERE id=$1 AND status='POSTPONED'`, [r.id, action.recheckAt, action.reason])
+      } else if (action.kind === 'release') {
+        await logEvent(r.id, 'recheck', 'SCHEDULED', 'Rechecking eligibility after the 24-hour wait', r.postponed_appointment_id)
+        await pool.query(`UPDATE service_chain_messages SET status='SCHEDULED', scheduled_at=NOW(), recheck_at=NULL, skip_reason=NULL, updated_at=NOW() WHERE id=$1 AND status='POSTPONED'`, [r.id])
+      }
+    } catch (err: any) {
+      logger.error('[service-chain] postponed check failed', { messageId: r.id, error: err?.message })
+    }
+  }
   return n
 }
 
@@ -288,7 +383,7 @@ export function resolveVariables(map: Record<string, ChainVariableField>, row: a
 
 async function processOne(id: string): Promise<void> {
   const { rows } = await pool.query(
-    `SELECT m.id, m.salon_id, m.enrolment_id,
+    `SELECT m.id, m.salon_id, m.enrolment_id, m.attempt_count,
             e.status AS enrolment_status, e.client_id, e.purchased_at, e.source_appointment_id,
             ch.is_active, ch.deleted_at, ch.skip_if_bought, ch.skip_if_completed, ch.skip_if_upcoming,
             st.service_id AS step_service_id, st.skip_if_bought_days, st.variable_map, st.parent_step_id, pm.status AS parent_status,
@@ -315,6 +410,7 @@ async function processOne(id: string): Promise<void> {
     [id])
   const row = rows[0]
   if (!row) return
+  let accepted = false      // Meta took the message: from here a failure must never trigger a second send
 
   try {
     // A paused journey does not send, and what falls due meanwhile is skipped, never sent late after the resume.
@@ -324,12 +420,19 @@ async function processOne(id: string): Promise<void> {
     if (!String(row.phone_number ?? '').trim()) return await setOutcome(id, 'SKIPPED', { reason: 'Client has no phone number' })
     // Chain messages are marketing templates: an explicit opt-out always wins.
     if (row.whatsapp_marketing === false) return await setOutcome(id, 'SKIPPED', { reason: 'Client opted out of WhatsApp marketing' })
-    // A sub-step follows its step: if that step never went out (skipped, failed, cancelled), neither does this.
+    // A sub-step follows its step. While that step is still waiting (scheduled, postponed or being sent) the sub-step waits
+    // too; if the step never went out (skipped, failed, cancelled), neither does this.
+    if (row.parent_step_id && ['SCHEDULED', 'POSTPONED', 'SENDING'].includes(row.parent_status)) {
+      await pool.query(`UPDATE service_chain_messages SET status='SCHEDULED', scheduled_at=NOW() + INTERVAL '15 minutes', updated_at=NOW() WHERE id=$1`, [id])
+      return
+    }
     if (row.parent_step_id && !['SENT', 'DELIVERED', 'READ'].includes(row.parent_status)) {
       return await setOutcome(id, 'SKIPPED', { reason: 'The step before it was not sent' })
     }
-    const why = await skipReason(row)
-    if (why) return await setOutcome(id, 'SKIPPED', { reason: why })
+    // Always a fresh look at the client's records, never the result from when the journey was created.
+    const verdict = await checkEligibility(row)
+    if (verdict.kind === 'skip') return await setOutcome(id, 'SKIPPED', { reason: verdict.reason })
+    if (verdict.kind === 'postpone') return await setOutcome(id, 'POSTPONED', { reason: verdict.reason, appointmentId: verdict.appointmentId })
     if (!row.template_id || row.template_status !== 'APPROVED') {
       return await setOutcome(id, 'FAILED', { reason: 'Template missing or not approved', message: 'Template is missing or no longer approved by Meta' })
     }
@@ -346,14 +449,35 @@ async function processOne(id: string): Promise<void> {
     const digits = formatPhone(String(row.phone_number), row.phone_country_code).replace(/\D/g, '')
     const to = `+${digits}`
 
-    const result = await whatsappMetaApi.sendTemplateMessage({
-      phoneNumberId: waConfig.phone_number_id,
-      accessToken:   waConfig.access_token,
-      to,
-      templateName:  row.template_name,
-      language:      row.language,
-      components:    buildTemplateSendComponents(row, { variables, fallbackName: row.client_name, flowToken: `${row.salon_id}:chain:${row.enrolment_id}` }),
-    })
+    // Re-validate the journey immediately before the Meta call, holding a share lock on it for the call's duration: a restart
+    // (which takes the row FOR UPDATE) either committed first, so nothing is sent, or waits until this send is done.
+    let result: any
+    const lock = await pool.connect()
+    try {
+      await lock.query('BEGIN')
+      const { rows: live } = await lock.query(
+        `SELECT e.status FROM service_chain_enrolments e JOIN service_chains ch ON ch.id = e.chain_id
+         WHERE e.id = $1 AND ch.is_active AND ch.deleted_at IS NULL FOR SHARE OF e`, [row.enrolment_id])
+      if (live[0]?.status !== 'active') {
+        await lock.query('ROLLBACK')
+        return await setOutcome(id, 'CANCELLED', { reason: 'Journey is no longer active' })
+      }
+      result = await whatsappMetaApi.sendTemplateMessage({
+        phoneNumberId: waConfig.phone_number_id,
+        accessToken:   waConfig.access_token,
+        to,
+        templateName:  row.template_name,
+        language:      row.language,
+        components:    buildTemplateSendComponents(row, { variables, fallbackName: row.client_name, flowToken: `${row.salon_id}:chain:${row.enrolment_id}` }),
+      })
+      accepted = true
+      await lock.query('COMMIT')
+    } catch (sendErr) {
+      await lock.query('ROLLBACK').catch(() => undefined)
+      throw sendErr
+    } finally {
+      lock.release()
+    }
     const wamid = result?.messages?.[0]?.id as string | undefined
     await setOutcome(id, 'SENT', { wamid })
     logger.info(`[service-chain] sent to ${maskPhone(to)} (wamid: ${wamid ?? 'none'})`, { messageId: id, salonId: row.salon_id })
@@ -369,12 +493,35 @@ async function processOne(id: string): Promise<void> {
   } catch (err: any) {
     const metaCode = Number(err?.response?.data?.error?.code)
     const message = err?.response?.data?.error?.message ?? err?.message ?? 'Send failed'
-    logger.error('[service-chain] send failed', { messageId: id, metaCode, message })
-    await setOutcome(id, 'FAILED', {
-      code: Number.isFinite(metaCode) ? String(metaCode) : undefined,
-      reason: BLOCK_CODES.includes(metaCode) ? 'Recipient or account cannot receive WhatsApp messages' : undefined,
-      message,
-    })
+    logger.error('[service-chain] send failed', { messageId: id, metaCode, message, accepted })
+    if (accepted) {
+      // Meta already has the message; only our bookkeeping failed. Never retry (that would send it twice).
+      await pool.query(`UPDATE service_chain_messages SET status='SENT', sent_at=COALESCE(sent_at, NOW()), updated_at=NOW() WHERE id=$1 AND status='SENDING'`, [id]).catch(() => undefined)
+      return
+    }
+    const attempt = Number(row.attempt_count ?? 0) + 1
+    const retryAt = isTemporaryFailure({
+      metaCode: Number.isFinite(metaCode) ? metaCode : null,
+      httpStatus: err?.response?.status ?? null,
+      networkCode: err?.code ?? null,
+    }) ? nextRetryAt(attempt, new Date()) : null
+    const code = Number.isFinite(metaCode) ? String(metaCode) : undefined
+    if (retryAt) {
+      // A temporary problem (rate limit, Meta/server/network trouble): try again later. The row goes back to SCHEDULED, so
+      // every eligibility check runs again before the next attempt, and the claim lock still allows only one sender.
+      await logEvent(id, 'retry_scheduled', 'SCHEDULED', `Temporary failure (attempt ${attempt}): ${message}`)
+      await pool.query(
+        `UPDATE service_chain_messages SET status='SCHEDULED', scheduled_at=$2, next_retry_at=$2, attempt_count=$3,
+                error_code=$4, error_message=$5, updated_at=NOW() WHERE id=$1`,
+        [id, retryAt, attempt, code ?? null, message])
+    } else {
+      await setOutcome(id, 'FAILED', {
+        code,
+        reason: BLOCK_CODES.includes(metaCode) ? 'Recipient or account cannot receive WhatsApp messages' : undefined,
+        message,
+        attempts: attempt,
+      })
+    }
   } finally {
     await maybeCompleteEnrolment(row.enrolment_id).catch(() => undefined)
   }
@@ -403,6 +550,7 @@ export async function runServiceChainTick(): Promise<void> {
   await runEnrolmentSweep().catch((err) => logger.error('[service-chain] sweep error:', err?.message))
   await cancelRefundedJourneys().catch((err) => logger.error('[service-chain] refund check error:', err?.message))
   await evaluateEagerSkips().catch((err) => logger.error('[service-chain] eager skip error:', err?.message))
+  await evaluatePostponed().catch((err) => logger.error('[service-chain] postponed check error:', err?.message))
   await runDueMessages().catch((err) => logger.error('[service-chain] due error:', err?.message))
 }
 

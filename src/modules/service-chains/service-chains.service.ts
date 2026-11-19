@@ -23,7 +23,7 @@ async function validate(salonId: string, input: ChainInput): Promise<ChainInput>
   if (name.length > 120) throw bad('Name is too long')
   if (!UUID.test(String(input?.starting_service_id ?? ''))) throw bad('Choose a starting service')
   if (!HHMM.test(String(input?.send_time ?? ''))) throw bad('Send time must be HH:MM')
-  if (!Array.isArray(input.steps) || input.steps.length === 0) throw bad('Add at least one step')
+  if (!Array.isArray(input.steps)) throw bad('Steps are invalid')
   if (input.steps.length > 20) throw bad('A chain can have at most 20 steps')
 
   const cleanMap = (where: string, raw: Record<string, ChainVariableField> | undefined, allowStepService: boolean) => {
@@ -66,6 +66,8 @@ async function validate(salonId: string, input: ChainInput): Promise<ChainInput>
     }
   })
   const startSubs = cleanSubs('Starting service', input.start_substeps, false)
+  // A chain may be just After-purchase messages, or just follow-up steps, but never empty.
+  if (steps.length === 0 && startSubs.length === 0) throw bad('Add at least one message or follow-up step')
 
   const serviceIds = [...new Set([input.starting_service_id, ...steps.map((s) => s.service_id as string)])]
   const { rows: svc } = await pool.query(
@@ -349,7 +351,7 @@ export const serviceChainsService = {
       await client.query(
         `UPDATE service_chain_messages m SET status = 'CANCELLED', skip_reason = 'Chain deleted', updated_at = NOW()
          FROM service_chain_enrolments e
-         WHERE m.enrolment_id = e.id AND e.chain_id = $1 AND m.status = 'SCHEDULED'`, [id])
+         WHERE m.enrolment_id = e.id AND e.chain_id = $1 AND m.status IN ('SCHEDULED', 'POSTPONED')`, [id])
       await client.query(
         `UPDATE service_chain_enrolments SET status = 'cancelled', updated_at = NOW() WHERE chain_id = $1 AND status IN ('active','paused')`, [id])
       await client.query(
@@ -385,12 +387,15 @@ export const serviceChainsService = {
                 SELECT json_agg(json_build_object(
                   'id', m.id, 'step_order', st.step_order, 'day_offset', st.day_offset, 'delay_minutes', st.delay_minutes, 'is_sub', st.is_sub, 'service_name', sv.name,
                   'template_name', t.name, 'status', m.status, 'skip_reason', m.skip_reason,
-                  'error_message', m.error_message, 'scheduled_at', m.scheduled_at, 'sent_at', m.sent_at
+                  'error_message', m.error_message, 'scheduled_at', m.scheduled_at, 'sent_at', m.sent_at,
+                  'recheck_at', m.recheck_at, 'attempt_count', m.attempt_count, 'next_retry_at', m.next_retry_at,
+                  'postponed_appointment_id', m.postponed_appointment_id, 'postponed_appointment_at', pa.scheduled_at
                 ) ORDER BY st.step_order)
                 FROM service_chain_messages m
                 JOIN service_chain_steps st ON st.id = m.step_id
                 LEFT JOIN services sv ON sv.id = st.service_id
                 LEFT JOIN wa_templates t ON t.id = st.template_id
+                LEFT JOIN appointments pa ON pa.id = m.postponed_appointment_id
                 WHERE m.enrolment_id = e.id), '[]'::json) AS messages
        FROM service_chain_enrolments e
        JOIN clients c ON c.id = e.client_id
@@ -410,7 +415,7 @@ export const serviceChainsService = {
       if (!rowCount) { await client.query('ROLLBACK'); throw new AppError(404, 'Active enrolment not found', 'NOT_FOUND') }
       await client.query(
         `UPDATE service_chain_messages SET status = 'CANCELLED', skip_reason = 'Cancelled by staff', updated_at = NOW()
-         WHERE enrolment_id = $1 AND status = 'SCHEDULED'`, [enrolmentId])
+         WHERE enrolment_id = $1 AND status IN ('SCHEDULED', 'POSTPONED')`, [enrolmentId])
       await client.query('COMMIT')
     } catch (err) {
       await client.query('ROLLBACK').catch(() => undefined)
@@ -434,12 +439,20 @@ export const serviceChainsService = {
     if (!rowCount) throw new AppError(404, 'Paused journey not found', 'NOT_FOUND')
   },
 
+  // Audit trail of one step: every state change with its reason, oldest first.
+  async messageHistory(messageId: string, salonId: string) {
+    const { rows } = await pool.query(
+      `SELECT id, event, from_status, to_status, reason, appointment_id, created_at
+       FROM service_chain_message_events WHERE message_id = $1 AND salon_id = $2 ORDER BY created_at, id`, [messageId, salonId])
+    return rows
+  },
+
   // Put a FAILED message back in the queue. The normal sender picks it up on its next 5-minute pass and re-runs every
   // check (opt-out, step before it sent, template approved), so a retry can still end up skipped for a good reason.
   async retryMessage(messageId: string, salonId: string) {
     const { rowCount } = await pool.query(
       `UPDATE service_chain_messages m
-       SET status = 'SCHEDULED', scheduled_at = NOW(), error_code = NULL, error_message = NULL, skip_reason = NULL, updated_at = NOW()
+       SET status = 'SCHEDULED', scheduled_at = NOW(), attempt_count = 0, next_retry_at = NULL, error_code = NULL, error_message = NULL, skip_reason = NULL, updated_at = NOW()
        FROM service_chain_enrolments e, service_chains ch
        WHERE m.id = $1 AND m.salon_id = $2 AND m.status = 'FAILED'
          AND e.id = m.enrolment_id AND e.status = 'active'
