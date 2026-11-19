@@ -20,6 +20,7 @@ import redis from "../../config/redis";
 import pool from "../../config/database";
 import type { GoogleOAuthProfile, GoogleStatePayload } from "./auth.types";
 import { getSalonDateLocale } from "../../config/currency";
+import { getGoogleOAuthConfig } from "../../config/platformIntegrations";
 
 
 const ACCESS_SECRET: Secret = process.env.JWT_ACCESS_SECRET || "";
@@ -872,10 +873,12 @@ export const authService = {
     return JSON.parse(raw) as GoogleStatePayload;
   },
 
-  googleAuthUrl(params: { state: string; codeChallenge: string }) {
+  // Credentials come from Super Admin settings (database) first, then the GOOGLE_* environment variables.
+  async googleAuthUrl(params: { state: string; codeChallenge: string }) {
+    const g = await getGoogleOAuthConfig();
     const url = new URL("https://accounts.google.com/o/oauth2/v2/auth");
-    url.searchParams.set("client_id", process.env.GOOGLE_CLIENT_ID || "");
-    url.searchParams.set("redirect_uri", process.env.GOOGLE_REDIRECT_URI || "");
+    url.searchParams.set("client_id", g.clientId);
+    url.searchParams.set("redirect_uri", g.redirectUri);
     url.searchParams.set("response_type", "code");
     url.searchParams.set("scope", "openid email profile");
     url.searchParams.set("state", params.state);
@@ -889,13 +892,14 @@ export const authService = {
   },
 
   async googleExchangeCode(code: string, codeVerifier: string) {
+    const g = await getGoogleOAuthConfig();
     const res = await axios.post(
       "https://oauth2.googleapis.com/token",
       new URLSearchParams({
         code,
-        client_id: process.env.GOOGLE_CLIENT_ID || "",
-        client_secret: process.env.GOOGLE_CLIENT_SECRET || "",
-        redirect_uri: process.env.GOOGLE_REDIRECT_URI || "",
+        client_id: g.clientId,
+        client_secret: g.clientSecret,
+        redirect_uri: g.redirectUri,
         grant_type: "authorization_code",
         code_verifier: codeVerifier,
       }).toString(),
