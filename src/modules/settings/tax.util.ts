@@ -71,7 +71,7 @@ export async function getActiveTaxes(salonId: string): Promise<ActiveTaxRow[]> {
     .map((r) => ({ ...parseTaxValue(r.value), key: r.key }))
     .filter((v) => v.active && (v.tax_type !== undefined || v.applicable_for !== undefined))
     .map((v) => ({
-      tax_name: v.key ?? "",
+      tax_name: v.display_name ?? v.key ?? "",
       tax_value: Number(v.tax_value) || 0,
       inclusive_taxes: Boolean(v.inclusive_taxes),
       applicable_for: {
