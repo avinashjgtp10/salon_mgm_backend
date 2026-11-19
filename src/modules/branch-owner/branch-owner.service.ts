@@ -593,6 +593,11 @@ export const branchOwnerService = {
     return Object.fromEntries(entries);
   },
 
+  // Read-only subscription overview across every managed salon (see branchOwnerRepository.getSubscriptionOverview).
+  async getSubscriptionOverview(branchOwnerId: string) {
+    return branchOwnerRepository.getSubscriptionOverview(branchOwnerId);
+  },
+
   async getSalonInvoices(branchOwnerId: string, salonId: string) {
     await assertSalonsAssigned(branchOwnerId, [salonId]);
     const { data } = await billingService.listInvoices({ salon_id: salonId, limit: 50 });

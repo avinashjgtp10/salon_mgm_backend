@@ -152,6 +152,64 @@ export const branchOwnerRepository = {
     return rows;
   },
 
+  // Read-only Subscription Management feed: one row per salon the branch owner manages, from the AUTHORITATIVE
+  // `subscriptions` table (same source/filter as getMySalons — an unfinished checkout is not a subscription), with the
+  // plan, active staff count and the salon's payment history (subscription_payments, newest first, capped at 20).
+  async getSubscriptionOverview(branchOwnerId: string) {
+    const { rows } = await pool.query(`
+      SELECT
+        s.id AS salon_id,
+        COALESCE(s.business_name, s.slug, 'Unnamed') AS salon_name,
+        s.logo_url,
+        s.city AS location,
+        s.is_active AS salon_active,
+        COALESCE(sc.staff_count, 0) AS staff_count,
+        sub.id AS subscription_id,
+        sub.status AS subscription_status,
+        COALESCE(sub.is_trial, false) AS is_trial,
+        sub.cancel_at_period_end,
+        sub.cancelled_at,
+        sub.trial_end,
+        sub.current_period_start,
+        sub.current_period_end,
+        sp.name AS plan_name,
+        sp.price::float8 AS plan_price,
+        sp.billing_cycle,
+        sp.max_staff,
+        sp.max_branches,
+        sp.max_bookings_per_month,
+        sp.ai_features_enabled,
+        sp.features AS plan_features,
+        COALESCE(pay.payments, '[]'::json) AS payments
+      FROM branch_owner_salons bos
+      JOIN salons s ON s.id = bos.salon_id
+      LEFT JOIN LATERAL (
+        SELECT * FROM subscriptions
+        WHERE salon_id = s.id AND status NOT IN ('created', 'authenticated')
+        ORDER BY created_at DESC
+        LIMIT 1
+      ) sub ON true
+      LEFT JOIN subscription_plans sp ON sp.id = sub.plan_id
+      LEFT JOIN (
+        SELECT salon_id, COUNT(*)::int AS staff_count FROM staff WHERE is_active = true GROUP BY salon_id
+      ) sc ON sc.salon_id = s.id
+      LEFT JOIN LATERAL (
+        SELECT json_agg(x ORDER BY x.paid_at DESC NULLS LAST, x.created_at DESC) AS payments
+        FROM (
+          SELECT p.id, p.amount::float8 AS amount, p.payment_status, p.payment_method, p.transaction_id,
+                 p.billing_period_start, p.billing_period_end, p.paid_at, p.created_at
+          FROM subscription_payments p
+          JOIN subscriptions ss ON ss.id = p.subscription_id
+          WHERE ss.salon_id = s.id
+          ORDER BY p.paid_at DESC NULLS LAST, p.created_at DESC
+          LIMIT 20
+        ) x
+      ) pay ON true
+      WHERE bos.branch_owner_id = $1
+      ORDER BY salon_name ASC`, [branchOwnerId]);
+    return rows;
+  },
+
   // All-time booking count and distinct client count for an explicit set of
   // salons — the dashboard cards' scope is either every assigned salon or the
   // one picked in the salon dropdown, so this takes the ids rather than the
