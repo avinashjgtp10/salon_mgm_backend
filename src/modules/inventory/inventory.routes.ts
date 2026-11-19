@@ -470,6 +470,14 @@ router.get(
     ordersController.getById
 );
 
+router.get(
+    "/orders/:id/receipts",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    viewOrders,
+    ordersController.listReceipts
+);
+
 router.post(
     "/orders/:id/receive",
     authMiddleware,

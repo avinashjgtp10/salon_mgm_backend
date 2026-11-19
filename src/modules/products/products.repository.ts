@@ -103,6 +103,10 @@ export const productsRepository = {
             conditions.push(`${prefix}category_id = $${idx++}`);
             values.push(filters.category_id);
         }
+        if (filters.supplier_id) {
+            conditions.push(`${prefix}supplier_id = $${idx++}`);
+            values.push(filters.supplier_id);
+        }
         if (filters.brand_id) {
             conditions.push(`${prefix}brand_id = $${idx++}`);
             values.push(filters.brand_id);
