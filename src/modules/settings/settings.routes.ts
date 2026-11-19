@@ -21,6 +21,8 @@ const ownerAdminStaff = roleMiddleware("salon_owner", "admin", "staff");
 // why role_permissions/subscription_permissions get their own stricter
 // handling instead of falling through to the default.
 router.get("/",      authMiddleware, ownerAdminStaff, settingsController.list);
+router.post("/tax/check", authMiddleware, ownerAdminStaff, settingsController.checkTax);
+router.post("/tax/save",  authMiddleware, ownerAdminStaff, settingsController.saveTax);
 router.get("/:id",   authMiddleware, ownerAdminStaff, settingsController.getById);
 router.post("/",     authMiddleware, ownerAdminStaff, settingsController.create);
 router.put("/:id",   authMiddleware, ownerAdminStaff, settingsController.update);

@@ -17,7 +17,7 @@ import { Setting, CreateSettingBody, UpdateSettingBody } from "./settings.types"
 const SETTINGS_CACHE_TTL_MS = 10_000;
 const settingsCache = new Map<string, { data: Setting[]; expiresAt: number }>();
 
-function invalidateSettingsCache(salonId: string): void {
+export function invalidateSettingsCache(salonId: string): void {
   settingsCache.delete(salonId);
 }
 
