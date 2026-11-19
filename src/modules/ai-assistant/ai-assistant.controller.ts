@@ -110,13 +110,12 @@ export const aiAssistantController = {
         try {
             const user = req.user;
             if (!user?.userId || !user.salonId) throw new AppError(403, "Salon context required", "NO_SALON_CONTEXT");
-            const service = String(req.body?.service_name ?? "").trim();
             const brief = String(req.body?.brief ?? "").trim();
-            if (!service && brief.length < 8) throw new AppError(400, "Pick the service or describe the message in a few words.", "VALIDATION_ERROR");
+            if (brief.length < 8) throw new AppError(400, "Describe the message in a few words.", "VALIDATION_ERROR");
             if (brief.length > 400) throw new AppError(400, "Keep the description under 400 characters.", "VALIDATION_ERROR");
             const result = await writeChainTemplate(
                 { userId: user.userId, role: user.role, salonId: user.salonId },
-                { kind: String(req.body?.kind ?? ""), service_name: service, brief, language: String(req.body?.language ?? "en_US"), book_again: req.body?.book_again === true }
+                { brief, language: String(req.body?.language ?? "en_US"), book_again: req.body?.book_again === true }
             );
             return sendSuccess(res, 200, result, "OK");
         } catch (err) {

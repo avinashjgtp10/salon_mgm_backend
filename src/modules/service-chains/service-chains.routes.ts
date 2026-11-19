@@ -6,7 +6,6 @@ import { roleMiddleware } from '../../middleware/role.middleware'
 import { requirePermission } from '../../middleware/permission.middleware'
 import { sendSuccess } from '../utils/response.util'
 import { serviceChainsService } from './service-chains.service'
-import { sendTestMessage } from './service-chains.test-send'
 
 type AuthRequest = Request & { user?: { userId: string; role?: string; salonId?: string } }
 
@@ -27,13 +26,13 @@ router.get('/', view, wrap(async (req, res) => {
   sendSuccess(res, 200, await serviceChainsService.list(salon(req)), 'Service chains fetched')
 }))
 
-router.post('/test-send', manage, wrap(async (req, res) => {
-  sendSuccess(res, 200, await sendTestMessage(salon(req), req.user!.userId, req.body), 'Test message sent')
-}))
-
 router.post('/messages/:messageId/retry', manage, wrap(async (req, res) => {
   await serviceChainsService.retryMessage(req.params.messageId as string, salon(req))
   sendSuccess(res, 200, null, 'Message queued to retry')
+}))
+
+router.get('/messages/:messageId/history', view, wrap(async (req, res) => {
+  sendSuccess(res, 200, await serviceChainsService.messageHistory(req.params.messageId as string, salon(req)), 'History fetched')
 }))
 
 router.get('/:id', view, wrap(async (req, res) => {
