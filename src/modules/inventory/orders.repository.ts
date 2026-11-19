@@ -177,11 +177,12 @@ export const ordersRepository = {
                 `SELECT * FROM order_items WHERE order_id = $1`,
                 [id],
             );
-            const carried = new Map<string, { received: number; damaged: number; verified: number; verifiedDamaged: number }>();
+            const carried = new Map<string, { received: number; damaged: number; rejected: number; verified: number; verifiedDamaged: number }>();
             for (const old of oldItems) {
-                const prev = carried.get(old.product_id) ?? { received: 0, damaged: 0, verified: 0, verifiedDamaged: 0 };
+                const prev = carried.get(old.product_id) ?? { received: 0, damaged: 0, rejected: 0, verified: 0, verifiedDamaged: 0 };
                 prev.received        += Number(old.received_qty ?? 0);
                 prev.damaged         += Number(old.damaged_qty ?? 0);
+                prev.rejected        += Number(old.rejected_qty ?? 0);
                 prev.verified        += Number(old.verified_qty ?? 0);
                 prev.verifiedDamaged += Number(old.verified_damaged_qty ?? 0);
                 carried.set(old.product_id, prev);
@@ -189,7 +190,7 @@ export const ordersRepository = {
             for (const [productId, c] of carried) {
                 const kept = data.items.filter((i) => i.product_id === productId);
                 const newQty = kept.reduce((sum, i) => sum + i.qty, 0);
-                const accounted = Math.max(c.received + c.damaged, c.verified + c.verifiedDamaged);
+                const accounted = Math.max(c.received + c.damaged + c.rejected, c.verified + c.verifiedDamaged);
                 if (accounted > 0 && !kept.length) {
                     throw new AppError(400, "A product that has already been verified can't be removed from the order", "VALIDATION_ERROR");
                 }
@@ -248,15 +249,15 @@ export const ordersRepository = {
                 // Hand the product's previously recorded received/verified quantities
                 // back to its first re-inserted line (see the capture above).
                 const c = carried.get(item.product_id);
-                if (c && (c.received > 0 || c.damaged > 0 || c.verified > 0 || c.verifiedDamaged > 0)) {
+                if (c && (c.received > 0 || c.damaged > 0 || c.rejected > 0 || c.verified > 0 || c.verifiedDamaged > 0)) {
                     carried.delete(item.product_id);
                     const { rows: restored } = await client.query(
                         `UPDATE order_items
-                            SET received_qty = $1, damaged_qty = $2,
+                            SET received_qty = $1, damaged_qty = $2, rejected_qty = $6,
                                 verified_qty = $3, verified_damaged_qty = $4
                           WHERE id = $5
                       RETURNING *`,
-                        [c.received, c.damaged, c.verified, c.verifiedDamaged, insertedItem.id],
+                        [c.received, c.damaged, c.verified, c.verifiedDamaged, insertedItem.id, c.rejected],
                     );
                     insertedItem = restored[0];
                 }
@@ -411,13 +412,24 @@ export const ordersRepository = {
         const itemsById = new Map((order.items ?? []).map((i) => [i.id, i]));
         const purchaseItems: { product_id: string; quantity: number; purchase_price: number; expiry_date: string | null }[] = [];
 
+        // The same line twice in one request would each pass the per-line
+        // "remaining" check below yet together over-receive — reject it.
+        const seenLines = new Set<string>();
+        for (const line of data.items) {
+            if (seenLines.has(line.order_item_id)) {
+                throw new AppError(400, "Each order item may appear only once per receipt", "VALIDATION_ERROR");
+            }
+            seenLines.add(line.order_item_id);
+        }
+
         for (const line of data.items) {
             const orderItem = itemsById.get(line.order_item_id);
             if (!orderItem) throw new AppError(400, `order_item_id ${line.order_item_id} does not belong to this order`, "VALIDATION_ERROR");
             const damagedQty = line.damaged_qty ?? 0;
-            const remaining = Number(orderItem.qty) - Number(orderItem.received_qty) - Number(orderItem.damaged_qty);
-            if (line.received_qty + damagedQty > remaining + 0.001) {
-                throw new AppError(400, `Cannot account for ${line.received_qty + damagedQty} of "${orderItem.product_name ?? orderItem.product_id}" — only ${remaining} remaining on this order`, "VALIDATION_ERROR");
+            const rejectedQty = line.rejected_qty ?? 0;
+            const remaining = Number(orderItem.qty) - Number(orderItem.received_qty) - Number(orderItem.damaged_qty) - Number(orderItem.rejected_qty ?? 0);
+            if (line.received_qty + damagedQty + rejectedQty > remaining + 0.001) {
+                throw new AppError(400, `Cannot account for ${line.received_qty + damagedQty + rejectedQty} of "${orderItem.product_name ?? orderItem.product_id}" — only ${remaining} remaining on this order`, "VALIDATION_ERROR");
             }
             // Only the good units are ever stocked in — damaged ones are
             // recorded on order_items below but never touch products.amount.
@@ -426,8 +438,8 @@ export const ordersRepository = {
             }
         }
 
-        if (!purchaseItems.length && !data.items.some((l) => (l.damaged_qty ?? 0) > 0)) {
-            throw new AppError(400, "At least one item must have a received or damaged quantity > 0", "VALIDATION_ERROR");
+        if (!purchaseItems.length && !data.items.some((l) => (l.damaged_qty ?? 0) > 0 || (l.rejected_qty ?? 0) > 0)) {
+            throw new AppError(400, "At least one item must have a received, damaged or rejected quantity > 0", "VALIDATION_ERROR");
         }
 
         // The actual stock-in — same code path a standalone Purchase uses,
@@ -437,31 +449,56 @@ export const ordersRepository = {
         // against this PO" flow can patch Product Inventory in place, same
         // as it already does for an ad-hoc purchase. Skipped entirely when
         // this call is damaged-only (no good units to stock in).
-        const updatedProducts = purchaseItems.length
-            ? (await purchasesRepository.create(
+        const purchaseResult = purchaseItems.length
+            ? await purchasesRepository.create(
                 { supplier_id: order.supplier_id, purchase_date: data.purchase_date, order_id: orderId, received_by_staff_id: data.received_by_staff_id ?? null, items: purchaseItems },
                 salonId,
                 createdBy,
-            )).updatedProducts
-            : [];
+            )
+            : null;
+        const updatedProducts = purchaseResult?.updatedProducts ?? [];
 
         const client = await pool.connect();
         try {
             await client.query("BEGIN");
+            // Lock the order row so concurrent receipts serialise their
+            // order_items updates and the status recompute below sees both.
+            await client.query(`SELECT id FROM orders WHERE id = $1 FOR UPDATE`, [orderId]);
+
+            // History entry for this delivery (one row per Receive click) —
+            // written in the same transaction as the order_items update so the
+            // history and the running totals can never disagree.
+            const { rows: logRows } = await client.query(
+                `INSERT INTO order_receiving_log (salon_id, order_id, purchase_id, received_by, notes, created_by)
+                 VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+                [salonId, orderId, purchaseResult?.purchase?.id ?? null, data.received_by_staff_id ?? null, data.notes?.trim() || null, createdBy],
+            );
+            const logId = logRows[0].id;
+
             for (const line of data.items) {
                 const damagedQty = line.damaged_qty ?? 0;
-                if (line.received_qty <= 0 && damagedQty <= 0) continue;
+                const rejectedQty = line.rejected_qty ?? 0;
+                if (line.received_qty <= 0 && damagedQty <= 0 && rejectedQty <= 0) continue;
                 await client.query(
-                    `UPDATE order_items SET received_qty = received_qty + $1, damaged_qty = damaged_qty + $2 WHERE id = $3`,
-                    [line.received_qty, damagedQty, line.order_item_id],
+                    `UPDATE order_items
+                        SET received_qty = received_qty + $1, damaged_qty = damaged_qty + $2, rejected_qty = rejected_qty + $3
+                      WHERE id = $4`,
+                    [line.received_qty, damagedQty, rejectedQty, line.order_item_id],
+                );
+                const orderItem = itemsById.get(line.order_item_id)!;
+                await client.query(
+                    `INSERT INTO order_receiving_log_items (log_id, order_item_id, product_id, product_name, received_qty, damaged_qty, rejected_qty)
+                     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+                    [logId, line.order_item_id, orderItem.product_id, orderItem.product_name ?? null, line.received_qty, damagedQty, rejectedQty],
                 );
             }
             const { rows: refreshedItems } = await client.query(
-                `SELECT qty, received_qty, damaged_qty FROM order_items WHERE order_id = $1`,
+                `SELECT qty, received_qty, damaged_qty, rejected_qty FROM order_items WHERE order_id = $1`,
                 [orderId],
             );
-            const fullyReceived = refreshedItems.every((r) => Number(r.received_qty) + Number(r.damaged_qty) >= Number(r.qty) - 0.001);
-            const anyReceived = refreshedItems.some((r) => Number(r.received_qty) + Number(r.damaged_qty) > 0);
+            const accounted = (r: any) => Number(r.received_qty) + Number(r.damaged_qty) + Number(r.rejected_qty);
+            const fullyReceived = refreshedItems.every((r) => accounted(r) >= Number(r.qty) - 0.001);
+            const anyReceived = refreshedItems.some((r) => accounted(r) > 0);
             const newStatus = fullyReceived ? "received" : anyReceived ? "partially_received" : order.status;
             await client.query(`UPDATE orders SET status = $1, updated_at = NOW() WHERE id = $2`, [newStatus, orderId]);
             await client.query("COMMIT");
@@ -473,6 +510,27 @@ export const ordersRepository = {
         }
 
         return { ...(await this.getById(orderId, salonId))!, updatedProducts };
+    },
+
+    /** Receiving history for one order: one entry per delivery, oldest first, with its per-line split. */
+    async listReceipts(orderId: string, salonId: string) {
+        const { rows: logs } = await pool.query(
+            `SELECT l.id, l.purchase_id, l.notes, l.created_at, l.received_by,
+                    NULLIF(TRIM(CONCAT(s.first_name, ' ', COALESCE(s.last_name, ''))), '') AS received_by_name, pu.purchase_number
+               FROM order_receiving_log l
+               LEFT JOIN staff s ON s.id = l.received_by
+               LEFT JOIN purchases pu ON pu.id = l.purchase_id
+              WHERE l.order_id = $1 AND l.salon_id = $2
+              ORDER BY l.created_at ASC`,
+            [orderId, salonId],
+        );
+        if (!logs.length) return [];
+        const { rows: lines } = await pool.query(
+            `SELECT log_id, order_item_id, product_id, product_name, received_qty, damaged_qty, rejected_qty
+               FROM order_receiving_log_items WHERE log_id = ANY($1::uuid[])`,
+            [logs.map((l) => l.id)],
+        );
+        return logs.map((l) => ({ ...l, items: lines.filter((i) => i.log_id === l.id) }));
     },
 
     /**

@@ -134,6 +134,12 @@ export const validateReceiveOrder = (
             if (item.damaged_qty !== undefined && (typeof item.damaged_qty !== "number" || !Number.isFinite(item.damaged_qty) || item.damaged_qty < 0)) {
                 throw new AppError(400, `items[${i}].damaged_qty must be a non-negative number`, "VALIDATION_ERROR");
             }
+            if (item.rejected_qty !== undefined && (typeof item.rejected_qty !== "number" || !Number.isFinite(item.rejected_qty) || item.rejected_qty < 0)) {
+                throw new AppError(400, `items[${i}].rejected_qty must be a non-negative number`, "VALIDATION_ERROR");
+            }
+        }
+        if (b.notes !== undefined && b.notes !== null && (typeof b.notes !== "string" || b.notes.length > 2000)) {
+            throw new AppError(400, "notes must be a string of at most 2000 characters", "VALIDATION_ERROR");
         }
 
         return next();
