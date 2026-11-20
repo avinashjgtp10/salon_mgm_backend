@@ -51,12 +51,15 @@ export const clientMembershipsController = {
     try {
       const salonId = getSalonId(req);
       // Client WhatsApp OTP gate (Settings > Extras, default OFF).
+      let otpClientId: string | undefined;
       if (await redemptionOtpService.isRequired(salonId, ['membership'])) {
         const cm = await clientMembershipsService.getById(req.params.id as string, salonId);
         if (!cm) return next(new AppError(404, 'Not found', 'NOT_FOUND'));
-        await redemptionOtpService.assertVerified(salonId, cm.clientId, ['membership']);
+        if (await redemptionOtpService.assertVerified(salonId, cm.clientId, ['membership'])) otpClientId = cm.clientId;
       }
       const data = await clientMembershipsService.consume(req.params.id as string, salonId, req.body);
+      // One code = one redemption.
+      if (otpClientId) await redemptionOtpService.consume(salonId, otpClientId).catch(() => undefined);
       return sendSuccess(res, 200, data, 'Session consumed');
     } catch (e: any) {
       if (

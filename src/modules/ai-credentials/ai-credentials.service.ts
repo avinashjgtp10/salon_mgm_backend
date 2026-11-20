@@ -15,6 +15,11 @@ export type SalonAiCredentials = { accountId: string; apiToken: string };
 export const LUNOX_LOCKED_MESSAGE = "Your plan doesn't include LUNOX. Upgrade your plan to take control of it.";
 export const lunoxLockedError = () => new AppError(403, LUNOX_LOCKED_MESSAGE, "MODULE_LOCKED", { module: "lunox" });
 
+// The plan includes LUNOX but SalonOX has not saved this salon's AI key yet: tell the owner to contact support
+// (not the "Upgrade your plan" message, which is only right when the plan itself lacks LUNOX).
+export const LUNOX_NOT_CONFIGURED_MESSAGE = "LUNOX AI is not configured for your account. Please contact our SalonOX team for assistance.";
+export const lunoxNotConfiguredError = () => new AppError(403, LUNOX_NOT_CONFIGURED_MESSAGE, "LUNOX_NOT_CONFIGURED", { module: "lunox" });
+
 const CACHE_TTL_MS = 60_000;
 const cache = new Map<string, { creds: SalonAiCredentials | null; expiresAt: number }>();
 let warnedMissingTable = false;
@@ -66,9 +71,20 @@ const invalidate = (salonId: string) => cache.delete(salonId);
 
 /** The salon's credentials, or throws the standard "Upgrade your plan" error. */
 export async function requireSalonAiCredentials(salonId: string | null | undefined): Promise<SalonAiCredentials> {
-    const creds = salonId && !(await isModuleLocked(salonId, "lunox")) ? await load(salonId) : null;
-    if (!creds) throw lunoxLockedError();
+    if (!salonId || (await isModuleLocked(salonId, "lunox"))) throw lunoxLockedError();
+    const creds = await load(salonId);
+    if (!creds) throw lunoxNotConfiguredError();
     return creds;
+}
+
+/**
+ * Where this salon stands with LUNOX, read fresh (the 60 s credentials cache is skipped) so a key Super Admin saved a
+ * moment ago works on the very next click: "plan_locked" (plan lacks LUNOX), "not_configured" (plan has it, no key), "ready".
+ */
+export async function lunoxAccessState(salonId: string | null | undefined): Promise<"plan_locked" | "not_configured" | "ready"> {
+    if (!salonId || (await isModuleLocked(salonId, "lunox"))) return "plan_locked";
+    invalidate(salonId);
+    return (await load(salonId)) ? "ready" : "not_configured";
 }
 
 // On only when the plan's "lunox" module is unlocked AND the salon has its credentials saved.

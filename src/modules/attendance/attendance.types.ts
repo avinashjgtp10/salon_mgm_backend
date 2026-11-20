@@ -143,6 +143,8 @@ export type TodayStaffRecord = Partial<ReturnType<typeof attendanceActivity>> & 
     check_out: string | null;
     hours_worked: number | null;
     scheduled_hours: number | null;
+    /** The staff schedule marks this date as a day off (weekly off or a one-day change). Not a leave. */
+    is_off_day?: boolean;
     // Start of the day's scheduled shift as "HH:MM", or null when none is scheduled.
     shift_start: string | null;
     attendance_id: string | null;

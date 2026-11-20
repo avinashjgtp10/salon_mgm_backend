@@ -183,9 +183,6 @@ export const payrollService = {
     },
 
     async adjustPayroll(salonId: string, staffId: string, body: AdjustPayrollBody, adjustedBy?: string | null): Promise<StaffPayrollSummary> {
-        if (!body.reason || !body.reason.trim()) {
-            throw new AppError(400, "A reason is required for every payroll adjustment", "VALIDATION_ERROR");
-        }
         if (typeof body.adjusted_value !== "number" || !Number.isFinite(body.adjusted_value)) {
             throw new AppError(400, "adjusted_value must be a number", "VALIDATION_ERROR");
         }
@@ -215,7 +212,7 @@ export const payrollService = {
             field: body.field,
             original_value: originalValue,
             adjusted_value: body.adjusted_value,
-            reason: body.reason.trim(),
+            reason: (body.reason ?? "").trim(), // optional - stored as an empty string when left blank
             adjusted_by: adjustedBy ?? null,
         });
 

@@ -575,7 +575,7 @@ export const attendanceRepository = {
         salonId: string,
         date: string,
         dayOfWeek: number
-    ): Promise<Map<string, { scheduled_hours: number | null; shift_start: string | null }>> {
+    ): Promise<Map<string, { scheduled_hours: number | null; shift_start: string | null; is_off: boolean }>> {
         const { rows } = await safeQuery(() => pool.query(
             `WITH best_schedule AS (
                SELECT DISTINCT ON (ss.staff_id)
@@ -588,7 +588,8 @@ export const attendanceRepository = {
                WHERE st.salon_id = $1
                  AND st.is_active = true
                  AND (ss.date = $2::date OR (ss.date IS NULL AND ss.day_of_week = $3))
-               ORDER BY ss.staff_id, ss.date NULLS LAST
+               -- A date-specific row beats the weekly one; if a date has several rows (the schedule was edited more than once), the latest edit wins.
+               ORDER BY ss.staff_id, ss.date NULLS LAST, ss.updated_at DESC NULLS LAST
              )
              SELECT
                staff_id,
@@ -604,15 +605,18 @@ export const attendanceRepository = {
                CASE WHEN is_available AND start_time IS NOT NULL
                  THEN to_char(start_time::time, 'HH24:MI')
                  ELSE NULL
-               END AS shift_start
+               END AS shift_start,
+               -- The schedule for this date says the staff member is NOT working (weekly off or a one-day off).
+               (is_available = false) AS is_off
              FROM best_schedule`,
             [salonId, date, dayOfWeek]
         ));
-        const map = new Map<string, { scheduled_hours: number | null; shift_start: string | null }>();
+        const map = new Map<string, { scheduled_hours: number | null; shift_start: string | null; is_off: boolean }>();
         for (const row of rows) {
             map.set(row.staff_id, {
                 scheduled_hours: row.scheduled_hours != null ? parseFloat(row.scheduled_hours) : null,
                 shift_start: row.shift_start ?? null,
+                is_off: row.is_off === true,
             });
         }
         return map;

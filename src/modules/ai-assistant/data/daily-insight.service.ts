@@ -69,7 +69,7 @@ export const dailyInsightService = {
             reply = (await dataAssistantService.ask(user, { message: DAILY_INSIGHT_QUESTION, history: [] })).reply;
         } catch (err: any) {
             // LUNOX not switched on for this salon, or a usage limit: the dashboard just hides the card.
-            if (err instanceof AppError && ["MODULE_LOCKED", "RATE_LIMITED", "AI_QUOTA_EXCEEDED"].includes(String(err.code))) return null;
+            if (err instanceof AppError && ["MODULE_LOCKED", "LUNOX_NOT_CONFIGURED", "RATE_LIMITED", "AI_QUOTA_EXCEEDED"].includes(String(err.code))) return null;
             throw err;
         }
 
