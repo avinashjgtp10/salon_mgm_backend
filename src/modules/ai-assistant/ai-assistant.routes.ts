@@ -8,6 +8,15 @@ import { SERVICE_VIEW_PERMS } from "./tools";
 
 const router = Router();
 
+// Cheap pre-click check: { state: "ready" | "not_configured" | "plan_locked" }.
+router.get(
+    "/access",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    requirePermission("use_ai_assistant"),
+    aiAssistantController.access
+);
+
 // Owners/admins pass requirePermission automatically; staff need the
 // use_ai_assistant grant (Migration/add_ai_assistant.sql).
 router.post(

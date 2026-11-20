@@ -1,18 +1,17 @@
 // WhatsApp OTP gate for redeeming a client's Package session / Membership benefit.
 //
 //   request  -> 6-digit code to the CLIENT's WhatsApp (valid 10 min, 1 per 30 s)
-//   verify   -> correct code opens a 10-minute window for THIS salon + client
-//   assert   -> redemption points need that window (only when the salon switched
-//               the rule on in Settings > Extras; default OFF)
+//   verify   -> correct code verifies THIS salon + client for ONE redemption (up to 10 minutes to use it)
+//   assert   -> redemption points need that verification (only when the salon switched
+//               the rule on in Settings > Extras; default OFF); a successful redemption uses it up
 //
 // State lives in Redis only (no migration): hashed code, attempt counter, resend
 // cooldown and the verified marker - same shape as marketing/whatsapp/config/
 // config-otp.service.ts.
 //
-// The verified window is deliberately NOT used up by one redemption: one
-// checkout can legitimately hit several redemption points (a part-payment
-// followed by the completing one, package sessions, wallet), and a single-use
-// marker would make the second one fail mid-checkout.
+// The verification is single-use per redemption (owner's rule: every package / membership redemption needs
+// its own code). It is used up in payments.create after the payment is recorded, so a failed payment can be
+// retried without a second code. Each payment that redeems asks again, including a part-payment.
 import redis from "../../config/redis";
 import pool from "../../config/database";
 import logger from "../../config/logger";
@@ -146,15 +145,23 @@ export const redemptionOtpService = {
   // separate switches), or when nothing is being redeemed. Throws 428 when a
   // redemption has no verified window - the frontend answers that by opening
   // the OTP modal.
-  async assertVerified(salonId: string, clientId: string | null | undefined, kinds: RedeemKind[]): Promise<void> {
-    if (!kinds.length || !clientId) return;
+  // Returns true when a code WAS required and is verified, so the caller can use that verification up once the
+  // redemption succeeded (see consume); false when no code applied.
+  async assertVerified(salonId: string, clientId: string | null | undefined, kinds: RedeemKind[]): Promise<boolean> {
+    if (!kinds.length || !clientId) return false;
     const cfg = await getRedemptionOtpConfig(salonId);
-    if (!kinds.some((kd) => cfg[kd])) return;
-    if (await redis.exists(k.ok(salonId, clientId))) return;
+    if (!kinds.some((kd) => cfg[kd])) return false;
+    if (await redis.exists(k.ok(salonId, clientId))) return true;
     throw new AppError(
       428,
       "Client OTP verification is required to redeem a package or membership",
       "REDEMPTION_OTP_REQUIRED",
     );
+  },
+
+  // One code = one redemption: called after a redemption went through, so the next package / membership
+  // redemption (even moments later, even for the other kind) asks the client for a fresh code.
+  async consume(salonId: string, clientId: string) {
+    await redis.del(k.ok(salonId, clientId));
   },
 };

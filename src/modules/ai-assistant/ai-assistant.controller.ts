@@ -4,6 +4,7 @@ import { sendSuccess } from "../utils/response.util";
 import logger from "../../config/logger";
 import config from "../../config/env";
 import { aiAssistantService } from "./ai-assistant.service";
+import { lunoxAccessState } from "../ai-credentials/ai-credentials.service";
 import { ChatRequestBody } from "./ai-assistant.types";
 import { recommendProductsForService } from "./recommendations.service";
 import { generateCampaign } from "./campaign.service";
@@ -18,6 +19,16 @@ import { festivalMessageDrafts, upcomingForSalon } from "../festivals/festivals.
 type AuthRequest = Request & { user?: { userId: string; role?: string; salonId?: string | null } };
 
 export const aiAssistantController = {
+    // GET /api/v1/ai-assistant/access — is LUNOX usable for this salon right now? Asked on every LUNOX click.
+    async access(req: AuthRequest, res: Response, next: NextFunction) {
+        try {
+            const state = await lunoxAccessState(req.user?.salonId);
+            return sendSuccess(res, 200, { state }, "OK");
+        } catch (err) {
+            return next(err);
+        }
+    },
+
     // POST /api/v1/ai-assistant/chat
     async chat(req: AuthRequest, res: Response, next: NextFunction) {
         try {
