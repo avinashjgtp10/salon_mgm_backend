@@ -4,6 +4,7 @@ import { sendSuccess } from "../utils/response.util";
 import logger from "../../config/logger";
 import config from "../../config/env";
 import { aiAssistantService } from "./ai-assistant.service";
+import { lunoxAccessState } from "../ai-credentials/ai-credentials.service";
 import { ChatRequestBody } from "./ai-assistant.types";
 import { recommendProductsForService } from "./recommendations.service";
 import { generateCampaign } from "./campaign.service";
@@ -11,13 +12,23 @@ import { dataAssistantService } from "./data/data-assistant.service";
 import { dailyInsightService } from "./data/daily-insight.service";
 import { explainReport, isReportKey, REPORT_PERMISSIONS } from "./report-insights.generic";
 import { userCanUse } from "./ai-assistant.service";
-import { explainCampaign, suggestInboxReplies, writeTemplateCopy } from "./marketing-ai.service";
+import { explainCampaign, suggestInboxReplies, writeChainTemplate, writeTemplateCopy } from "./marketing-ai.service";
 import { aiAssistantRepository } from "./ai-assistant.repository";
 import { festivalMessageDrafts, upcomingForSalon } from "../festivals/festivals.service";
 
 type AuthRequest = Request & { user?: { userId: string; role?: string; salonId?: string | null } };
 
 export const aiAssistantController = {
+    // GET /api/v1/ai-assistant/access — is LUNOX usable for this salon right now? Asked on every LUNOX click.
+    async access(req: AuthRequest, res: Response, next: NextFunction) {
+        try {
+            const state = await lunoxAccessState(req.user?.salonId);
+            return sendSuccess(res, 200, { state }, "OK");
+        } catch (err) {
+            return next(err);
+        }
+    },
+
     // POST /api/v1/ai-assistant/chat
     async chat(req: AuthRequest, res: Response, next: NextFunction) {
         try {
@@ -100,6 +111,26 @@ export const aiAssistantController = {
             return sendSuccess(res, 200, result, "OK");
         } catch (err) {
             logger.error("POST /ai-assistant/template-copy error", { err });
+            return next(err);
+        }
+    },
+
+    // POST /api/v1/ai-assistant/chain-template  { kind, service_name?, brief?, language?, book_again? }
+    // Drafts one template for a Service Chain step. Nothing is saved or sent to Meta here.
+    async chainTemplate(req: AuthRequest, res: Response, next: NextFunction) {
+        try {
+            const user = req.user;
+            if (!user?.userId || !user.salonId) throw new AppError(403, "Salon context required", "NO_SALON_CONTEXT");
+            const brief = String(req.body?.brief ?? "").trim();
+            if (brief.length < 8) throw new AppError(400, "Describe the message in a few words.", "VALIDATION_ERROR");
+            if (brief.length > 400) throw new AppError(400, "Keep the description under 400 characters.", "VALIDATION_ERROR");
+            const result = await writeChainTemplate(
+                { userId: user.userId, role: user.role, salonId: user.salonId },
+                { brief, language: String(req.body?.language ?? "en_US"), book_again: req.body?.book_again === true }
+            );
+            return sendSuccess(res, 200, result, "OK");
+        } catch (err) {
+            logger.error("POST /ai-assistant/chain-template error", { err });
             return next(err);
         }
     },

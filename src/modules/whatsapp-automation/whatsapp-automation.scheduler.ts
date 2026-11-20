@@ -6,6 +6,7 @@
 import logger from '../../config/logger'
 import { waScheduledMessagesService } from './wa-scheduled-messages.service'
 import { dateLocale } from "../../config/currency";
+import { runServiceChainTick } from '../service-chains/service-chains.runner'
 
 let schedulerInterval: NodeJS.Timeout | null = null
 let dueTickInterval: NodeJS.Timeout | null = null
@@ -108,6 +109,9 @@ export function startAutomationScheduler(): void {
   waScheduledMessagesService.runDueTick().catch(err =>
     logger.error('[WA-AUTO-SCHEDULER] Initial due-tick error:', err?.message)
   )
+  runServiceChainTick().catch(err =>
+    logger.error('[WA-AUTO-SCHEDULER] Initial service chain tick error:', err?.message)
+  )
 
   // Daily-job poll — unchanged cadence, only Group B/New Year left in it now.
   schedulerInterval = setInterval(() => {
@@ -122,6 +126,10 @@ export function startAutomationScheduler(): void {
   dueTickInterval = setInterval(() => {
     waScheduledMessagesService.runDueTick().catch(err =>
       logger.error('[WA-AUTO-SCHEDULER] Due-tick error:', err?.message)
+    )
+    // Service Chains: enrol new purchases, then send whatever is due.
+    runServiceChainTick().catch(err =>
+      logger.error('[WA-AUTO-SCHEDULER] Service chain tick error:', err?.message)
     )
   }, 5 * 60 * 1000)
 }

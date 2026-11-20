@@ -40,6 +40,10 @@ export interface Purchase {
     amount_paid?: number;
     amount_due?: number;
     payment_status?: "paid" | "due" | "overdue";
+    // FALSE for a past bill added with "Add Past Bill (no stock change)"; TRUE for everything else.
+    stock_applied?: boolean;
+    bill_number?: string | null;
+    notes?: string | null;
 }
 
 export interface CreatePurchaseItemDTO {
@@ -63,6 +67,16 @@ export interface CreatePurchaseDTO {
     // Staff member who received the stock — must belong to this salon.
     received_by_staff_id?: string | null;
     items: CreatePurchaseItemDTO[];
+}
+
+// A past supplier bill recorded for the books only: no stock change, no expiry (an old expiry date would trip the
+// expiry write-off scheduler, which reads purchase_items.expiry_date).
+export interface CreateHistoricalPurchaseDTO {
+    supplier_id: string;
+    purchase_date: string;
+    bill_number?: string | null;
+    notes?: string | null;
+    items: { product_id: string; quantity: number; purchase_price: number }[];
 }
 
 export interface ListPurchaseFilters {

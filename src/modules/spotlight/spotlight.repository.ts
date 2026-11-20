@@ -52,7 +52,7 @@ export const spotlightRepository = {
              ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
              RETURNING *`,
             [
-                body.featureName, body.module, body.moduleRoute ?? null, body.shortDescription, body.whatIsThis ?? "",
+                body.featureName, body.module?.trim() ?? "", body.moduleRoute?.trim() || null, body.shortDescription, body.whatIsThis ?? "",
                 body.howItWorks ?? "", body.benefits ?? "", JSON.stringify(body.images ?? []), JSON.stringify(body.sections ?? []),
                 body.videoDataUrl ?? null,
                 body.releaseDate || new Date().toISOString().slice(0, 10),
@@ -77,8 +77,8 @@ export const spotlightRepository = {
         const push = (col: string, val: unknown) => { sets.push(`${col} = $${idx++}`); values.push(val); };
 
         if (body.featureName !== undefined) push("feature_name", body.featureName);
-        if (body.module !== undefined) push("module", body.module);
-        if (body.moduleRoute !== undefined) push("module_route", body.moduleRoute ?? null);
+        if (body.module !== undefined) push("module", body.module?.trim() ?? "");
+        if (body.moduleRoute !== undefined) push("module_route", body.moduleRoute?.trim() || null);
         if (body.shortDescription !== undefined) push("short_description", body.shortDescription);
         if (body.whatIsThis !== undefined) push("what_is_this", body.whatIsThis);
         if (body.howItWorks !== undefined) push("how_it_works", body.howItWorks);

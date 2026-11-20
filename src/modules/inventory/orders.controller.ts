@@ -99,6 +99,15 @@ export const ordersController = {
         } catch (err) { next(err); }
     },
 
+    // Receiving history — one entry per delivery recorded against this order.
+    async listReceipts(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
+        try {
+            const salonId = getSalonId(req);
+            const receipts = await ordersRepository.listReceipts(String(req.params.id), salonId);
+            sendSuccess(res, 200, receipts);
+        } catch (err) { next(err); }
+    },
+
     // Verify Order tab — records verified_qty/verified_damaged_qty only, no
     // stock movement, no status change. See ordersRepository.verify.
     async verify(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {

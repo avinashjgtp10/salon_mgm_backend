@@ -29,6 +29,7 @@ router.patch("/salons/:salonId/staff/:staffId/permissions", branchOwnerControlle
 router.patch("/salons/:salonId/staff/:staffId/role",        branchOwnerController.assignSalonStaffRole);
 
 router.get("/salons/billing",               branchOwnerController.getSalonsBilling);
+router.get("/subscriptions/overview",       branchOwnerController.getSubscriptionOverview);
 router.get("/salons/:salonId/subscription", branchOwnerController.getSalonSubscription);
 router.get("/salons/:salonId/invoices",     branchOwnerController.getSalonInvoices);
 

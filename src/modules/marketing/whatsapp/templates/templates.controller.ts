@@ -1,5 +1,7 @@
 import { Request, Response, NextFunction } from 'express'
 import { sendSuccess } from '../../../utils/response.util'
+import { AppError } from '../../../../middleware/error.middleware'
+import { linkBuilderService } from '../../../link-builder/link-builder.service'
 import { templatesService } from './templates.service'
 
 type AuthRequest = Request & { user?: { userId: string; salonId?: string; role?: string } }
@@ -30,6 +32,38 @@ export const templatesController = {
       if (!salonId) return res.status(400).json({ error: 'salonId missing from token' })
       const data = await templatesService.create(salonId, req.body, req.file)
       return sendSuccess(res, 201, data, 'Template created successfully')
+    } catch (e) { return next(e) }
+  },
+
+  // Save a text template here only (nothing goes to Meta yet) - used by "Create with LUNOX".
+  async createDraft(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = req.user?.salonId
+      if (!salonId) return res.status(400).json({ error: 'salonId missing from token' })
+      const b = req.body ?? {}
+      let buttons = Array.isArray(b.buttons) ? b.buttons.map((x: any) => ({ type: x?.type, text: String(x?.text ?? ''), value: String(x?.value ?? '') })) : []
+      // "Book again": a link button to the salon's own booking page, built here so the client never handles the URL.
+      if (b.book_again === true && buttons.length === 0) {
+        const link = await linkBuilderService.generate(salonId, { type: 'any' } as any)
+        if (!/^https:\/\//.test(link.bookingUrl)) throw new AppError(400, 'Your online booking page needs a public https link before it can be used as a button.', 'VALIDATION_ERROR')
+        buttons = [{ type: 'url', text: 'Book again', value: link.bookingUrl }]
+      }
+      const data = await templatesService.createDraft(salonId, {
+        name: String(b.name ?? ''), category: b.category, language: String(b.language ?? ''), header_type: 'none',
+        body_text: String(b.body_text ?? ''), footer_text: b.footer_text ? String(b.footer_text) : null,
+        buttons,
+      })
+      return sendSuccess(res, 201, data, 'Draft saved')
+    } catch (e) { return next(e) }
+  },
+
+  // Send a saved draft to Meta for approval.
+  async submitDraft(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = req.user?.salonId
+      if (!salonId) return res.status(400).json({ error: 'salonId missing from token' })
+      const data = await templatesService.submitDraft(req.params.id as string, salonId)
+      return sendSuccess(res, 200, data, 'Template sent to Meta for approval')
     } catch (e) { return next(e) }
   },
 

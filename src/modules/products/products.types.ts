@@ -112,6 +112,7 @@ export type UpdateBrandBody = Partial<CreateBrandBody>;
 export type ProductListFilters = {
     search?: string;
     category_id?: string;
+    supplier_id?: string;
     brand_id?: string;
     product_type?: ProductType;
     retail_sales_enabled?: boolean;

@@ -6,6 +6,7 @@ import { describePaymentMethod } from '../transactions/payment-method.util';
 import { paymentMethodsService } from '../payment-methods/payment-methods.service';
 import { membershipsRepository } from '../memberships/memberships.repository';
 import { clientMembershipsService } from '../client-memberships/client-memberships.service';
+import { redemptionOtpService } from '../redemption-otp/redemption-otp.service';
 import { clientMembershipsRepository } from '../client-memberships/client-memberships.repository';
 import { autoCreatePackagesForBill } from '../transactions/package-autocreate.helper';
 import { rewardPointsRepository } from '../reward-points/reward-points.repository';
@@ -173,6 +174,14 @@ export const paymentsService = {
    * lock first) that row is returned and nothing is written again.
    */
   async create(data: CreatePaymentBody, requesterUserId?: string, options: { posPaymentRequestId?: string } = {}): Promise<Payment> {
+    const otp: { clientId?: string } = {};
+    const payment = await paymentsService.createInner(data, requesterUserId, options, otp);
+    // Client OTP is single-use: a payment that redeemed under a verified code uses it up, so the next redemption asks again.
+    if (otp.clientId) await redemptionOtpService.consume(data.salon_id, otp.clientId).catch(() => undefined);
+    return payment;
+  },
+
+  async createInner(data: CreatePaymentBody, requesterUserId: string | undefined, options: { posPaymentRequestId?: string }, otp: { clientId?: string }): Promise<Payment> {
     // Server-set only — never accept the machine-payment link from a request body.
     const { pos_payment_request_id: _untrusted, ...clean } = data;
     const posPaymentRequestId = options.posPaymentRequestId;
@@ -188,6 +197,24 @@ export const paymentsService = {
     await paymentMethodsService.assertNotInactive(body.salon_id, body.payment_method, body.split_details, {
       includeBuiltIns: !posPaymentRequestId && Number(body.paid_amount ?? 0) > 0,
     });
+
+    // Client OTP gate (Settings > Extras, default OFF): a payment that redeems a
+    // package session or membership wallet/discount needs the client's WhatsApp
+    // OTP verified first. Done here, before the lock and before the membership
+    // block in recordPayment (which swallows its own errors), so a refusal is a
+    // clean 428 and nothing is deducted.
+    if (body.client_id && (await redemptionOtpService.isRequired(body.salon_id))) {
+      // Packages and memberships are separate switches, so work out which of the two this payment redeems.
+      const redeemKinds: Array<'package' | 'membership'> = [];
+      if (body.apply_membership_wallet || body.apply_membership_discount || body.apply_loyalty_discount || Number(body.reward_points_used) > 0) redeemKinds.push('membership');
+      let redeemsPackage = (body.payment_method || '').toLowerCase() === 'package';
+      if (!redeemsPackage && body.appointment_id) {
+        const apptForOtp = await appointmentsRepository.findById(body.appointment_id);
+        redeemsPackage = !!apptForOtp?.services?.some((s: any) => !!s.is_package_service);
+      }
+      if (redeemsPackage) redeemKinds.push('package');
+      if (await redemptionOtpService.assertVerified(body.salon_id, body.client_id, redeemKinds)) otp.clientId = body.client_id;
+    }
 
     if (!body.appointment_id) return paymentsService.recordPayment(body, requesterUserId, async () => {});
     const lock = await posPaymentsRepository.acquireAppointmentPaymentLock(body.appointment_id);

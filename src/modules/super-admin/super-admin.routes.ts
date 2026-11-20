@@ -16,6 +16,7 @@ import planPricingRoutes from "../plan-pricing/plan-pricing.routes";
 import countryPricingRoutes from "../plan-pricing/country-pricing.routes";
 import paymentTrackingRoutes from "../payment-tracking/payment-tracking.routes";
 import paymentGatewayRoutes from "../payment-gateway/payment-gateway.routes";
+import platformIntegrationsRoutes from "../platform-integrations/platform-integrations.routes";
 import subscriptionInvoiceRoutes from "../subscription-invoices/subscription-invoices.routes";
 import clientAnnouncementsRoutes from "../client-announcements/client-announcements.routes";
 import marketingLogsRoutes from "../marketing-logs/marketing-logs.routes";
@@ -50,6 +51,8 @@ router.use("/country-pricing", countryPricingRoutes);
 router.use("/payment-tracking", paymentTrackingRoutes);
 // Platform-wide Razorpay keys (one set for all salons), stored encrypted.
 router.use("/payment-gateway", paymentGatewayRoutes);
+// Platform-wide Google sign-in + billing-email settings, secrets stored encrypted.
+router.use("/platform-integrations", platformIntegrationsRoutes);
 router.use("/subscription-invoices", subscriptionInvoiceRoutes);
 // Client Announcements: picks the platform salon and copies salon owners into its client list.
 router.use("/client-announcements", clientAnnouncementsRoutes);

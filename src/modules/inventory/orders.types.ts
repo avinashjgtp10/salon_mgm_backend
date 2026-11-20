@@ -30,6 +30,9 @@ export interface OrderItem {
     // Cumulative damaged total FROM STOCK RECEIVING — same "only receive()
     // writes this" rule as received_qty.
     damaged_qty: number;
+    // Cumulative refused units from stock receiving (see ReceiveOrderItemDTO).
+    // Counted as accounted-for, never stocked in.
+    rejected_qty: number;
     // What the Verify Order tab recorded as arrived — informational only,
     // never touches products.amount and is NOT what receive()'s "remaining
     // to stock in" math reads (that's still qty - received_qty -
@@ -126,6 +129,10 @@ export interface ReceiveOrderItemDTO {
     // just accumulated on order_items.damaged_qty. Optional so a plain
     // "receive N good units" call still works without sending 0 explicitly.
     damaged_qty?: number;
+    // Arrived but refused this delivery — same stock rule as damaged_qty
+    // (never added to products.amount) but tracked separately so reports can
+    // tell "broken in transit" from "wrong/refused item".
+    rejected_qty?: number;
     // Optional override; defaults to the expiry saved on the order line.
     expiry_date?: string | null;
 }
@@ -133,6 +140,8 @@ export interface ReceiveOrderItemDTO {
 export interface ReceiveOrderDTO {
     items: ReceiveOrderItemDTO[];
     purchase_date?: string;
+    // Free-text receiving note, stored on this delivery's history entry.
+    notes?: string | null;
     // Staff member who received this delivery — carried onto the Purchase row.
     received_by_staff_id?: string | null;
 }
