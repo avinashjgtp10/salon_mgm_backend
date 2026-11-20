@@ -37,6 +37,12 @@ export const categoriesService = {
   async updateForMySalon(params: { salonId: string; id: string; patch: UpdateCategoryBody }): Promise<ServiceCategory> {
     const { salonId, id, patch } = params;
 
+    // Renaming onto another category's name would leave two indistinguishable entries in every dropdown.
+    if (typeof patch.name === "string" && patch.name.trim()) {
+      const clash = await categoriesRepository.findByName(patch.name.trim(), salonId);
+      if (clash && clash.id !== id) throw new AppError(409, "A category with this name already exists.", "CATEGORY_NAME_EXISTS");
+    }
+
     const updated = await categoriesRepository.update(id, salonId, patch);
     if (!updated) throw new AppError(404, "Category not found", "NOT_FOUND");
 
@@ -45,6 +51,15 @@ export const categoriesService = {
 
   async removeForMySalon(params: { salonId: string; id: string }): Promise<{ id: string; deleted: true }> {
     const { salonId, id } = params;
+
+    // Checked on the server, not just in the UI: a direct API call or a stale screen must not orphan products.
+    if ((await categoriesRepository.countProducts(id, salonId)) > 0) {
+      throw new AppError(
+        409,
+        "This category cannot be deleted because products are assigned to it. Please remove or reassign the products first.",
+        "CATEGORY_HAS_PRODUCTS"
+      );
+    }
 
     const deleted = await categoriesRepository.remove(id, salonId);
     if (!deleted) throw new AppError(404, "Category not found", "NOT_FOUND");
