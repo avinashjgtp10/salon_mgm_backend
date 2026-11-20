@@ -3,8 +3,17 @@ import { authMiddleware } from "../../middleware/auth.middleware";
 import { roleMiddleware, superAdminMiddleware } from "../../middleware/role.middleware";
 import { uploadMiddleware } from "../../middleware/upload.middleware";
 import { spotlightController } from "./spotlight.controller";
+import { spotlightVideoController } from "./spotlight-video.controller";
 
 const router = Router();
+
+// ── Scheduled floating-player videos (separate from the feature cards below) ──
+// Registered first so "/videos/..." can never be read as a feature id by the "/:id/..." routes further down.
+router.get("/videos/admin", authMiddleware, superAdminMiddleware, spotlightVideoController.adminList);
+router.post("/videos/admin", authMiddleware, superAdminMiddleware, spotlightVideoController.create);
+router.patch("/videos/admin/:id", authMiddleware, superAdminMiddleware, spotlightVideoController.update);
+router.delete("/videos/admin/:id", authMiddleware, superAdminMiddleware, spotlightVideoController.remove);
+router.get("/videos", authMiddleware, roleMiddleware("salon_owner", "admin", "staff"), spotlightVideoController.list);
 
 // ── Superadmin: manage (create/edit/publish/delete, sees draft+archived) ────
 // Moved from owner/admin to super_admin-only — Spotlight announcements are

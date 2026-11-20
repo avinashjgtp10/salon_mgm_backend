@@ -74,7 +74,6 @@ export const spotlightService = {
 
     async create(body: SpotlightCreateBody, createdBy: string): Promise<SpotlightFeature> {
         if (!body.featureName?.trim()) throw new AppError(400, "featureName is required", "VALIDATION_ERROR");
-        if (!body.module?.trim()) throw new AppError(400, "module is required", "VALIDATION_ERROR");
         if (!body.shortDescription?.trim()) throw new AppError(400, "shortDescription is required", "VALIDATION_ERROR");
         assertValidVideoUrl(body.videoDataUrl);
 
