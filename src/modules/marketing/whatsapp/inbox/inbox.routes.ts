@@ -24,6 +24,9 @@ const replyToConversation = requirePermission('reply_to_conversation')
 // GET  /api/v1/inbox/unread-count — { unread } total across all conversations (sidebar badge)
 router.get('/unread-count', auth, viewInbox, inboxController.getUnreadCount)
 
+// GET  /api/v1/inbox/business-picture — { pictureUrl } the salon's WhatsApp display picture (null when none), for the Messaging widget
+router.get('/business-picture', auth, viewInbox, inboxController.getBusinessPicture)
+
 // GET  /api/v1/inbox/conversations
 router.get('/conversations', auth, viewInbox, inboxController.getConversations)
 

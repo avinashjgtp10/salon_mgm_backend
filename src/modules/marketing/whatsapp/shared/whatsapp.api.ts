@@ -423,6 +423,19 @@ async verifyAccessToken(params: {
     return res.data
   },
 
+  // The business's WhatsApp display picture, as set in WhatsApp Business / Meta. Meta returns a
+  // short-lived CDN link, so callers should cache it briefly rather than store it.
+  async getBusinessProfilePicture(params: { phoneNumberId: string; accessToken: string }): Promise<string | null> {
+    const res = await http.get(
+      `${WA_BASE_URL}/${WA_API_VERSION}/${params.phoneNumberId}/whatsapp_business_profile`,
+      {
+        params:  { fields: 'profile_picture_url' },
+        headers: { Authorization: `Bearer ${params.accessToken}` },
+      }
+    )
+    return res.data?.data?.[0]?.profile_picture_url ?? null
+  },
+
   async downloadMedia(accessToken: string, mediaId: string): Promise<{ buffer: Buffer; mimeType: string }> {
     const meta = await http.get(
       `${WA_BASE_URL}/${WA_API_VERSION}/${mediaId}`,
