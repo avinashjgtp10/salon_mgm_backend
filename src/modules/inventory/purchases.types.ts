@@ -6,6 +6,8 @@ export interface PurchaseItem {
     quantity: number;
     purchase_price: number;
     total_price: number;
+    // Tax % applied to this line (past bills). total_price already includes it. 0 for ordinary purchases.
+    tax_percent?: number;
     expiry_date: string | null;
     stock_movement_id: string | null;
     created_at: string;
@@ -44,6 +46,10 @@ export interface Purchase {
     stock_applied?: boolean;
     bill_number?: string | null;
     notes?: string | null;
+    // Only on the supplier Orders list (list()): per-bill sums over its lines. subtotal_amount is before tax.
+    total_quantity?: number;
+    subtotal_amount?: number;
+    tax_amount?: number;
 }
 
 export interface CreatePurchaseItemDTO {
@@ -76,7 +82,7 @@ export interface CreateHistoricalPurchaseDTO {
     purchase_date: string;
     bill_number?: string | null;
     notes?: string | null;
-    items: { product_id: string; quantity: number; purchase_price: number }[];
+    items: { product_id: string; quantity: number; purchase_price: number; tax_percent?: number }[];
 }
 
 export interface ListPurchaseFilters {

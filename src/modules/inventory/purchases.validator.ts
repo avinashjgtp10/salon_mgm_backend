@@ -97,6 +97,10 @@ export const validateCreateHistoricalPurchase = (
             if (typeof item.purchase_price !== "number" || !Number.isFinite(item.purchase_price) || item.purchase_price < 0) {
                 throw new AppError(400, `items[${i}].purchase_price must be a non-negative number`, "VALIDATION_ERROR");
             }
+            if (item.tax_percent !== undefined && item.tax_percent !== null &&
+                (typeof item.tax_percent !== "number" || !Number.isFinite(item.tax_percent) || item.tax_percent < 0 || item.tax_percent > 100)) {
+                throw new AppError(400, `items[${i}].tax_percent must be a number between 0 and 100`, "VALIDATION_ERROR");
+            }
         }
         return next();
     } catch (err) {
