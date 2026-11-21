@@ -21,7 +21,7 @@ import { configRepository } from "../marketing/whatsapp/config/config.repository
 import { getPlatformSalonId } from "../client-announcements/platform-salon";
 import { formatPhone } from "../whatsapp-automation/whatsapp-automation.service";
 import { getRedemptionOtpConfig, isRedemptionOtpRequired, type RedeemKind } from "./redemption-otp.settings";
-import { sendOtpTemplate, submitOtpTemplate } from "./redemption-otp.template";
+import { sendOtpTemplate, REDEEM_OTP_TEMPLATE_NAME, REDEEM_OTP_TEMPLATE_LANG } from "./redemption-otp.template";
 
 const OTP_TTL_SECONDS = 10 * 60;
 const VERIFIED_TTL_SECONDS = 10 * 60;
@@ -96,13 +96,8 @@ export const redemptionOtpService = {
       logger.error("[redemption-otp] send failed", { metaCode, error: err?.response?.data?.error?.message ?? err?.message });
 
       if (TEMPLATE_MISSING_CODES.has(metaCode)) {
-        // First use (or still pending): submit the template so approval can start.
-        // A duplicate-name rejection just means it is already submitted - ignore.
-        if (cfg.waba_id) {
-          await submitOtpTemplate(cfg.waba_id, cfg.access_token).catch((e: any) =>
-            logger.info("[redemption-otp] template submit skipped", { error: e?.response?.data?.error?.message ?? e?.message }),
-          );
-        }
+        // The template is created by hand in Super Meta > Templates: nothing is submitted from here.
+        logger.warn(`[redemption-otp] template "${REDEEM_OTP_TEMPLATE_NAME}" (${REDEEM_OTP_TEMPLATE_LANG}) is missing or not approved in Super Meta`);
         throw new AppError(503, "The OTP message template is awaiting WhatsApp approval. Please try again later.", "OTP_TEMPLATE_NOT_APPROVED");
       }
       throw new AppError(502, "Could not send the OTP on WhatsApp. Please try again.", "OTP_SEND_FAILED");

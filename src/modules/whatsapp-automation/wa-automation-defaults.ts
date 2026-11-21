@@ -27,7 +27,8 @@ export const DEFAULT_PURCHASE_TEMPLATES: Record<
     | "reward_points_earned" | "referral_reward" | "ewallet_used" | "referral_credit_used" | "reward_points_used"
     | "birthday_wishes" | "anniversary_wishes" | "service_redo_reminder"
     | "cash_counter_opened" | "cash_counter_closed"
-    | "cash_counter_opened_updated" | "cash_counter_closed_updated",
+    | "cash_counter_opened_updated" | "cash_counter_closed_updated"
+    | "subscription_expiring",
     {
         label: string;
         category: "UTILITY" | "MARKETING";
@@ -243,6 +244,13 @@ export const DEFAULT_PURCHASE_TEMPLATES: Record<
         language: "en",
         bodyText: "*Cash Counter Updated — {{salon_name}}*\n\nYour cash counter closing details have been updated successfully.\n\nDate: {{closing_date}}\nTime: {{closing_time}}\n\n*Updated Collection Summary*\n{{collection_breakdown}}\n━━━━━━━━━━━━━━\n*Total Collection: {{total_collection}}*\nExpenses: {{expenses}}\nIn-Store Cash: {{in_store_cash}}\n\nThank you for reconciling today's cash counter.",
     },
+    // SalonOx -> salon owner (platform salon only; see PLATFORM_EVENTS). Sent by the daily subscription expiry sweep.
+    subscription_expiring: {
+        label: "Subscription Expiring",
+        category: "UTILITY",
+        language: "en",
+        bodyText: "Hi {{owner_name}}, your SalonOx subscription ({{plan_name}}) for {{salon_name}} expires on {{expiry_date}}, {{days_left}}. Renew from Settings > Billing to keep using SalonOx without interruption.",
+    },
 };
 
 export type DefaultPurchaseEventType = keyof typeof DEFAULT_PURCHASE_TEMPLATES;
@@ -284,6 +292,7 @@ export const EVENT_VARIABLE_NAMES: Record<DefaultPurchaseEventType, string[]> = 
   cash_counter_closed:  ["salon_name", "closing_date", "closing_time", "collection_breakdown", "total_collection", "expenses", "in_store_cash"],
   cash_counter_opened_updated: ["salon_name", "opening_date", "opening_time", "opening_amount"],
   cash_counter_closed_updated: ["salon_name", "closing_date", "closing_time", "collection_breakdown", "total_collection", "expenses", "in_store_cash"],
+  subscription_expiring: ["owner_name", "salon_name", "plan_name", "expiry_date", "days_left"],
 };
 
 // Converts a salon's named-placeholder wording into Meta's required
