@@ -85,6 +85,15 @@ export const categoriesRepository = {
     return rows[0] || null;
   },
 
+  /** How many products currently point at this category (products have no soft delete: a deleted product is gone). */
+  async countProducts(id: string, salonId: string): Promise<number> {
+    const { rows } = await pool.query(
+      `SELECT COUNT(*)::int AS n FROM products WHERE category_id = $1 AND salon_id = $2`,
+      [id, salonId]
+    );
+    return rows[0]?.n ?? 0;
+  },
+
   async remove(id: string, salonId: string): Promise<{ id: string } | null> {
     const { rows } = await pool.query(
       `DELETE FROM service_categories
