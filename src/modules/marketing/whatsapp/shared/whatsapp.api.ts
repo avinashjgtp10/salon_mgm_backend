@@ -316,6 +316,15 @@ async verifyAccessToken(params: {
     return res.data
   },
 
+  // Looks a template up by NAME under a WABA (all languages). Used for templates whose Meta id we never stored.
+  async findTemplatesByName(wabaId: string, accessToken: string, name: string): Promise<Array<{ id: string; name: string; status: string; language: string; rejected_reason?: string }>> {
+    const res = await http.get(
+      `${WA_BASE_URL}/${WA_API_VERSION}/${wabaId}/message_templates`,
+      { headers: { Authorization: `Bearer ${accessToken}` }, params: { name, fields: 'id,name,status,language,rejected_reason' } }
+    )
+    return res.data?.data ?? []
+  },
+
   async getTemplateStatus(accessToken: string, metaTemplateId: string) {
     const res = await http.get(
       `${WA_BASE_URL}/${WA_API_VERSION}/${metaTemplateId}`,

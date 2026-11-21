@@ -3,7 +3,8 @@ import { v4 as uuid } from "uuid";
 import logger from "../../config/logger";
 import { whatsappAutomationRepository } from "./whatsapp-automation.repository";
 import { whatsappAutomationService } from "./whatsapp-automation.service";
-import { AutomationEventType, PURCHASE_EVENTS, CAPTION_ONLY_EVENTS } from "./whatsapp-automation.types";
+import { AutomationEventType, PURCHASE_EVENTS, PLATFORM_EVENTS, CAPTION_ONLY_EVENTS } from "./whatsapp-automation.types";
+import { getPlatformSalonId } from "../client-announcements/platform-salon";
 import { isPurchaseEventType, validateNamedPlaceholders, toMetaNumberedBody, DefaultPurchaseEventType, EVENT_VARIABLE_NAMES } from "./wa-automation-defaults";
 import { submitBodyOnlyTemplate, syncBodyOnlyTemplateStatus } from "../marketing/whatsapp/shared/template-submission.helper";
 import { submitBillReceiptTemplate, sendBillReceiptTemplateMessage, buildSampleReceiptPdf } from "./wa-bill-receipt-template.helper";
@@ -29,10 +30,11 @@ const TEST_SAMPLE_VALUES: Record<string, string> = {
     closing_date: "25 Sep 2026", closing_time: "9:00 PM",
     collection_breakdown: "Cash: 500.00 | Card: 300.00 | UPI: 200.00",
     total_collection: "1,000", expenses: "100", in_store_cash: "400",
+    owner_name: "Asha", plan_name: "SalonOx Basic", days_left: "in 3 days",
 };
 
 function requirePurchaseEvent(eventType: string): AutomationEventType {
-    if (!PURCHASE_EVENTS.includes(eventType as AutomationEventType)) {
+    if (!PURCHASE_EVENTS.includes(eventType as AutomationEventType) && !PLATFORM_EVENTS.includes(eventType as AutomationEventType)) {
         throw new AppError(400, `"${eventType}" is not a purchase-template event type`, "VALIDATION_ERROR");
     }
     return eventType as AutomationEventType;
@@ -49,7 +51,9 @@ function isMetaDeletedError(err: any): boolean {
 
 export const waPurchaseTemplatesService = {
     async list(salonId: string) {
-        return whatsappAutomationRepository.findAllSalonPurchaseTemplates(salonId);
+        // SalonOx's own owner-facing messages are listed (and seeded) for the platform salon only.
+        const isPlatformSalon = (await getPlatformSalonId().catch(() => null)) === salonId;
+        return whatsappAutomationRepository.findAllSalonPurchaseTemplates(salonId, isPlatformSalon);
     },
 
     // Called once, fire-and-forget, right after a salon finishes WhatsApp

@@ -51,6 +51,8 @@ export type AutomationEventType =
   | 'cash_counter_closed'
   | 'cash_counter_opened_updated'
   | 'cash_counter_closed_updated'
+  // SalonOx's OWN message to a salon owner (see PLATFORM_EVENTS below) — sent from the platform salon's Meta number.
+  | 'subscription_expiring'
   // Legacy global (admin-managed, salon_id IS NULL) events, untouched by the
   // trigger-template rework.
   | 'pending_payment_reminder'
@@ -100,6 +102,11 @@ export const PURCHASE_EVENTS: AutomationEventType[] = [
   'cash_counter_closed_updated',
 ]
 
+// Messages SalonOx itself sends to salon owners (Super Admin > Super Meta > Automated Messages). They use the same
+// per-salon template machinery as PURCHASE_EVENTS (editable wording, submit to Meta, status) but only for the PLATFORM
+// salon — deliberately NOT in PURCHASE_EVENTS, so an ordinary salon never sees, seeds or auto-submits them.
+export const PLATFORM_EVENTS: AutomationEventType[] = ['subscription_expiring']
+
 // PURCHASE_EVENTS members that skip Meta template submission entirely (sent
 // as a freeform caption instead of a template) — none currently. Kept as an
 // extensibility point; a future event could opt back into this.
@@ -126,6 +133,7 @@ export const MARKETING_EVENTS: AutomationEventType[] = [
 export const AUTOMATION_EVENT_TYPES: AutomationEventType[] = [
   ...TRANSACTIONAL_EVENTS,
   ...MARKETING_EVENTS,
+  ...PLATFORM_EVENTS,
 ]
 
 // ── Log Status ────────────────────────────────────────────────────────────────
