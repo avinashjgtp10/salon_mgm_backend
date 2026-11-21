@@ -157,6 +157,20 @@ export const cashManagementController = {
     }
   },
 
+  async getExpenseOverview(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = getSalonId(req);
+      const data = await cashManagementService.getExpenseOverview(
+        salonId,
+        req.query.from ? String(req.query.from) : undefined,
+        req.query.to ? String(req.query.to) : undefined,
+      );
+      return sendSuccess(res, 200, data, "Expense overview fetched successfully");
+    } catch (error) {
+      return next(error);
+    }
+  },
+
   async createExpense(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const salonId = getSalonId(req);

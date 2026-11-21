@@ -64,6 +64,7 @@ export async function ensurePlatformSalon(superAdminUserId: string): Promise<str
 const PLATFORM_PATHS = [
     "/api/v1/templates", "/api/v1/campaigns", "/api/v1/wa-config", "/api/v1/wa-insights",
     "/api/v1/inbox", "/api/v1/marketing", "/api/v1/clients",
+    "/api/v1/wa-automation/purchase-templates",   // Super Meta > Automated Messages (SalonOx's own owner-facing messages)
 ];
 
 export const isPlatformPath = (url: string): boolean => {

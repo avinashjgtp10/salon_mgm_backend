@@ -21,6 +21,7 @@ import pool from "../../config/database";
 import logger from "../../config/logger";
 import config from "../../config/env";
 import { emailService } from "../utils/email.service";
+import { sendExpiryWhatsApp } from "./subscription-expiry-whatsapp";
 
 /** Days before the end date at which a reminder goes out (0 = the expiry day itself): one a day for the last five days. */
 export const REMINDER_DAYS = [5, 4, 3, 2, 1, 0];
@@ -53,6 +54,31 @@ function ensureTable(): Promise<boolean> {
     return tableReady;
 }
 
+// The WhatsApp channel keeps its own claim table (same shape), so the email table and its history are untouched and no
+// migration is needed. Created on first use, like the email one.
+let waTableReady: Promise<boolean> | null = null;
+function ensureWhatsappTable(): Promise<boolean> {
+    if (!waTableReady) {
+        waTableReady = pool
+            .query(
+                `CREATE TABLE IF NOT EXISTS subscription_expiry_whatsapp_reminders (
+                    subscription_id UUID        NOT NULL REFERENCES subscriptions(id) ON DELETE CASCADE,
+                    period_end      TIMESTAMPTZ NOT NULL,
+                    days_before     INT         NOT NULL,
+                    sent_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    PRIMARY KEY (subscription_id, period_end, days_before)
+                )`
+            )
+            .then(() => true)
+            .catch((err: any) => {
+                logger.error("[SUBSCRIPTION-EXPIRY-REMINDER] Could not prepare the WhatsApp reminders table", { error: err?.message });
+                waTableReady = null;
+                return false;
+            });
+    }
+    return waTableReady;
+}
+
 /** The reminder that is due for a subscription with `daysRemaining` days left (exactly that day), or null when none is. */
 export function milestoneFor(daysRemaining: number, days: number[] = REMINDER_DAYS): number | null {
     return days.includes(daysRemaining) ? daysRemaining : null;
@@ -61,15 +87,15 @@ export function milestoneFor(daysRemaining: number, days: number[] = REMINDER_DA
 const fmtDate = (v: unknown) =>
     new Date(v as string).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric", timeZone: "Asia/Kolkata" });
 
-export async function runExpiryReminderSweep(): Promise<{ checked: number; sent: number }> {
-    if (!(await ensureTable())) return { checked: 0, sent: 0 };
+export async function runExpiryReminderSweep(): Promise<{ checked: number; sent: number; whatsappSent: number }> {
+    if (!(await ensureTable())) return { checked: 0, sent: 0, whatsappSent: 0 };
 
     const maxDays = Math.max(...REMINDER_DAYS);
     const { rows } = await pool.query(
         `SELECT s.id AS subscription_id, s.current_period_end,
                 sp.name AS plan_name,
                 COALESCE(sa.business_name, sa.slug, 'your salon') AS salon_name,
-                u.email AS owner_email, u.first_name AS owner_first_name,
+                u.email AS owner_email, u.first_name AS owner_first_name, u.phone AS owner_phone,
                 ((s.current_period_end AT TIME ZONE 'Asia/Kolkata')::date - (NOW() AT TIME ZONE 'Asia/Kolkata')::date) AS days_remaining
          FROM subscriptions s
          JOIN salons sa ON sa.id = s.salon_id
@@ -91,41 +117,82 @@ export async function runExpiryReminderSweep(): Promise<{ checked: number; sent:
     );
 
     let sent = 0;
+    let whatsappSent = 0;
+    const whatsappSkips = new Set<string>();
     for (const r of rows) {
         const days = Number(r.days_remaining);
         const milestone = milestoneFor(days);
-        if (milestone === null || !r.owner_email) continue;
+        if (milestone === null) continue;
+        const expiryDate = fmtDate(r.current_period_end);
+        const planName = r.plan_name ?? "SalonOx";
 
-        // The claim: only the run whose INSERT succeeds sends this reminder.
-        const claim = await pool.query(
-            `INSERT INTO subscription_expiry_reminders (subscription_id, period_end, days_before)
-             VALUES ($1, $2, $3) ON CONFLICT DO NOTHING RETURNING subscription_id`,
-            [r.subscription_id, r.current_period_end, milestone]
-        );
-        if (!claim.rowCount) continue;
+        // ── Email ── The claim: only the run whose INSERT succeeds sends this reminder.
+        if (r.owner_email) {
+            const claim = await pool.query(
+                `INSERT INTO subscription_expiry_reminders (subscription_id, period_end, days_before)
+                 VALUES ($1, $2, $3) ON CONFLICT DO NOTHING RETURNING subscription_id`,
+                [r.subscription_id, r.current_period_end, milestone]
+            );
+            if (claim.rowCount) {
+                try {
+                    await emailService.sendSubscriptionExpiryReminderEmail({
+                        to: r.owner_email,
+                        ownerName: r.owner_first_name,
+                        salonName: r.salon_name,
+                        planName,
+                        expiryDate,
+                        daysRemaining: Math.max(days, 0),
+                        subscriptionUrl: `${config.frontend.url}/dashboard/settings/billing`,
+                    });
+                    sent++;
+                } catch (err: any) {
+                    // Hand the claim back so the next sweep retries this reminder.
+                    await pool
+                        .query(`DELETE FROM subscription_expiry_reminders WHERE subscription_id = $1 AND period_end = $2 AND days_before = $3`,
+                            [r.subscription_id, r.current_period_end, milestone])
+                        .catch(() => undefined);
+                    logger.error("[SUBSCRIPTION-EXPIRY-REMINDER] Send failed", { subscriptionId: r.subscription_id, error: err?.message });
+                }
+            }
+        }
 
-        try {
-            await emailService.sendSubscriptionExpiryReminderEmail({
-                to: r.owner_email,
-                ownerName: r.owner_first_name,
-                salonName: r.salon_name,
-                planName: r.plan_name ?? "SalonOx",
-                expiryDate: fmtDate(r.current_period_end),
-                daysRemaining: Math.max(days, 0),
-                subscriptionUrl: `${config.frontend.url}/dashboard/settings/billing`,
-            });
-            sent++;
-        } catch (err: any) {
-            // Hand the claim back so the next sweep retries this reminder.
-            await pool
-                .query(`DELETE FROM subscription_expiry_reminders WHERE subscription_id = $1 AND period_end = $2 AND days_before = $3`,
-                    [r.subscription_id, r.current_period_end, milestone])
-                .catch(() => undefined);
-            logger.error("[SUBSCRIPTION-EXPIRY-REMINDER] Send failed", { subscriptionId: r.subscription_id, error: err?.message });
+        // ── WhatsApp (Super Meta) ── its own claim, so neither channel can block or duplicate the other.
+        if (r.owner_phone && (await ensureWhatsappTable())) {
+            const wClaim = await pool.query(
+                `INSERT INTO subscription_expiry_whatsapp_reminders (subscription_id, period_end, days_before)
+                 VALUES ($1, $2, $3) ON CONFLICT DO NOTHING RETURNING subscription_id`,
+                [r.subscription_id, r.current_period_end, milestone]
+            );
+            if (wClaim.rowCount) {
+                const release = () =>
+                    pool
+                        .query(`DELETE FROM subscription_expiry_whatsapp_reminders WHERE subscription_id = $1 AND period_end = $2 AND days_before = $3`,
+                            [r.subscription_id, r.current_period_end, milestone])
+                        .catch(() => undefined);
+                try {
+                    const out = await sendExpiryWhatsApp({
+                        ownerPhone: r.owner_phone,
+                        ownerName: r.owner_first_name,
+                        salonName: r.salon_name,
+                        planName,
+                        expiryDate,
+                        daysRemaining: Math.max(days, 0),
+                        referenceId: `${r.subscription_id}:${new Date(r.current_period_end).toISOString()}:${milestone}`,
+                    });
+                    if (out.sent) whatsappSent++;
+                    else { whatsappSkips.add(out.skipped); await release(); }
+                } catch (err: any) {
+                    await release();   // retried by the next sweep
+                    logger.error("[SUBSCRIPTION-EXPIRY-REMINDER] WhatsApp send failed", {
+                        subscriptionId: r.subscription_id, error: err?.response?.data?.error?.message ?? err?.message,
+                    });
+                }
+            }
         }
     }
-    logger.info(`[SUBSCRIPTION-EXPIRY-REMINDER] Sweep complete — ${rows.length} expiring, ${sent} reminder(s) sent`);
-    return { checked: rows.length, sent };
+    if (whatsappSkips.size) logger.warn(`[SUBSCRIPTION-EXPIRY-REMINDER] WhatsApp not sent: ${[...whatsappSkips].join(", ")}`);
+    logger.info(`[SUBSCRIPTION-EXPIRY-REMINDER] Sweep complete — ${rows.length} expiring, ${sent} email(s) and ${whatsappSent} WhatsApp message(s) sent`);
+    return { checked: rows.length, sent, whatsappSent };
 }
 
 function msUntilNextIST8AM(): number {

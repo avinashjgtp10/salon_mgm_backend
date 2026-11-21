@@ -4,8 +4,10 @@ import { whatsappMetaApi } from "../marketing/whatsapp/shared/whatsapp.api";
 // WhatsApp config, set up in Super Admin), not from the salon's number. A
 // client may not have messaged that number in the last 24h, so free text is not
 // an option - Meta requires an approved AUTHENTICATION template.
-export const REDEEM_OTP_TEMPLATE_NAME = "salonox_redeem_otp";
-export const REDEEM_OTP_TEMPLATE_LANG = "en";
+// Created by hand in Super Meta > Templates (nothing is submitted from code). Name / language can be overridden with env vars
+// if it was created under a different name.
+export const REDEEM_OTP_TEMPLATE_NAME = process.env.REDEEM_OTP_TEMPLATE_NAME || "salonox_redeem_otp";
+export const REDEEM_OTP_TEMPLATE_LANG = process.env.REDEEM_OTP_TEMPLATE_LANG || "en";
 export const REDEEM_OTP_EXPIRY_MINUTES = 10;
 
 // Meta's authentication-template shape: fixed body text (Meta writes it),
