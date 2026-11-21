@@ -314,13 +314,15 @@ export const purchasesRepository = {
             let totalAmount = 0;
             const items: PurchaseItem[] = [];
             for (const line of data.items) {
-                const lineTotal = line.quantity * line.purchase_price;
+                // The line total INCLUDES its tax: qty x price x (1 + tax% / 100), to the cent.
+                const taxPercent = line.tax_percent ?? 0;
+                const lineTotal = Math.round(line.quantity * line.purchase_price * (1 + taxPercent / 100) * 100) / 100;
                 totalAmount += lineTotal;
                 const { rows: itemRows } = await client.query(
-                    `INSERT INTO purchase_items (purchase_id, product_id, quantity, purchase_price, total_price, expiry_date, stock_movement_id)
-                     VALUES ($1, $2, $3, $4, $5, NULL, NULL)
+                    `INSERT INTO purchase_items (purchase_id, product_id, quantity, purchase_price, tax_percent, total_price, expiry_date, stock_movement_id)
+                     VALUES ($1, $2, $3, $4, $5, $6, NULL, NULL)
                      RETURNING *`,
-                    [purchase.id, line.product_id, line.quantity, line.purchase_price, lineTotal],
+                    [purchase.id, line.product_id, line.quantity, line.purchase_price, taxPercent, lineTotal],
                 );
                 items.push(itemRows[0]);
             }
@@ -373,13 +375,15 @@ export const purchasesRepository = {
             let totalAmount = 0;
             const items: PurchaseItem[] = [];
             for (const line of data.items) {
-                const lineTotal = line.quantity * line.purchase_price;
+                // The line total INCLUDES its tax: qty x price x (1 + tax% / 100), to the cent.
+                const taxPercent = line.tax_percent ?? 0;
+                const lineTotal = Math.round(line.quantity * line.purchase_price * (1 + taxPercent / 100) * 100) / 100;
                 totalAmount += lineTotal;
                 const { rows: itemRows } = await client.query(
-                    `INSERT INTO purchase_items (purchase_id, product_id, quantity, purchase_price, total_price, expiry_date, stock_movement_id)
-                     VALUES ($1, $2, $3, $4, $5, NULL, NULL)
+                    `INSERT INTO purchase_items (purchase_id, product_id, quantity, purchase_price, tax_percent, total_price, expiry_date, stock_movement_id)
+                     VALUES ($1, $2, $3, $4, $5, $6, NULL, NULL)
                      RETURNING *`,
-                    [id, line.product_id, line.quantity, line.purchase_price, lineTotal],
+                    [id, line.product_id, line.quantity, line.purchase_price, taxPercent, lineTotal],
                 );
                 items.push(itemRows[0]);
             }
@@ -454,7 +458,10 @@ export const purchasesRepository = {
         const { rows } = await pool.query(
             `SELECT pu.*, sup.name AS supplier_name, po.order_number AS po_number,
                     NULLIF(TRIM(CONCAT(rb.first_name, ' ', COALESCE(rb.last_name, ''))), '') AS received_by_name,
-                    (SELECT COUNT(*) FROM purchase_items pi WHERE pi.purchase_id = pu.id)::int AS item_count
+                    (SELECT COUNT(*) FROM purchase_items pi WHERE pi.purchase_id = pu.id)::int AS item_count,
+                    (SELECT COALESCE(SUM(pi.quantity), 0) FROM purchase_items pi WHERE pi.purchase_id = pu.id)::float8 AS total_quantity,
+                    (SELECT COALESCE(SUM(pi.quantity * pi.purchase_price), 0) FROM purchase_items pi WHERE pi.purchase_id = pu.id)::float8 AS subtotal_amount,
+                    (SELECT COALESCE(SUM(pi.total_price - pi.quantity * pi.purchase_price), 0) FROM purchase_items pi WHERE pi.purchase_id = pu.id)::float8 AS tax_amount
                FROM purchases pu
                LEFT JOIN suppliers sup ON sup.id = pu.supplier_id
                LEFT JOIN orders po ON po.id = pu.order_id
