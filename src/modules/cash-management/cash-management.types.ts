@@ -25,10 +25,12 @@ export type ExpensePaymentMethod = (typeof EXPENSE_PAYMENT_METHODS)[number];
 
 export type CashManagementExpenseRecord = {
   id: string;
-  cash_management_id: string;
+  cash_management_id: string | null;
   salon_id: string;
   expense_type: string;
   payment_method: string;
+  /** "paid" counts as cash outflow; "unpaid" is recorded but excluded from every outflow figure. */
+  status?: string;
   description: string | null;
   amount: string;
   expense_date: string;
@@ -61,10 +63,13 @@ export type EditCounterBody = {
 };
 
 export type CreateExpenseBody = {
-  cash_management_id: string;
+  /** Ignored: expenses are independent of the cash counter (kept optional so older clients still work). */
+  cash_management_id?: string;
   expense_type: string;
   /** Defaults to "cash" when omitted (older clients). */
   payment_method?: string;
+  /** "paid" (default) | "unpaid". */
+  status?: string;
   description?: string;
   amount: number;
   expense_date?: string;
@@ -73,6 +78,7 @@ export type CreateExpenseBody = {
 export type UpdateExpenseBody = Partial<{
   expense_type: string;
   payment_method: string;
+  status: string;
   description: string;
   amount: number;
   expense_date: string;
@@ -90,6 +96,25 @@ export type CounterListFilters = {
   limit?: number;
 };
  
+export const EXPENSE_STATUSES = ["paid", "unpaid"] as const;
+
+export type ExpenseOverviewFilters = { salonId: string; from?: string; to?: string };
+
+export type ExpenseOverview = {
+  /** Revenue received in the range: the Sales Summary report's "Received Amount" (same figure as the dashboard). */
+  total_revenue: number;
+  /** PAID expenses only: the real cash outflow. */
+  total_expenses: number;
+  /** Unpaid expenses: shown separately, never part of outflow or net cash flow. */
+  unpaid_expenses: number;
+  paid_count: number;
+  unpaid_count: number;
+  /** total_revenue - total_expenses */
+  net_cash_flow: number;
+  daily: { date: string; revenue: number; expenses: number }[];
+  categories: { name: string; amount: number; count: number }[];
+};
+
 export type ExpenseListFilters = {
   salonId: string;
   cashManagementId?: string;
