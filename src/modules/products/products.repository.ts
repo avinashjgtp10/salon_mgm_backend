@@ -90,8 +90,13 @@ export const productsRepository = {
         values.push(salonId);
 
         if (filters.search) {
+            // An all-digit term may be a price ("500", "49.5"): the Calendar / Quick Sale product picker sends it here
+            // instead of downloading the whole catalogue to filter in the browser. Superset match; the picker trims it.
+            const priceMatch = /^[0-9]+([.][0-9]+)?$/.test(String(filters.search).trim())
+                ? ` OR ${prefix}retail_price::text LIKE $${idx}`
+                : "";
             conditions.push(
-                `(${prefix}name ILIKE $${idx} OR ${prefix}barcode ILIKE $${idx} OR EXISTS (
+                `(${prefix}name ILIKE $${idx} OR ${prefix}barcode ILIKE $${idx}${priceMatch} OR EXISTS (
                     SELECT 1 FROM suppliers sup_search
                     WHERE sup_search.id = ${prefix}supplier_id AND sup_search.name ILIKE $${idx}
                 ))`
