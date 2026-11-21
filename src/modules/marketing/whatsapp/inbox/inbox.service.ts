@@ -15,6 +15,9 @@ function normalizePhone(phone: string): string {
   return '+' + digits
 }
 
+// salonId -> the salon's WhatsApp display-picture link from Meta, with its expiry (see getBusinessPicture).
+const businessPictureCache = new Map<string, { url: string | null; reason?: string; expires: number }>()
+
 export const inboxService = {
 
   async getConversations(salonId: string) {
@@ -203,6 +206,37 @@ export const inboxService = {
       console.error('Socket emit error:', err)
     }
     return { deleted }
+  },
+
+  // The salon's WhatsApp display picture for the floating Messaging widget. Never an error:
+  // not configured / no picture set / Meta unreachable all just mean "no picture" (null).
+  // Meta's link expires, so it is cached per salon for 30 minutes (failures for 5).
+  // `reason` says why there is no picture: not_configured | no_picture_set | meta_error: <Meta's message>.
+  async getBusinessPicture(salonId: string): Promise<{ pictureUrl: string | null; reason?: string }> {
+    const hit = businessPictureCache.get(salonId)
+    if (hit && hit.expires > Date.now()) return { pictureUrl: hit.url, reason: hit.reason }
+
+    let url: string | null = null
+    let reason: string | undefined
+    let ttl = 30 * 60 * 1000
+    try {
+      const config = await configRepository.findBySalonId(salonId)
+      if (!config) {
+        reason = 'not_configured'
+      } else {
+        url = await whatsappMetaApi.getBusinessProfilePicture({
+          phoneNumberId: config.phone_number_id,
+          accessToken:   config.access_token,
+        })
+        if (!url) reason = 'no_picture_set'
+      }
+    } catch (e: any) {
+      ttl = 5 * 60 * 1000
+      reason = 'meta_error: ' + (e?.response?.data?.error?.message ?? e?.message ?? 'unknown')
+      console.error('[inbox] business-picture failed for salon', salonId, reason)
+    }
+    businessPictureCache.set(salonId, { url, reason, expires: Date.now() + ttl })
+    return { pictureUrl: url, reason }
   },
 
   async getMedia(salonId: string, mediaId: string) {

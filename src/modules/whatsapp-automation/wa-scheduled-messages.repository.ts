@@ -311,13 +311,38 @@ export const waScheduledMessagesRepository = {
 
     const where = conditions.join(' AND ')
 
-    const countRes = await pool.query(`SELECT COUNT(*) FROM wa_scheduled_messages WHERE ${where}`, values)
+    // The list is the union of the automation messages and the Service Chain follow-ups (which live in their own tables and
+    // are sent by their own runner). Chain rows are read-only here (source = 'service_chain'): they are changed from
+    // Service Chains, not from this page. Chain statuses are folded into this page's set (POSTPONED -> SCHEDULED,
+    // DELIVERED/READ -> SENT). Only the columns the page uses are selected, so this does not depend on the later chain
+    // migrations having been run.
+    const SOURCE = `(
+      SELECT id, salon_id, client_id, phone_number, phone_country_code, event_type, reference_id::text AS reference_id,
+             reference_type, scheduled_at, status, message_preview, failure_reason, attempt_count, sent_at, created_at,
+             updated_at, 'scheduled'::text AS source
+      FROM wa_scheduled_messages
+      UNION ALL
+      SELECT m.id, m.salon_id, e.client_id, c.phone_number, c.phone_country_code, 'service_chain'::text AS event_type,
+             e.id::text AS reference_id, 'service_chain'::text AS reference_type, m.scheduled_at,
+             CASE m.status WHEN 'POSTPONED' THEN 'SCHEDULED' WHEN 'DELIVERED' THEN 'SENT' WHEN 'READ' THEN 'SENT' ELSE m.status END AS status,
+             'Service Chain: ' || ch.name || COALESCE(' - ' || t.name, '') AS message_preview,
+             COALESCE(m.error_message, m.skip_reason) AS failure_reason, 0 AS attempt_count, m.sent_at, m.created_at,
+             m.updated_at, 'service_chain'::text AS source
+      FROM service_chain_messages m
+      JOIN service_chain_enrolments e ON e.id = m.enrolment_id
+      JOIN service_chains ch ON ch.id = e.chain_id AND ch.deleted_at IS NULL
+      JOIN service_chain_steps st ON st.id = m.step_id
+      JOIN clients c ON c.id = e.client_id
+      LEFT JOIN wa_templates t ON t.id = st.template_id
+    ) all_scheduled`
+
+    const countRes = await pool.query(`SELECT COUNT(*) FROM ${SOURCE} WHERE ${where}`, values)
     // What's coming up first (soonest due at the very top — today before
     // next week), then what's already happened last (most recent first —
     // yesterday before last month). A plain chronological sort would bury
     // today's due-soon rows under anything scheduled further in the future.
     const dataRes  = await pool.query(
-      `SELECT * FROM wa_scheduled_messages WHERE ${where}
+      `SELECT * FROM ${SOURCE} WHERE ${where}
        ORDER BY
          CASE WHEN scheduled_at >= NOW() THEN 0 ELSE 1 END,
          CASE WHEN scheduled_at >= NOW() THEN scheduled_at END ASC,
