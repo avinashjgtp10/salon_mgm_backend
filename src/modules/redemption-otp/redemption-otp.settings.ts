@@ -10,10 +10,10 @@ import { settingsRepository } from "../settings/settings.repository";
 // (features/settings/utils/redeemOtpSetting.ts).
 export const REDEEM_OTP_SETTING_KEY = "redeem_otp_required";
 
-export type RedeemKind = "package" | "membership";
+export type RedeemKind = "package" | "membership" | "rewardPoints";
 export type RedeemOtpConfig = Record<RedeemKind, boolean>;
 
-const OFF: RedeemOtpConfig = { package: false, membership: false };
+const OFF: RedeemOtpConfig = { package: false, membership: false, rewardPoints: false };
 
 export async function getRedemptionOtpConfig(salonId: string): Promise<RedeemOtpConfig> {
   const rows = await settingsRepository.findAll(salonId);
@@ -23,9 +23,10 @@ export async function getRedemptionOtpConfig(salonId: string): Promise<RedeemOtp
     const v = JSON.parse(row.value);
     // Legacy single switch ({ enabled: true }, saved before there were two) turned on both.
     if (v?.package === undefined && v?.membership === undefined) {
-      return v?.enabled === true ? { package: true, membership: true } : OFF;
+      return v?.enabled === true ? { package: true, membership: true, rewardPoints: true } : OFF;
     }
-    return { package: v.package === true, membership: v.membership === true };
+    // Reward points have their own switch; off unless saved as on.
+    return { package: v.package === true, membership: v.membership === true, rewardPoints: v.rewardPoints === true };
   } catch {
     return OFF;
   }
@@ -34,5 +35,5 @@ export async function getRedemptionOtpConfig(salonId: string): Promise<RedeemOtp
 // Is the OTP rule on for at least one of the two? (Used to decide whether the OTP endpoints are usable.)
 export async function isRedemptionOtpRequired(salonId: string): Promise<boolean> {
   const c = await getRedemptionOtpConfig(salonId);
-  return c.package || c.membership;
+  return c.package || c.membership || c.rewardPoints;
 }

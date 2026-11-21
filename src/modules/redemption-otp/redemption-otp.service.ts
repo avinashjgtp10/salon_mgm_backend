@@ -49,7 +49,7 @@ const TEMPLATE_MISSING_CODES = new Set([132000, 132001]);
 export const redemptionOtpService = {
 
   // True when any of `kinds` has its switch on (default: either).
-  async isRequired(salonId: string, kinds: RedeemKind[] = ["package", "membership"]): Promise<boolean> {
+  async isRequired(salonId: string, kinds: RedeemKind[] = ["package", "membership", "rewardPoints"]): Promise<boolean> {
     const cfg = await getRedemptionOtpConfig(salonId);
     return kinds.some((kd) => cfg[kd]);
   },

@@ -205,8 +205,9 @@ export const paymentsService = {
     // clean 428 and nothing is deducted.
     if (body.client_id && (await redemptionOtpService.isRequired(body.salon_id))) {
       // Packages and memberships are separate switches, so work out which of the two this payment redeems.
-      const redeemKinds: Array<'package' | 'membership'> = [];
-      if (body.apply_membership_wallet || body.apply_membership_discount || body.apply_loyalty_discount || Number(body.reward_points_used) > 0) redeemKinds.push('membership');
+      const redeemKinds: Array<'package' | 'membership' | 'rewardPoints'> = [];
+      if (body.apply_membership_wallet || body.apply_membership_discount || body.apply_loyalty_discount) redeemKinds.push('membership');
+      if (Number(body.reward_points_used) > 0) redeemKinds.push('rewardPoints');
       let redeemsPackage = (body.payment_method || '').toLowerCase() === 'package';
       if (!redeemsPackage && body.appointment_id) {
         const apptForOtp = await appointmentsRepository.findById(body.appointment_id);
