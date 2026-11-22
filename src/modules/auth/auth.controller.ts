@@ -327,7 +327,7 @@ export const authController = {
 
       const state = await authService.googleCreateState({ codeVerifier, returnTo });
 
-      const url = authService.googleAuthUrl({ state, codeChallenge });
+      const url = await authService.googleAuthUrl({ state, codeChallenge });
       return res.redirect(url);
     } catch (e) {
       logger.error("googleStart error", { error: e });

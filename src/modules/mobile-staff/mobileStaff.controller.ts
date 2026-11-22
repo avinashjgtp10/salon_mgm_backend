@@ -3,7 +3,7 @@ import { AppError } from "../../middleware/error.middleware";
 import { sendSuccess } from "../utils/response.util";
 import { appointmentsService } from "../appointments/appointments.service";
 import { attendanceService } from "../attendance/attendance.service";
-import { staffAttendanceState, staffSelfCheckIn, staffSelfCheckOut, staffSelfStartBreak, staffSelfCompletePendingCheckOut } from "../attendance/staffAttendance.service";
+import { staffAttendanceState, staffSelfCheckIn, staffSelfCheckOut, staffSelfStartBreak, staffSelfCompletePendingCheckOut, staffSelfBulkCheckOut } from "../attendance/staffAttendance.service";
 import { notificationsService } from "../notifications/notifications.service";
 import {
   staffService, staffAddressService, staffEmergencyContactService,
@@ -245,6 +245,18 @@ export const mobileStaffController = {
       const state = pendingId
         ? await staffSelfCompletePendingCheckOut(userId, salonId, pendingId)
         : await staffSelfCheckOut(userId, salonId, new Date(), punchLocation(req.body));
+      return sendSuccess(res, 200, { self_attendance: state }, "Checked out successfully");
+    } catch (err) { return next(err); }
+  },
+
+  async bulkCheckOut(req: MobileStaffRequest, res: Response, next: NextFunction) {
+    try {
+      const { userId, salonId } = getStaff(req);
+      const ids: unknown = req.body?.attendance_ids;
+      if (!Array.isArray(ids) || ids.length === 0 || ids.some(id => typeof id !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id))) {
+        throw new AppError(400, "attendance_ids must be a non-empty array of valid UUIDs.", "VALIDATION_ERROR");
+      }
+      const state = await staffSelfBulkCheckOut(userId, salonId, ids as string[]);
       return sendSuccess(res, 200, { self_attendance: state }, "Checked out successfully");
     } catch (err) { return next(err); }
   },

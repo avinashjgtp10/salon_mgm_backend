@@ -632,6 +632,7 @@ export const attendanceService = {
                 hours_worked: rec?.hours_worked ?? null,
                 scheduled_hours: scheduledMap.get(s.id)?.scheduled_hours ?? null,
                 shift_start: scheduledMap.get(s.id)?.shift_start ?? null,
+                is_off_day: scheduledMap.get(s.id)?.is_off ?? false,
                 attendance_id: rec?.id ?? null,
                 previous_incomplete: openByStaff.get(s.id) ?? [],
             };

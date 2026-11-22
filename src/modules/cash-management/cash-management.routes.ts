@@ -35,6 +35,8 @@ router.get("/close-summary", ...guard, closeCounter, cashManagementController.ge
 router.get("/", ...guard, viewCash, cashManagementController.listCounters);
 router.get("/income", ...guard, viewCash, cashManagementController.listCashIncomeEntries);
 router.get("/expenses", ...guard, viewCash, cashManagementController.listExpenses);
+// Revenue vs paid expenses, net cash flow, chart and category data for the All Expense page.
+router.get("/expenses/overview", ...guard, viewCash, cashManagementController.getExpenseOverview);
 // Consolidates GET /cashdashboard, GET / (counters), GET /expenses and
 // GET /api/v1/dashboard/summary into one call — payload's `sections` picks
 // which of those to run.

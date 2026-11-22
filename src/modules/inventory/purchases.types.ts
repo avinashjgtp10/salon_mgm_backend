@@ -6,6 +6,8 @@ export interface PurchaseItem {
     quantity: number;
     purchase_price: number;
     total_price: number;
+    // Tax % applied to this line (past bills). total_price already includes it. 0 for ordinary purchases.
+    tax_percent?: number;
     expiry_date: string | null;
     stock_movement_id: string | null;
     created_at: string;
@@ -40,6 +42,14 @@ export interface Purchase {
     amount_paid?: number;
     amount_due?: number;
     payment_status?: "paid" | "due" | "overdue";
+    // FALSE for a past bill added with "Add Past Bill (no stock change)"; TRUE for everything else.
+    stock_applied?: boolean;
+    bill_number?: string | null;
+    notes?: string | null;
+    // Only on the supplier Orders list (list()): per-bill sums over its lines. subtotal_amount is before tax.
+    total_quantity?: number;
+    subtotal_amount?: number;
+    tax_amount?: number;
 }
 
 export interface CreatePurchaseItemDTO {
@@ -63,6 +73,16 @@ export interface CreatePurchaseDTO {
     // Staff member who received the stock — must belong to this salon.
     received_by_staff_id?: string | null;
     items: CreatePurchaseItemDTO[];
+}
+
+// A past supplier bill recorded for the books only: no stock change, no expiry (an old expiry date would trip the
+// expiry write-off scheduler, which reads purchase_items.expiry_date).
+export interface CreateHistoricalPurchaseDTO {
+    supplier_id: string;
+    purchase_date: string;
+    bill_number?: string | null;
+    notes?: string | null;
+    items: { product_id: string; quantity: number; purchase_price: number; tax_percent?: number }[];
 }
 
 export interface ListPurchaseFilters {

@@ -27,7 +27,7 @@ import {
 } from "./clients.types";
 import { isValidTaxRegistrationNumber } from "../salons/tax-id";
 import { getSalonCountry } from "../../config/salonTimezone";
-import { dialCodeFor, phoneRuleFor, normalizeNationalNumber, isValidNationalNumber } from "../../config/phoneRules";
+import { dialCodeFor, phoneRuleFor, normalizeNationalNumber, isValidNationalNumber, normalizeNationalNumberForDial, isValidNationalNumberForDial, nationalNumberErrorForDial } from "../../config/phoneRules";
 import { salonTranslator } from "../../config/i18n";
 
 const safeTrim = (v: any) => (v === null || v === undefined ? v : String(v).trim());
@@ -163,6 +163,30 @@ async function attachExtendedProfile(
     }
 }
 
+// A client's phone length follows the dial code they picked (phone_country_code), not the salon's country:
+// India 10 digits, UAE 9, China 11 ... A record with no dial code is a legacy Indian client. Throws on an
+// invalid number and returns the cleaned national number (dial-code prefix / trunk 0 dropped).
+function checkClientPhone(raw: string | null | undefined, dial: string | null | undefined, field: string): string | null | undefined {
+    if (raw === undefined || raw === null || String(raw).trim() === "") return raw;
+    if (!isValidNationalNumberForDial(raw, dial)) {
+        throw new AppError(400, nationalNumberErrorForDial(dial), "VALIDATION_ERROR", { field });
+    }
+    return normalizeNationalNumberForDial(raw, dial);
+}
+
+// Re-validates a phone pair on update, but only when the number or its dial code is actually changing - an
+// untouched legacy number never blocks an unrelated edit, while changing just the country re-checks the stored
+// number against the new country's rules.
+function checkPhonePatch(p: any, ex: any, numKey: string, dialKey: string) {
+    if (p[numKey] === undefined && p[dialKey] === undefined) return;
+    const dial = p[dialKey] !== undefined ? p[dialKey] : ex[dialKey];
+    const num = p[numKey] !== undefined ? p[numKey] : ex[numKey];
+    const same = (a: any, b: any) => String(a ?? "").trim() === String(b ?? "").trim();
+    if (same(num, ex[numKey]) && same(dial, ex[dialKey])) return;
+    const clean = checkClientPhone(num, dial, numKey);
+    if (p[numKey] !== undefined && clean !== undefined && clean !== null) p[numKey] = clean;
+}
+
 export const clientsService = {
     async list(query: ClientsListQuery, salonId: string) {
         return clientsRepository.list(query, salonId);
@@ -170,6 +194,9 @@ export const clientsService = {
 
     async create(body: CreateClientBody, salonId: string, include?: string): Promise<ClientWithRelations> {
         const normalized = normalizeCreateBody(body);
+        const nb = normalized as any;
+        nb.phone_number = checkClientPhone(nb.phone_number, nb.phone_country_code, "phone_number");
+        nb.additional_phone_number = checkClientPhone(nb.additional_phone_number, nb.additional_phone_country_code, "additional_phone_number");
 
         // One active client per phone number (almost always a duplicate/mistake
         // under a different name, not two real clients) and one per email —
@@ -386,6 +413,9 @@ export const clientsService = {
     async update(clientId: string, patch: UpdateClientBody, salonId: string): Promise<ClientWithRelations> {
         const exists = await clientsRepository.findById(clientId, salonId);
         if (!exists) throw new AppError(404, "Client not found", "NOT_FOUND");
+
+        checkPhonePatch(patch, exists, "phone_number", "phone_country_code");
+        checkPhonePatch(patch, exists, "additional_phone_number", "additional_phone_country_code");
 
         // Only re-check when the phone is actually changing — editing an
         // unrelated field on a client shouldn't trip over their own number.

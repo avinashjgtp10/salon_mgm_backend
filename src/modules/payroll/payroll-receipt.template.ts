@@ -1,3 +1,4 @@
+import { pdfLogoUrl } from "./payroll-logo";
 import { DEFAULT_SALON_TIMEZONE } from "../../config/salonTimezone";
 import { formatMoney } from "../../config/currency";
 import { PayrollPayment } from "./payroll.types";
@@ -36,8 +37,9 @@ export function buildPayrollReceiptHtml(params: {
         row("Amount Paid", fmt(payment.amount)),
     ].filter(Boolean).join("");
 
-    const logoBlock = salon.logo_url
-        ? `<img class="doc-logo" src="${salon.logo_url}" alt="${salonName}">`
+    const logoSrc = pdfLogoUrl(salon.logo_url);
+    const logoBlock = logoSrc
+        ? `<img class="doc-logo" src="${logoSrc}" alt="${salonName}">`
         : `<div class="doc-logo-placeholder">${salonName.charAt(0).toUpperCase()}</div>`;
 
     const contactLine = [salon.address, salon.phone, salon.email].filter(Boolean).join(" &middot; ");

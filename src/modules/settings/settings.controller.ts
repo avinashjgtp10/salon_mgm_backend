@@ -3,6 +3,7 @@ import { AppError } from "../../middleware/error.middleware";
 import { invalidatePermissionCache, staffHasPermission } from "../../middleware/permission.middleware";
 import { sendSuccess } from "../utils/response.util";
 import { settingsService } from "./settings.service";
+import { taxConfigService } from "./tax.config";
 import { CreateSettingBody, UpdateSettingBody } from "./settings.types";
 
 type AuthRequest = Request & {
@@ -29,6 +30,7 @@ const KEY_TO_PERMISSION: Record<string, string> = {
   REFERRAL_CONFIG: "view_settings_referral",
   PRINT_CONFIG: "view_settings_print",
   package_no_show_policy: "view_settings_packages",
+  redeem_otp_required: "view_settings_integrations",
   [TAX_MODULE_KEY]: "view_settings_tax_mapping",
 };
 
@@ -116,6 +118,26 @@ export const settingsController = {
       const data = await settingsService.create(salonId, body);
       if (body.key === "role_permissions") invalidatePermissionCache(salonId);
       sendSuccess(res, 201, data, "Setting created");
+    } catch (err) { next(err); }
+  },
+
+  // Tax Mapping: dry-run conflict check (no write) and the real save. See tax.config.ts for the rules.
+  async checkTax(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const salonId = req.user?.salonId;
+      if (!salonId) throw new AppError(400, "Salon context missing", "NO_SALON");
+      await assertCanWriteKey(req, "tax_mapping_check");
+      sendSuccess(res, 200, await taxConfigService.check(salonId, req.body), "Tax checked");
+    } catch (err) { next(err); }
+  },
+
+  async saveTax(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const salonId = req.user?.salonId;
+      if (!salonId) throw new AppError(400, "Salon context missing", "NO_SALON");
+      await assertCanWriteKey(req, "tax_mapping_save");
+      const data = await taxConfigService.save(salonId, req.user?.userId ?? null, req.body);
+      sendSuccess(res, req.body?.id ? 200 : 201, data, req.body?.id ? "Tax updated" : "Tax created");
     } catch (err) { next(err); }
   },
 

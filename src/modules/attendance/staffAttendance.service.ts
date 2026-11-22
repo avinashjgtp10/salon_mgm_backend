@@ -32,15 +32,37 @@ export async function staffAttendanceState(userId: string, salonId: string, now 
   if (priorWindow && now >= priorWindow.start && now < priorWindow.end) {
     date = yesterday; shift = priorShift; window = priorWindow;
   }
-  const { rows: open } = await pool.query(`SELECT date::text FROM attendance a WHERE salon_id = $1 AND staff_id = $2 AND check_in IS NOT NULL AND check_out IS NULL AND date <= $3::date ORDER BY date LIMIT 1`, [salonId, staffId, today]);
-  if (open[0]) { date = open[0].date; window = shiftWindow(date, await schedule(date), tz); }
+  // Fetch ALL unchecked days (not just the oldest one) so the app can show them all.
+  const allOpenRows = await attendanceRepository.findOpenSessionsBefore(staffId, today);
+  // The "active" date is the oldest open day (or today if none pending).
+  const oldestOpen = allOpenRows[0] ?? null;
+  if (oldestOpen) { date = oldestOpen.date; window = shiftWindow(date, await schedule(date), tz); }
   const record = await attendanceRepository.findByStaffAndDate(staffId, date);
   const activity = attendanceActivity(record, record?.breaks ?? [], now);
   const pending = Boolean(record?.check_in && !record.check_out && date < today && (!window || now >= window.end));
   const pendingReason = pending && !window ? "No assigned schedule is available for this attendance day. Ask your manager to correct the schedule." : null;
+
+  // Build the full list of pending checkouts, enriched with each day's scheduled end.
+  const pendingCheckouts = await Promise.all(
+    allOpenRows.map(async (row) => {
+      const rowShift = await schedule(row.date);
+      const rowWindow = shiftWindow(row.date, rowShift, tz);
+      const blocked = !rowWindow ? "No assigned schedule is available for this attendance day. Ask your manager to correct the schedule." : null;
+      return {
+        attendance_id: row.attendance_id,
+        date: row.date,
+        check_in: row.check_in,
+        scheduled_end: rowWindow?.end.toISOString() ?? null,
+        blocked_reason: blocked,
+      };
+    })
+  );
+
   return {
     staff_id: staffId, date, today_date: today, server_time: now.toISOString(),
-    pending_checkout: pending ? { attendance_id: record!.id, date, check_in: record!.check_in, scheduled_end: window?.end.toISOString() ?? null, blocked_reason: pendingReason } : null,
+    // Single-item form kept for backwards compat; list form is the new source of truth.
+    pending_checkout: pending ? pendingCheckouts[0] ?? null : null,
+    pending_checkouts: pendingCheckouts,
     shift_start: record?.scheduled_start ?? window?.start.toISOString() ?? null, shift_end: record?.scheduled_end ?? window?.end.toISOString() ?? null,
     reminder_at: window?.reminderAt.toISOString() ?? null,
     ...activity,
@@ -171,4 +193,24 @@ export async function staffSelfCompletePendingCheckOut(userId: string, salonId: 
       WHERE id = $1 AND salon_id = $4 AND staff_id = $5 AND check_out IS NULL`,
       [record.id, end.toISOString(), Number((activity.total_worked_seconds / 3600).toFixed(2)), salonId, state.staff_id]);
   }, undefined, attendanceId);
+}
+
+// Completes pending checkouts for multiple previous days in one request.
+// Each attendanceId is processed via the same locked transition as the single-day
+// version; already-checked-out records are silently skipped (safe retry).
+// Returns the final attendance state after all checkouts are applied.
+export async function staffSelfBulkCheckOut(userId: string, salonId: string, attendanceIds: string[], now = new Date()) {
+  if (!attendanceIds.length) throw new AppError(400, "No attendance IDs supplied.", "VALIDATION_ERROR");
+  if (attendanceIds.length > 30) throw new AppError(400, "At most 30 records can be checked out at once.", "VALIDATION_ERROR");
+  for (const id of attendanceIds) {
+    // Skip records already checked out (safe retry); surface real errors.
+    try {
+      await staffSelfCompletePendingCheckOut(userId, salonId, id, now);
+    } catch (err: unknown) {
+      const code = (err as { code?: string }).code;
+      if (code === "ALREADY_CHECKED_OUT") continue;
+      throw err;
+    }
+  }
+  return staffAttendanceState(userId, salonId, now);
 }

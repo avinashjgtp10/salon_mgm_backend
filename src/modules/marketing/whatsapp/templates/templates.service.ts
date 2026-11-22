@@ -1,6 +1,8 @@
 import axios from 'axios'
 import FormData from 'form-data'
+import pool from '../../../../config/database'
 import { AppError } from '../../../../middleware/error.middleware'
+import { sampleFor, textTemplateProblem } from './template-rules'
 import { templatesRepository } from './templates.repository'
 import { configRepository } from '../config/config.repository'
 import { whatsappMetaApi } from '../shared/whatsapp.api'
@@ -358,9 +360,48 @@ export const templatesService = {
     })
   },
 
+  // Saves a template here only. Nothing is sent to Meta until submitDraft(), so an owner can keep it, edit the wording and
+  // come back later (used by "Create with LUNOX" in Service Chains).
+  async createDraft(salonId: string, body: CreateTemplateBody) {
+    const problem = textTemplateProblem(body)
+    if (problem) throw new AppError(400, problem, 'VALIDATION_ERROR')
+    const { rows: dupe } = await pool.query(`SELECT 1 FROM wa_templates WHERE salon_id = $1 AND name = $2 AND language = $3 LIMIT 1`, [salonId, body.name, body.language])
+    if (dupe.length) throw new AppError(400, 'A template with this name already exists. Change the name.', 'VALIDATION_ERROR')
+    return templatesRepository.create(salonId, { ...body, header_type: 'none', meta_template_id: null, status: 'DRAFT' })
+  },
+
+  // One click: send a saved draft to Meta for approval. A failure leaves the draft untouched so it can be fixed and retried.
+  async submitDraft(id: string, salonId: string) {
+    const t = await templatesRepository.findById(id, salonId)
+    if (!t) throw new AppError(404, 'Template not found', 'NOT_FOUND')
+    if (t.status !== 'DRAFT') throw new AppError(400, 'Only a draft can be sent to Meta for approval', 'VALIDATION_ERROR')
+    const problem = textTemplateProblem({ name: t.name, category: t.category, language: t.language, body_text: t.body_text, footer_text: t.footer_text, buttons: t.buttons })
+    if (problem) throw new AppError(400, problem, 'VALIDATION_ERROR')
+    const config = await configRepository.findBySalonId(salonId)
+    if (!config) throw new AppError(400, 'WhatsApp not configured for this salon', 'WA_NOT_CONFIGURED')
+
+    const nums = [...new Set((t.body_text.match(/{{\d+}}/g) ?? []).map((m) => parseInt(m.replace(/[{}]/g, ''), 10)))].sort((a, b) => a - b)
+    const bodyComponent: any = { type: 'BODY', text: t.body_text }
+    if (nums.length) bodyComponent.example = { body_text: [nums.map(sampleFor)] }
+    const components: any[] = [bodyComponent]
+    if (t.footer_text) components.push({ type: 'FOOTER', text: t.footer_text })
+    if (t.buttons?.length) components.push({ type: 'BUTTONS', buttons: t.buttons.map((b) => ({ type: 'URL', text: b.text, url: b.value })) })
+
+    let meta
+    try {
+      meta = await whatsappMetaApi.submitTemplate({ wabaId: config.waba_id, accessToken: config.access_token, name: t.name, category: t.category, language: t.language, components })
+    } catch (err: any) {
+      const m = err?.response?.data?.error?.error_user_msg ?? err?.response?.data?.error?.message
+      throw new AppError(400, `Meta did not accept the template: ${m ?? err.message}`, 'META_REJECTED')
+    }
+    return templatesRepository.updateStatus(id, meta.status ?? 'PENDING', meta.id, null)
+  },
+
   async syncStatus(id: string, salonId: string) {
     const template = await templatesRepository.findById(id, salonId)
     if (!template) throw new AppError(404, 'Template not found', 'NOT_FOUND')
+    // A draft was never sent to Meta, so there is nothing to sync (and it must not be marked rejected).
+    if (template.status === 'DRAFT') return template
 
     // A missing meta_template_id means this template was never actually
     // accepted by Meta (its initial submitTemplate() call in create() failed

@@ -11,6 +11,7 @@ import {
   ListAutomationLogsFilters,
   UpdateSalonAutomationSettingBody,
   PURCHASE_EVENTS,
+  PLATFORM_EVENTS,
 } from './whatsapp-automation.types'
 import { DEFAULT_PURCHASE_TEMPLATES, isPurchaseEventType } from './wa-automation-defaults'
 import { translationFor } from '../../config/i18n'
@@ -33,7 +34,7 @@ export const whatsappAutomationRepository = {
         [eventType, salonId]
       )
       if (rows[0]) return rows[0]
-      if (PURCHASE_EVENTS.includes(eventType)) return null
+      if (PURCHASE_EVENTS.includes(eventType) || PLATFORM_EVENTS.includes(eventType)) return null
     }
     const { rows } = await pool.query(
       `SELECT * FROM wa_automation_templates
@@ -120,9 +121,10 @@ export const whatsappAutomationRepository = {
     return retry[0]
   },
 
-  async findAllSalonPurchaseTemplates(salonId: string): Promise<AutomationTemplate[]> {
+  // includePlatform: also SalonOx's own owner-facing messages (PLATFORM_EVENTS) — only ever asked for the platform salon.
+  async findAllSalonPurchaseTemplates(salonId: string, includePlatform = false): Promise<AutomationTemplate[]> {
     const results: AutomationTemplate[] = []
-    for (const eventType of PURCHASE_EVENTS) {
+    for (const eventType of includePlatform ? [...PURCHASE_EVENTS, ...PLATFORM_EVENTS] : PURCHASE_EVENTS) {
       results.push(await whatsappAutomationRepository.findOrSeedSalonPurchaseTemplate(salonId, eventType))
     }
     return results

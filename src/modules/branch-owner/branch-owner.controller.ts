@@ -201,6 +201,13 @@ export const branchOwnerController = {
     } catch (err) { return next(err); }
   },
 
+  async getSubscriptionOverview(req: AuthedRequest, res: Response, next: NextFunction) {
+    try {
+      const data = await branchOwnerService.getSubscriptionOverview(req.user!.userId);
+      return res.json({ success: true, data });
+    } catch (err) { return next(err); }
+  },
+
   async getSalonSubscription(req: AuthedRequest, res: Response, next: NextFunction) {
     try {
       const branchOwnerId = req.user!.userId;

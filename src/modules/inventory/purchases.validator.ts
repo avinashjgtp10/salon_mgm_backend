@@ -58,6 +58,56 @@ export const validateCreatePurchase = (
     }
 };
 
+// ─── Past (historical) bill validator ──────────────────────────────────────────
+// Stricter on the date than a normal purchase (required, not in the future) and has no expiry / receiver: it never touches stock.
+export const validateCreateHistoricalPurchase = (
+    req: Request,
+    _res: Response,
+    next: NextFunction
+): void => {
+    try {
+        const b = req.body;
+
+        if (!isUUID(b.supplier_id)) {
+            throw new AppError(400, "supplier_id is required and must be a UUID", "VALIDATION_ERROR");
+        }
+        if (typeof b.purchase_date !== "string" || !DATE_RE.test(b.purchase_date)) {
+            throw new AppError(400, "purchase_date is required in YYYY-MM-DD format", "VALIDATION_ERROR");
+        }
+        if (b.purchase_date > new Date().toISOString().slice(0, 10)) {
+            throw new AppError(400, "purchase_date cannot be in the future", "VALIDATION_ERROR");
+        }
+        if (b.bill_number !== undefined && b.bill_number !== null && (typeof b.bill_number !== "string" || b.bill_number.length > 60)) {
+            throw new AppError(400, "bill_number must be text of at most 60 characters", "VALIDATION_ERROR");
+        }
+        if (b.notes !== undefined && b.notes !== null && (typeof b.notes !== "string" || b.notes.length > 1000)) {
+            throw new AppError(400, "notes must be text of at most 1000 characters", "VALIDATION_ERROR");
+        }
+        if (!Array.isArray(b.items) || b.items.length === 0) {
+            throw new AppError(400, "items must be a non-empty array", "VALIDATION_ERROR");
+        }
+        for (let i = 0; i < b.items.length; i++) {
+            const item = b.items[i];
+            if (!isUUID(item.product_id)) {
+                throw new AppError(400, `items[${i}].product_id must be a UUID`, "VALIDATION_ERROR");
+            }
+            if (typeof item.quantity !== "number" || !Number.isInteger(item.quantity) || item.quantity <= 0) {
+                throw new AppError(400, `items[${i}].quantity must be a positive whole number`, "VALIDATION_ERROR");
+            }
+            if (typeof item.purchase_price !== "number" || !Number.isFinite(item.purchase_price) || item.purchase_price < 0) {
+                throw new AppError(400, `items[${i}].purchase_price must be a non-negative number`, "VALIDATION_ERROR");
+            }
+            if (item.tax_percent !== undefined && item.tax_percent !== null &&
+                (typeof item.tax_percent !== "number" || !Number.isFinite(item.tax_percent) || item.tax_percent < 0 || item.tax_percent > 100)) {
+                throw new AppError(400, `items[${i}].tax_percent must be a number between 0 and 100`, "VALIDATION_ERROR");
+            }
+        }
+        return next();
+    } catch (err) {
+        return next(err);
+    }
+};
+
 // ─── List Purchases validator ──────────────────────────────────────────────────
 // Matches every query param purchasesController.list actually reads (see
 // ListPurchaseFilters) — was previously defined but never wired to the

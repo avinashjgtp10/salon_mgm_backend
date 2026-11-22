@@ -47,7 +47,7 @@ const repo: any = {
 jest.mock("./client-management.repository", () => ({
     clientManagementRepository: new Proxy({}, { get: (_t, k) => repo[k as string] }),
     MEETING_TYPES: ["client_meeting"], MEETING_MODES: ["online"], MEETING_STATUSES: ["scheduled", "completed", "cancelled", "rescheduled", "not_conducted"],
-    TRAINING_STATUSES: ["not_started"], UNDERSTANDING: [], ACTIVITY_TYPES: ["general"], TASK_STATUSES: ["pending"], TASK_PRIORITIES: ["medium"], ATTACHMENT_ENTITIES: ["meeting", "task", "activity", "training"],
+    TRAINING_STATUSES: ["not_started"], UNDERSTANDING: [], ACTIVITY_TYPES: ["meeting"], TASK_STATUSES: ["pending"], TASK_PRIORITIES: ["medium"], ATTACHMENT_ENTITIES: ["meeting", "task", "activity", "training"],
 }));
 
 import router from "./client-management.routes";

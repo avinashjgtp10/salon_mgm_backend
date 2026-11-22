@@ -30,6 +30,7 @@ router.get("/attendance", mobileStaffController.attendance);
 router.post("/attendance/check-in", mobileStaffController.checkIn);
 router.post("/attendance/break", mobileStaffController.startBreak);
 router.post("/attendance/check-out", mobileStaffController.checkOut);
+router.post("/attendance/bulk-check-out", mobileStaffController.bulkCheckOut);
 
 router.get("/notifications", mobileStaffController.notifications);
 router.get("/notifications/unread-count", mobileStaffController.unreadNotificationCount);

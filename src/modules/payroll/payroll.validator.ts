@@ -22,8 +22,9 @@ export function validateAdjustPayroll(req: Request, _res: Response, next: NextFu
     if (typeof adjusted_value !== "number" || !Number.isFinite(adjusted_value)) {
         return next(new AppError(400, "adjusted_value must be a number", "VALIDATION_ERROR"));
     }
-    if (!reason || !String(reason).trim()) {
-        return next(new AppError(400, "A reason is required for every payroll adjustment", "VALIDATION_ERROR"));
+    // The reason is optional.
+    if (reason != null && typeof reason !== "string") {
+        return next(new AppError(400, "reason must be text", "VALIDATION_ERROR"));
     }
     return next();
 }

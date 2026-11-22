@@ -7,8 +7,11 @@ import type {
   CounterListFilters,
   CreateExpenseBody,
   ExpenseListFilters,
+  ExpenseOverview,
+  ExpenseOverviewFilters,
   UpdateExpenseBody,
 } from "./cash-management.types";
+import { reportsRepository } from "../reports/reports.repository";
 
 type DbClient = {
   query: <T = any>(text: string, params?: any[]) => Promise<{ rows: T[]; rowCount: number | null }>;
@@ -50,6 +53,7 @@ const EXPENSE_SORT_COLUMNS: Record<string, string> = {
   expense_date: "cme.expense_date",
   amount: "cme.amount",
   expense_type: "cme.expense_type",
+  payment_method: "cme.payment_method",
   created_at: "cme.created_at",
 };
 
@@ -138,7 +142,8 @@ async function recalculateCounterById(client: DbClient, counterId: string, salon
   const expenseRows = await client.query<{ total: string }>(
     `SELECT COALESCE(SUM(amount), 0)::numeric AS total
      FROM cash_management_expenses
-     WHERE cash_management_id = $1`,
+     WHERE cash_management_id = $1
+       AND COALESCE(payment_method, 'cash') = 'cash'`,   // UPI / Card / … expenses are recorded but never reduce the cash counter
     [counter.id],
   );
 
@@ -348,6 +353,22 @@ export async function ensureCashManagementTables(): Promise<void> {
         updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
     `),
+  );
+
+  // Expenses are independent of the cash counter: new expenses carry no counter, so the link must be optional.
+  // (Old expenses keep their counter id and keep counting toward that counter.)
+  await safeQuery(() =>
+    pool.query(`ALTER TABLE cash_management_expenses ALTER COLUMN cash_management_id DROP NOT NULL`),
+  );
+
+  // Paid / Unpaid. Only "paid" expenses count as cash outflow. Existing rows were all real payments, hence the default.
+  await safeQuery(() =>
+    pool.query(`ALTER TABLE cash_management_expenses ADD COLUMN IF NOT EXISTS status VARCHAR(10) NOT NULL DEFAULT 'paid'`),
+  );
+
+  // Payment method of an expense (Cash, UPI, Card…). Existing rows were all cash, hence the default.
+  await safeQuery(() =>
+    pool.query(`ALTER TABLE cash_management_expenses ADD COLUMN IF NOT EXISTS payment_method VARCHAR(20) NOT NULL DEFAULT 'cash'`),
   );
 
 }
@@ -739,6 +760,7 @@ export const cashManagementRepository = {
     if (filters.search) {
       where.push(`(
         cme.expense_type ILIKE $${idx}
+        OR COALESCE(cme.payment_method, 'cash') ILIKE $${idx}
         OR COALESCE(cme.description, '') ILIKE $${idx}
         OR COALESCE(u.full_name, TRIM(COALESCE(u.first_name, '') || ' ' || COALESCE(u.last_name, ''))) ILIKE $${idx}
       )`);
@@ -788,6 +810,8 @@ export const cashManagementRepository = {
         cash_management_id: row.cash_management_id,
         expense_date: row.expense_date,
         expense_type: row.expense_type,
+        payment_method: row.payment_method ?? "cash",
+        status: row.status ?? "paid",
         description: row.description,
         amount: parseFloat(row.amount ?? "0"),
         created_by: row.created_by,
@@ -805,6 +829,73 @@ export const cashManagementRepository = {
     };
   },
 
+  /**
+   * Cash Management -> All Expense overview. Every figure comes straight from the database, once:
+   *  - revenue: the Sales Summary report's own queries (the figure the dashboard shows), so a sale is never counted twice;
+   *  - expenses: one row per cash_management_expenses record. Only status = 'paid' is outflow; unpaid is reported on its own.
+   * Net cash flow = revenue - paid expenses.
+   */
+  async getExpenseOverview(filters: ExpenseOverviewFilters): Promise<ExpenseOverview> {
+    const { salonId, from, to } = filters;
+    const tz = `COALESCE((SELECT NULLIF(timezone, '') FROM salons WHERE id = $1), 'Asia/Kolkata')`;
+    const expenseDay = `TO_CHAR(cme.expense_date AT TIME ZONE ${tz}, 'YYYY-MM-DD')`;
+
+    const where: string[] = ["cme.salon_id = $1"];
+    const values: any[] = [salonId];
+    if (from) { values.push(from); where.push(`${expenseDay} >= $${values.length}`); }
+    if (to) { values.push(to); where.push(`${expenseDay} <= $${values.length}`); }
+    const whereSql = where.join(" AND ");
+
+    const revenueFilters = { start_date: from, end_date: to, payment_statuses: ["paid", "partial"] };
+
+    const [stats, revenueDaily, totals, expenseDaily, categories] = await Promise.all([
+      reportsRepository.getSalesSummaryReportStats(salonId, revenueFilters),
+      reportsRepository.getSalesSummaryReportChart(salonId, revenueFilters, "day"),
+      safeQuery(() => pool.query<any>(
+        `SELECT
+           COALESCE(SUM(cme.amount) FILTER (WHERE COALESCE(cme.status, 'paid') = 'paid'), 0)::float8 AS paid_total,
+           COALESCE(SUM(cme.amount) FILTER (WHERE cme.status = 'unpaid'), 0)::float8 AS unpaid_total,
+           COUNT(*) FILTER (WHERE COALESCE(cme.status, 'paid') = 'paid')::int AS paid_count,
+           COUNT(*) FILTER (WHERE cme.status = 'unpaid')::int AS unpaid_count
+         FROM cash_management_expenses cme
+         WHERE ${whereSql}`, values)),
+      safeQuery(() => pool.query<any>(
+        `SELECT ${expenseDay} AS day, COALESCE(SUM(cme.amount), 0)::float8 AS amount
+         FROM cash_management_expenses cme
+         WHERE ${whereSql} AND COALESCE(cme.status, 'paid') = 'paid'
+         GROUP BY day ORDER BY day ASC`, values)),
+      safeQuery(() => pool.query<any>(
+        `SELECT cme.expense_type AS name, COALESCE(SUM(cme.amount), 0)::float8 AS amount, COUNT(*)::int AS count
+         FROM cash_management_expenses cme
+         WHERE ${whereSql} AND COALESCE(cme.status, 'paid') = 'paid'
+         GROUP BY cme.expense_type ORDER BY amount DESC`, values)),
+    ]);
+
+    const totalRevenue = Number(stats.received_amount) || 0;
+    const paidTotal = Number(totals.rows[0]?.paid_total) || 0;
+
+    // One row per calendar day, revenue and paid expenses side by side.
+    const byDay = new Map<string, { date: string; revenue: number; expenses: number }>();
+    const slot = (d: string) => {
+      let r = byDay.get(d);
+      if (!r) { r = { date: d, revenue: 0, expenses: 0 }; byDay.set(d, r); }
+      return r;
+    };
+    revenueDaily.forEach((r) => { slot(r.date).revenue += Number(r.received_amount) || 0; });
+    expenseDaily.rows.forEach((r: any) => { slot(String(r.day)).expenses += Number(r.amount) || 0; });
+
+    return {
+      total_revenue: totalRevenue,
+      total_expenses: paidTotal,
+      unpaid_expenses: Number(totals.rows[0]?.unpaid_total) || 0,
+      paid_count: Number(totals.rows[0]?.paid_count) || 0,
+      unpaid_count: Number(totals.rows[0]?.unpaid_count) || 0,
+      net_cash_flow: Math.round((totalRevenue - paidTotal) * 100) / 100,
+      daily: [...byDay.values()].sort((a, b) => a.date.localeCompare(b.date)),
+      categories: categories.rows.map((r: any) => ({ name: String(r.name), amount: Number(r.amount) || 0, count: Number(r.count) || 0 })),
+    };
+  },
+
   async createExpense(params: {
     salonId: string;
     createdBy: string;
@@ -814,34 +905,26 @@ export const cashManagementRepository = {
     try {
       await client.query("BEGIN");
 
-      const counter = await getCounterContext(client, params.body.cash_management_id, params.salonId);
-      if (counter.status !== "open") {
-        throw new AppError(400, "Cannot add expense to a closed counter", "COUNTER_CLOSED");
-      }
-
+      // Independent of the cash counter: no counter lookup, no "counter closed" rule, no counter recalculation.
       const { rows } = await client.query<CashManagementExpenseRecord>(
         `INSERT INTO cash_management_expenses (
-          cash_management_id, salon_id, expense_type, description, amount, expense_date, created_by
-        ) VALUES ($1, $2, $3, $4, $5, COALESCE($6::timestamptz, NOW()), $7)
+          cash_management_id, salon_id, expense_type, description, amount, expense_date, created_by, payment_method, status
+        ) VALUES (NULL, $1, $2, $3, $4, COALESCE($5::timestamptz, NOW()), $6, $7, $8)
         RETURNING *`,
         [
-          params.body.cash_management_id,
           params.salonId,
           params.body.expense_type.trim(),
           params.body.description?.trim() || null,
           params.body.amount.toFixed(2),
           normalizeExpenseDateInput(params.body.expense_date),
           params.createdBy,
+          params.body.payment_method ?? "cash",
+          params.body.status ?? "paid",
         ],
       );
 
-      const counterSummary = await recalculateCounterById(client, params.body.cash_management_id, params.salonId);
-
       await client.query("COMMIT");
-      return {
-        expense: rows[0],
-        counter: counterSummary,
-      };
+      return { expense: rows[0] };
     } catch (error) {
       await client.query("ROLLBACK");
       throw error;
@@ -872,15 +955,12 @@ export const cashManagementRepository = {
         throw new AppError(404, "Expense not found", "EXPENSE_NOT_FOUND");
       }
 
-      const counter = await getCounterContext(client, expense.cash_management_id, params.salonId);
-      if (counter.status !== "open") {
-        throw new AppError(400, "Cannot update expense on a closed counter", "COUNTER_CLOSED");
-      }
-
       if (
         params.body.expense_type === undefined &&
         params.body.description === undefined &&
         params.body.amount === undefined &&
+        params.body.payment_method === undefined &&
+        params.body.status === undefined &&
         params.body.expense_date === undefined
       ) {
         throw new AppError(400, "At least one expense field is required", "VALIDATION_ERROR");
@@ -893,6 +973,14 @@ export const cashManagementRepository = {
       if (params.body.expense_type !== undefined) {
         setParts.push(`expense_type = $${idx++}`);
         values.push(params.body.expense_type.trim());
+      }
+      if (params.body.payment_method !== undefined) {
+        setParts.push(`payment_method = $${idx++}`);
+        values.push(params.body.payment_method);
+      }
+      if (params.body.status !== undefined) {
+        setParts.push(`status = $${idx++}`);
+        values.push(params.body.status);
       }
       if (params.body.description !== undefined) {
         setParts.push(`description = $${idx++}`);
@@ -916,13 +1004,8 @@ export const cashManagementRepository = {
         [...values, params.expenseId],
       );
 
-      const counterSummary = await recalculateCounterById(client, expense.cash_management_id, params.salonId);
-
       await client.query("COMMIT");
-      return {
-        expense: rows[0],
-        counter: counterSummary,
-      };
+      return { expense: rows[0] };
     } catch (error) {
       await client.query("ROLLBACK");
       throw error;
@@ -949,20 +1032,10 @@ export const cashManagementRepository = {
         throw new AppError(404, "Expense not found", "EXPENSE_NOT_FOUND");
       }
 
-      const counter = await getCounterContext(client, expense.cash_management_id, params.salonId);
-      if (counter.status !== "open") {
-        throw new AppError(400, "Cannot delete expense from a closed counter", "COUNTER_CLOSED");
-      }
-
       await client.query(`DELETE FROM cash_management_expenses WHERE id = $1`, [params.expenseId]);
-      const counterSummary = await recalculateCounterById(client, expense.cash_management_id, params.salonId);
 
       await client.query("COMMIT");
-      return {
-        deleted: true,
-        cash_management_id: expense.cash_management_id,
-        counter: counterSummary,
-      };
+      return { deleted: true };
     } catch (error) {
       await client.query("ROLLBACK");
       throw error;

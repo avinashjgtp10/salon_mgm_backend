@@ -21,6 +21,27 @@ import type {
   UpdateExpenseBody,
 } from "./cash-management.types";
 import { getSalonMoneyFormatter, getSalonDateLocale } from "../../config/currency";
+import { EXPENSE_PAYMENT_METHODS, EXPENSE_STATUSES } from "./cash-management.types";
+
+/** Lower-cases and validates an expense payment method; undefined when none was given, a 400 when it is not one of the allowed methods. */
+function normalizePaymentMethod(value: unknown): string | undefined {
+  if (value === undefined || value === null || String(value).trim() === "") return undefined;
+  const method = String(value).trim().toLowerCase().replace(/[\s-]+/g, "_");
+  if (!(EXPENSE_PAYMENT_METHODS as readonly string[]).includes(method)) {
+    throw new AppError(400, `payment_method must be one of: ${EXPENSE_PAYMENT_METHODS.join(", ")}`, "VALIDATION_ERROR");
+  }
+  return method;
+}
+
+/** Validates an expense status ("paid" | "unpaid"); undefined when none was given. */
+function normalizeExpenseStatus(value: unknown): string | undefined {
+  if (value === undefined || value === null || String(value).trim() === "") return undefined;
+  const status = String(value).trim().toLowerCase();
+  if (!(EXPENSE_STATUSES as readonly string[]).includes(status)) {
+    throw new AppError(400, `status must be one of: ${EXPENSE_STATUSES.join(", ")}`, "VALIDATION_ERROR");
+  }
+  return status;
+}
 
 const SUMMARY_BUNDLE_SECTIONS: SummaryBundleSection[] = [
   "cash_dashboard",
@@ -289,25 +310,33 @@ export const cashManagementService = {
     return cashManagementRepository.listCounters(filters);
   },
 
+  /** Revenue, paid expenses, unpaid expenses and net cash flow for a date range, plus the chart and category data. */
+  async getExpenseOverview(salonId: string, from?: string, to?: string) {
+    const isDate = (v?: string) => !v || /^\d{4}-\d{2}-\d{2}$/.test(v);
+    if (!isDate(from) || !isDate(to)) {
+      throw new AppError(400, "from and to must be YYYY-MM-DD dates", "VALIDATION_ERROR");
+    }
+    return cashManagementRepository.getExpenseOverview({ salonId, from, to });
+  },
+
   async listExpenses(filters: ExpenseListFilters) {
     return cashManagementRepository.listExpenses(filters);
   },
 
   async createExpense(salonId: string, createdBy: string, body: CreateExpenseBody) {
-    if (!body.cash_management_id?.trim()) {
-      throw new AppError(400, "cash_management_id is required", "VALIDATION_ERROR");
-    }
     if (!body.expense_type?.trim()) {
       throw new AppError(400, "expense_type is required", "VALIDATION_ERROR");
     }
     if (!Number.isFinite(body.amount) || body.amount < 0) {
       throw new AppError(400, "amount must be a non-negative number", "VALIDATION_ERROR");
     }
+    const paymentMethod = normalizePaymentMethod(body.payment_method) ?? "cash";
+    const status = normalizeExpenseStatus(body.status) ?? "paid";
 
     return cashManagementRepository.createExpense({
       salonId,
       createdBy,
-      body,
+      body: { ...body, payment_method: paymentMethod, status },
     });
   },
 
@@ -321,11 +350,17 @@ export const cashManagementService = {
     if (body.expense_type !== undefined && !body.expense_type.trim()) {
       throw new AppError(400, "expense_type cannot be empty", "VALIDATION_ERROR");
     }
+    const paymentMethod = body.payment_method !== undefined ? normalizePaymentMethod(body.payment_method) : undefined;
+    const status = body.status !== undefined ? normalizeExpenseStatus(body.status) : undefined;
 
     return cashManagementRepository.updateExpense({
       salonId,
       expenseId: expenseId.trim(),
-      body,
+      body: {
+        ...body,
+        ...(paymentMethod !== undefined ? { payment_method: paymentMethod } : {}),
+        ...(status !== undefined ? { status } : {}),
+      },
     });
   },
 
