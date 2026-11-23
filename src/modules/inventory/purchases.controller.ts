@@ -116,6 +116,7 @@ export const purchasesController = {
                     bill_number: req.body.bill_number?.trim() || null,
                     notes: req.body.notes?.trim() || null,
                     items: req.body.items.map((i: any) => ({
+                        id: typeof i.id === "string" ? i.id : undefined,
                         product_id: i.product_id,
                         quantity: Number(i.quantity),
                         purchase_price: Number(i.purchase_price),
@@ -133,7 +134,7 @@ export const purchasesController = {
     async deleteHistorical(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
         try {
             const salonId = getSalonId(req);
-            await purchasesRepository.deleteHistorical(String(req.params.id), salonId);
+            await purchasesRepository.deleteHistorical(String(req.params.id), salonId, req.user?.userId ?? null);
             logger.info("Historical purchase deleted", { salonId, userId: req.user?.userId, purchaseId: req.params.id });
             sendSuccess(res, 200, { id: String(req.params.id) }, "Past bill deleted");
         } catch (err) { next(err); }
