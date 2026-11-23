@@ -91,7 +91,10 @@ export const validateCreateHistoricalPurchase = (
             if (!isUUID(item.product_id)) {
                 throw new AppError(400, `items[${i}].product_id must be a UUID`, "VALIDATION_ERROR");
             }
-            if (typeof item.quantity !== "number" || !Number.isInteger(item.quantity) || item.quantity <= 0) {
+            // A line carrying an existing purchase_items id (editing a bill that already moved stock) keeps its stored quantity, which can be
+            // fractional; the repository rejects any change to it. New lines must be whole numbers.
+            const keepsStoredQty = typeof item.id === "string" && isUUID(item.id);
+            if (typeof item.quantity !== "number" || !Number.isFinite(item.quantity) || item.quantity <= 0 || (!keepsStoredQty && !Number.isInteger(item.quantity))) {
                 throw new AppError(400, `items[${i}].quantity must be a positive whole number`, "VALIDATION_ERROR");
             }
             if (typeof item.purchase_price !== "number" || !Number.isFinite(item.purchase_price) || item.purchase_price < 0) {

@@ -53,6 +53,241 @@ async function withPaymentStatus(rows: any[], supplierId: string, salonId: strin
     });
 }
 
+// What makes a bill "historical" (safe to edit / delete because it never changed stock)? Decided from the data itself, not from one flag:
+//   1. stock_applied = FALSE  -> recorded with "Add Past Bill".
+//   2. OR it has NO purchase order, HAS product lines, and NONE of those lines created a stock movement -> a bill imported by an earlier data
+//      migration (those rows kept the column default stock_applied = TRUE even though no stock was ever moved for them).
+// A purchase-order receipt (order_id set) or any bill whose lines moved stock is never historical, so it can't be edited or deleted here.
+// `alias` is the purchases table alias in the surrounding query.
+const historicalBillSql = (alias: string) => `(
+    ${alias}.stock_applied = FALSE
+    OR (
+        ${alias}.order_id IS NULL
+        AND EXISTS (SELECT 1 FROM purchase_items h WHERE h.purchase_id = ${alias}.id)
+        AND NOT EXISTS (SELECT 1 FROM purchase_items h WHERE h.purchase_id = ${alias}.id AND h.stock_movement_id IS NOT NULL)
+    )
+)`;
+
+// Payouts are not tied to individual bills, so the only "transaction link" a past bill has is the supplier's running balance. Refuse any
+// edit / delete that would leave the supplier's bills worth LESS than what has already been paid to them (a negative balance).
+async function assertStillCoversPayments(
+    q: { query: (sql: string, params: unknown[]) => Promise<{ rows: any[] }> },
+    supplierId: string,
+    salonId: string,
+    purchaseId: string,
+    newBillTotal: number,
+    oldBillTotal: number,
+): Promise<void> {
+    if (newBillTotal >= oldBillTotal) return;   // not reducing what is owed, so nothing to protect
+    const { rows } = await q.query(
+        `SELECT
+            (SELECT COALESCE(SUM(total_amount), 0)::float8 FROM purchases WHERE supplier_id = $1 AND salon_id = $2 AND id <> $3) AS others,
+            (SELECT COALESCE(SUM(amount), 0)::float8 FROM supplier_payments WHERE supplier_id = $1 AND salon_id = $2) AS paid`,
+        [supplierId, salonId, purchaseId],
+    );
+    const others = Number(rows[0].others) || 0;
+    const paid = Number(rows[0].paid) || 0;
+    if (others + newBillTotal < paid - 0.005) {
+        throw new AppError(
+            409,
+            `Cannot reduce or delete this bill: ${paid.toFixed(2)} has already been paid to this supplier, which is more than the remaining bills (${(others + newBillTotal).toFixed(2)}) would cover. Remove or adjust the payout first.`,
+            "BILL_LINKED_TO_PAYMENTS",
+        );
+    }
+}
+
+type Tx = { query: (sql: string, params?: unknown[]) => Promise<{ rows: any[] }> };
+
+const money = (n: number) => Math.round(n * 100) / 100;
+
+/**
+ * EDIT a bill that already moved stock (a PO receipt or a direct purchase). Only what can change WITHOUT touching stock is allowed: bill date,
+ * bill number, notes and each line's price + tax. Products and quantities must match what was received, because changing them would mean moving
+ * stock (do that by deleting the bill, which reverses the stock, and receiving again). Lines are matched by their own id, so nothing is re-created.
+ * The money columns on the linked stock_movements / stock_ledger rows are kept in step so reports never disagree with the bill.
+ */
+async function updateStockedBill(
+    tx: Tx,
+    bill: { id: string; supplier_id: string; total_amount: number; purchase_number: string },
+    data: Omit<CreateHistoricalPurchaseDTO, "supplier_id">,
+    salonId: string,
+): Promise<{ purchase: Purchase }> {
+    const LOCKED = "This bill already added stock, so its products and quantities cannot be changed here. You can edit the bill date, bill number, notes, prices and tax. To change quantities, delete the bill (stock is reversed) and receive it again.";
+    const { rows: lines } = await tx.query(
+        `SELECT id, product_id, quantity::float8 AS quantity, stock_movement_id FROM purchase_items WHERE purchase_id = $1`,
+        [bill.id],
+    );
+    if (data.items.length !== lines.length) throw new AppError(409, LOCKED, "BILL_STOCK_LOCKED");
+    const byId = new Map(lines.map((l: any) => [l.id, l]));
+    const seen = new Set<string>();
+    for (const it of data.items) {
+        const line: any = it.id ? byId.get(it.id) : undefined;
+        if (!line || seen.has(line.id) || line.product_id !== it.product_id || Math.abs(line.quantity - it.quantity) > 0.0005) {
+            throw new AppError(409, LOCKED, "BILL_STOCK_LOCKED");
+        }
+        seen.add(line.id);
+    }
+
+    const newTotal = money(data.items.reduce((s, l) => s + money(l.quantity * l.purchase_price * (1 + (l.tax_percent ?? 0) / 100)), 0));
+    await assertStillCoversPayments(tx, bill.supplier_id, salonId, bill.id, newTotal, Number(bill.total_amount) || 0);
+
+    const perProduct = new Map<string, number>();
+    for (const l of lines) perProduct.set(l.product_id, (perProduct.get(l.product_id) ?? 0) + 1);
+
+    const items: PurchaseItem[] = [];
+    for (const it of data.items) {
+        const line: any = byId.get(it.id as string);
+        const tax = it.tax_percent ?? 0;
+        const lineTotal = money(it.quantity * it.purchase_price * (1 + tax / 100));
+        const { rows } = await tx.query(
+            `UPDATE purchase_items SET purchase_price = $1, tax_percent = $2, total_price = $3 WHERE id = $4 RETURNING *`,
+            [it.purchase_price, tax, lineTotal, line.id],
+        );
+        items.push(rows[0]);
+        if (line.stock_movement_id) {
+            await tx.query(
+                `UPDATE stock_movements SET unit_price = $1, total_amount = $2 WHERE id = $3`,
+                [it.purchase_price, money(it.quantity * it.purchase_price), line.stock_movement_id],
+            );
+        }
+        // The ledger row has no link to the line, so match it by bill + product; skipped when one bill carries the product twice (ambiguous).
+        if (perProduct.get(line.product_id) === 1) {
+            await tx.query(
+                `UPDATE stock_ledger SET unit_cost = $1, updated_at = NOW()
+                  WHERE salon_id = $2 AND reference = $3 AND product_id = $4 AND transaction_type = 'purchase'`,
+                [it.purchase_price, salonId, bill.purchase_number, line.product_id],
+            );
+        }
+    }
+
+    const { rows: updated } = await tx.query(
+        `UPDATE purchases SET purchase_date = $1, bill_number = $2, notes = $3, total_amount = $4, updated_at = NOW()
+          WHERE id = $5 AND salon_id = $6 RETURNING *`,
+        [data.purchase_date, data.bill_number ?? null, data.notes ?? null, newTotal, bill.id, salonId],
+    );
+    return { purchase: { ...updated[0], items } };
+}
+
+/**
+ * DELETE a bill that already moved stock, by REVERSING it, all in the caller's transaction:
+ *  - products.amount goes back down by what the bill added (refused, with the numbers, if that stock has already been used or sold);
+ *  - a stock_ledger 'adjustment_out' row is written per line, so the ledger shows the purchase AND its reversal (nothing is rewritten);
+ *  - the 'in' stock_movements rows of the bill are removed, so Stock History / Purchase reports stop counting it;
+ *  - for a purchase-order receipt, the quantities it recorded on the order are given back (back to pending) and the order status is recomputed;
+ *  - then the bill and its lines are deleted. Supplier totals / balances are computed live from purchases, so they follow automatically.
+ */
+async function deleteStockedBill(
+    tx: Tx,
+    bill: { id: string; supplier_id: string; total_amount: number; purchase_number: string; order_id: string | null },
+    salonId: string,
+    userId: string | null,
+): Promise<void> {
+    await assertStillCoversPayments(tx, bill.supplier_id, salonId, bill.id, 0, Number(bill.total_amount) || 0);
+
+    const { rows: lines } = await tx.query(
+        `SELECT id, product_id, quantity::float8 AS quantity, purchase_price::float8 AS purchase_price, stock_movement_id
+           FROM purchase_items WHERE purchase_id = $1 ORDER BY created_at ASC`,
+        [bill.id],
+    );
+
+    // Lock every product once, in a fixed order (same rule as create(): no deadlocks between two concurrent bills).
+    const productIds = Array.from(new Set(lines.map((l: any) => l.product_id as string))).sort();
+    const running = new Map<string, { amount: number; perPack: number; name: string }>();
+    for (const pid of productIds) {
+        const { rows } = await tx.query(
+            `SELECT COALESCE(amount, 0)::float8 AS amount, bottle_size, name FROM products WHERE id = $1 AND salon_id = $2 FOR UPDATE`,
+            [pid, salonId],
+        );
+        if (!rows.length) continue;   // product since removed: nothing to take back
+        const bottle = Number(rows[0].bottle_size) || 0;
+        running.set(pid, { amount: Number(rows[0].amount) || 0, perPack: bottle > 0 ? bottle : 1, name: rows[0].name });
+    }
+
+    // Refuse BEFORE changing anything if the stock this bill added is no longer on the shelf.
+    const needed = new Map<string, number>();
+    for (const l of lines) {
+        const r = running.get(l.product_id);
+        if (r) needed.set(l.product_id, (needed.get(l.product_id) ?? 0) + l.quantity * r.perPack);
+    }
+    for (const [pid, base] of needed) {
+        const r = running.get(pid)!;
+        if (r.amount + 0.0005 < base) {
+            throw new AppError(
+                409,
+                `Cannot delete this bill: "${r.name}" has only ${r.amount / r.perPack} in stock, but this bill added ${base / r.perPack} and it has already been used or sold. Adjust the stock first or edit the bill instead.`,
+                "INSUFFICIENT_STOCK_TO_REVERSE",
+            );
+        }
+    }
+
+    // The branch the original receipt was booked to (stock_ledger.branch_id is NOT NULL).
+    const { rows: branchRows } = await tx.query(
+        `SELECT branch_id FROM stock_ledger WHERE salon_id = $1 AND reference = $2 AND transaction_type = 'purchase' LIMIT 1`,
+        [salonId, bill.purchase_number],
+    );
+    const branchId: string | null = branchRows[0]?.branch_id ?? null;
+
+    for (const l of lines) {
+        const r = running.get(l.product_id);
+        if (!r) continue;
+        const baseQty = l.quantity * r.perPack;
+        r.amount = Math.max(0, r.amount - baseQty);
+        await tx.query(`UPDATE products SET amount = $1, updated_at = NOW() WHERE id = $2 AND salon_id = $3`, [r.amount, l.product_id, salonId]);
+        if (branchId) {
+            await tx.query(
+                `INSERT INTO stock_ledger (salon_id, branch_id, product_id, transaction_type, reference, quantity, unit_cost, balance_after, supplier_id, reason, created_by)
+                 VALUES ($1, $2, $3, 'adjustment_out', $4, $5, $6, $7, $8, $9, $10)`,
+                [salonId, branchId, l.product_id, `Reversal of ${bill.purchase_number}`, -baseQty, l.purchase_price, r.amount, bill.supplier_id,
+                 "Supplier bill deleted: stock reversed", userId],
+            );
+        }
+    }
+
+    // Purchase order: hand the quantities back so the order shows them as pending again.
+    if (bill.order_id) {
+        await tx.query(`SELECT id FROM orders WHERE id = $1 FOR UPDATE`, [bill.order_id]);
+        const { rows: logs } = await tx.query(`SELECT id FROM order_receiving_log WHERE purchase_id = $1`, [bill.id]);
+        if (logs.length) {
+            const logIds = logs.map((x: any) => x.id);
+            const { rows: logItems } = await tx.query(
+                `SELECT order_item_id, received_qty::float8 AS received_qty, damaged_qty::float8 AS damaged_qty, rejected_qty::float8 AS rejected_qty
+                   FROM order_receiving_log_items WHERE log_id = ANY($1::uuid[]) AND order_item_id IS NOT NULL`,
+                [logIds],
+            );
+            for (const li of logItems) {
+                await tx.query(
+                    `UPDATE order_items SET received_qty = GREATEST(0, received_qty - $1), damaged_qty = GREATEST(0, damaged_qty - $2),
+                            rejected_qty = GREATEST(0, rejected_qty - $3) WHERE id = $4`,
+                    [li.received_qty, li.damaged_qty, li.rejected_qty, li.order_item_id],
+                );
+            }
+            await tx.query(`DELETE FROM order_receiving_log WHERE id = ANY($1::uuid[])`, [logIds]);
+        } else {
+            // Older receipts without a delivery log: give back each line's quantity on the matching order line.
+            for (const l of lines) {
+                await tx.query(
+                    `UPDATE order_items SET received_qty = GREATEST(0, received_qty - $1)
+                      WHERE id = (SELECT id FROM order_items WHERE order_id = $2 AND product_id = $3 ORDER BY created_at ASC LIMIT 1)`,
+                    [l.quantity, bill.order_id, l.product_id],
+                );
+            }
+        }
+        const { rows: ord } = await tx.query(`SELECT status FROM orders WHERE id = $1`, [bill.order_id]);
+        if (ord[0] && ord[0].status !== "cancelled") {
+            const { rows: oi } = await tx.query(`SELECT qty, received_qty, damaged_qty, rejected_qty FROM order_items WHERE order_id = $1`, [bill.order_id]);
+            const accounted = (r: any) => Number(r.received_qty) + Number(r.damaged_qty) + Number(r.rejected_qty);
+            const full = oi.length > 0 && oi.every((r: any) => accounted(r) >= Number(r.qty) - 0.001);
+            const any = oi.some((r: any) => accounted(r) > 0);
+            await tx.query(`UPDATE orders SET status = $1, updated_at = NOW() WHERE id = $2`, [full ? "received" : any ? "partially_received" : "sent", bill.order_id]);
+        }
+    }
+
+    // Bill first (its lines go with it), then the movements those lines pointed at.
+    await tx.query(`DELETE FROM purchases WHERE id = $1 AND salon_id = $2`, [bill.id, salonId]);
+    const movementIds = lines.map((l: any) => l.stock_movement_id).filter(Boolean);
+    if (movementIds.length) await tx.query(`DELETE FROM stock_movements WHERE id = ANY($1::uuid[])`, [movementIds]);
+}
+
 export const purchasesRepository = {
     /**
      * Records a purchase from a supplier: one header row, one row per product
@@ -354,13 +589,24 @@ export const purchasesRepository = {
             await client.query("BEGIN");
 
             const { rows: found } = await client.query(
-                `SELECT stock_applied FROM purchases WHERE id = $1 AND salon_id = $2 FOR UPDATE`,
+                `SELECT ${historicalBillSql("pu")} AS is_historical, pu.supplier_id, pu.total_amount, pu.purchase_number
+                   FROM purchases pu WHERE pu.id = $1 AND pu.salon_id = $2 FOR UPDATE OF pu`,
                 [id, salonId],
             );
             if (!found.length) throw new AppError(404, "Bill not found", "PURCHASE_NOT_FOUND");
-            if (found[0].stock_applied !== false) {
-                throw new AppError(400, "Only past bills added with 'Add Past Bill' can be edited", "NOT_A_PAST_BILL");
+            if (found[0].is_historical !== true) {
+                // A bill that already moved stock (PO receipt / direct purchase): prices, tax, date, number and notes only; stock stays as is.
+                const result = await updateStockedBill(
+                    client,
+                    { id, supplier_id: found[0].supplier_id, total_amount: Number(found[0].total_amount) || 0, purchase_number: found[0].purchase_number },
+                    data, salonId,
+                );
+                await client.query("COMMIT");
+                return result;
             }
+            const newTotal = data.items.reduce(
+                (s, l) => s + Math.round(l.quantity * l.purchase_price * (1 + (l.tax_percent ?? 0) / 100) * 100) / 100, 0);
+            await assertStillCoversPayments(client, found[0].supplier_id, salonId, id, newTotal, Number(found[0].total_amount) || 0);
 
             const { rows: productRows } = await client.query(
                 `SELECT id FROM products WHERE id = ANY($1::uuid[]) AND salon_id = $2`,
@@ -407,14 +653,34 @@ export const purchasesRepository = {
     },
 
     /** Deletes a PAST bill (stock_applied = FALSE) and its lines (ON DELETE CASCADE). Stock is untouched, because the bill never changed it. */
-    async deleteHistorical(id: string, salonId: string): Promise<void> {
-        const { rows: found } = await pool.query(`SELECT stock_applied FROM purchases WHERE id = $1 AND salon_id = $2`, [id, salonId]);
-        if (!found.length) throw new AppError(404, "Bill not found", "PURCHASE_NOT_FOUND");
-        if (found[0].stock_applied !== false) {
-            throw new AppError(400, "Only past bills added with 'Add Past Bill' can be deleted", "NOT_A_PAST_BILL");
+    async deleteHistorical(id: string, salonId: string, userId: string | null = null): Promise<void> {
+        const client = await pool.connect();
+        try {
+            await client.query("BEGIN");
+            const { rows: found } = await client.query(
+                `SELECT ${historicalBillSql("pu")} AS is_historical, pu.supplier_id, pu.total_amount, pu.purchase_number, pu.order_id
+                   FROM purchases pu WHERE pu.id = $1 AND pu.salon_id = $2 FOR UPDATE OF pu`, [id, salonId]);
+            if (!found.length) throw new AppError(404, "Bill not found", "PURCHASE_NOT_FOUND");
+            if (found[0].is_historical !== true) {
+                // A bill that already moved stock: reverse the stock (and the purchase-order receipt) instead of just removing the row.
+                await deleteStockedBill(
+                    client,
+                    { id, supplier_id: found[0].supplier_id, total_amount: Number(found[0].total_amount) || 0, purchase_number: found[0].purchase_number, order_id: found[0].order_id ?? null },
+                    salonId, userId,
+                );
+                await client.query("COMMIT");
+                return;
+            }
+            await assertStillCoversPayments(client, found[0].supplier_id, salonId, id, 0, Number(found[0].total_amount) || 0);
+            // The guard is repeated in the DELETE itself so a row can never be removed unless it is still historical.
+            await client.query(`DELETE FROM purchases pu WHERE pu.id = $1 AND pu.salon_id = $2 AND ${historicalBillSql("pu")}`, [id, salonId]);
+            await client.query("COMMIT");
+        } catch (err) {
+            await client.query("ROLLBACK");
+            throw err;
+        } finally {
+            client.release();
         }
-        // The guard is repeated in the DELETE itself so a row can never be removed unless it is still a past bill.
-        await pool.query(`DELETE FROM purchases WHERE id = $1 AND salon_id = $2 AND stock_applied = FALSE`, [id, salonId]);
     },
 
     async list(filters: ListPurchaseFilters, salonId: string): Promise<{ data: Purchase[]; total: number }> {
@@ -457,6 +723,7 @@ export const purchasesRepository = {
 
         const { rows } = await pool.query(
             `SELECT pu.*, sup.name AS supplier_name, po.order_number AS po_number,
+                    ${historicalBillSql("pu")} AS is_historical,
                     NULLIF(TRIM(CONCAT(rb.first_name, ' ', COALESCE(rb.last_name, ''))), '') AS received_by_name,
                     (SELECT COUNT(*) FROM purchase_items pi WHERE pi.purchase_id = pu.id)::int AS item_count,
                     (SELECT COALESCE(SUM(pi.quantity), 0) FROM purchase_items pi WHERE pi.purchase_id = pu.id)::float8 AS total_quantity,
@@ -642,6 +909,7 @@ export const purchasesRepository = {
     async getById(id: string, salonId: string): Promise<Purchase | null> {
         const { rows: purchaseRows } = await pool.query(
             `SELECT pu.*, sup.name AS supplier_name, po.order_number AS po_number,
+                    ${historicalBillSql("pu")} AS is_historical,
                     NULLIF(TRIM(CONCAT(rb.first_name, ' ', COALESCE(rb.last_name, ''))), '') AS received_by_name
                FROM purchases pu
                LEFT JOIN suppliers sup ON sup.id = pu.supplier_id
