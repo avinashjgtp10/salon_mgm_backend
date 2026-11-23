@@ -10,7 +10,7 @@ import { sendSuccess } from "../utils/response.util";
 import { uploadAvatarToS3 } from "../utils/avatar.upload";
 import { clientsService } from "./clients.service";
 import { clientsRepository } from "./clients.repository";
-import { ClientsListQuery, CreateClientBody, UpdateClientBody, CampaignFilterParams, PackageMembershipFilter, BlockedStatusFilter } from "./clients.types";
+import { ClientsListQuery, CreateClientBody, UpdateClientBody, CampaignFilterParams, PackageMembershipFilter, BlockedStatusFilter, DatesSavedFilter } from "./clients.types";
 import pool from "../../config/database";
 import { resolveClientExportColumns, buildClientExportRows } from "./clients.export-columns";
 import { getSalonCurrency, formatMoneyAscii, dateLocale } from "../../config/currency";
@@ -66,6 +66,12 @@ const parseBlockedStatusFilter = (v: unknown): BlockedStatusFilter | undefined =
     return s === "blocked" || s === "unblocked" ? s : undefined;
 };
 
+const DATES_SAVED_VALUES = new Set(["has_birthday", "has_anniversary", "has_both", "has_neither"]);
+const parseDatesSavedFilter = (v: unknown): DatesSavedFilter | undefined => {
+    const s = String(v ?? "").trim();
+    return DATES_SAVED_VALUES.has(s) ? (s as DatesSavedFilter) : undefined;
+};
+
 export const clientsController = {
     // GET /api/v1/clients
     async list(req: AuthRequest, res: Response, next: NextFunction) {
@@ -103,6 +109,7 @@ export const clientsController = {
                 max_sales: parseMoney(req.query.max_sales),
                 package_membership: parsePackageMembershipFilter(req.query.package_membership),
                 blocked_status: parseBlockedStatusFilter(req.query.blocked_status),
+                dates_saved: parseDatesSavedFilter(req.query.dates_saved),
                 fields: req.query.fields === "list" ? "list" : undefined,
             };
             const raw = await clientsService.list(q, salonId);
@@ -317,6 +324,7 @@ export const clientsController = {
                 max_sales: parseMoney(req.query.max_sales),
                 package_membership: parsePackageMembershipFilter(req.query.package_membership),
                 blocked_status: parseBlockedStatusFilter(req.query.blocked_status),
+                dates_saved: parseDatesSavedFilter(req.query.dates_saved),
             };
             const data = await clientsService.list(q, salonId);
             const rows = data.items.map((c: any) => ({
