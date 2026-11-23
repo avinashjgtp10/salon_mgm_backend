@@ -6,7 +6,7 @@ export const salonSubscriptionRepository = {
         const { rows } = await pool.query(
             `SELECT id, name, price, billing_cycle
              FROM subscription_plans
-             WHERE is_active = TRUE
+             WHERE is_active = TRUE AND slug NOT LIKE 'duration-%'
              ORDER BY name ASC, price ASC`
         );
         return rows;

@@ -13,6 +13,7 @@ import aiCredentialsRoutes from "../ai-credentials/ai-credentials.routes";
 import modulePlansRoutes from "../module-plans/module-plans.routes";
 import salonSubscriptionRoutes from "../salon-subscription/salon-subscription.routes";
 import planPricingRoutes from "../plan-pricing/plan-pricing.routes";
+import subscriptionDurationRoutes from "../subscription-durations/subscription-durations.routes";
 import countryPricingRoutes from "../plan-pricing/country-pricing.routes";
 import paymentTrackingRoutes from "../payment-tracking/payment-tracking.routes";
 import paymentGatewayRoutes from "../payment-gateway/payment-gateway.routes";
@@ -46,6 +47,8 @@ router.use("/ai-credentials", aiCredentialsRoutes);
 router.use("/module-plans", modulePlansRoutes);
 router.use("/salon-subscription", salonSubscriptionRoutes);
 router.use("/plan-pricing", planPricingRoutes);
+// Dynamic subscription durations: the purchasable 3 / 6 / 12 month or custom options per plan, with their price and GST.
+router.use("/subscription-durations", subscriptionDurationRoutes);
 router.use("/country-pricing", countryPricingRoutes);
 // Manual customer / website payments, money added and the combined ledger (separate from Razorpay).
 router.use("/payment-tracking", paymentTrackingRoutes);
