@@ -1,6 +1,36 @@
 import pool from "../../config/database";
 import { Permission, Role } from "./roles.types";
 
+/**
+ * Anything that can run a query: the shared pool, or one client checked out of
+ * it. The bulk writers below take one so the caller can run them inside its own
+ * transaction — BEGIN/COMMIT issued on `pool` would land on arbitrary
+ * connections and silently not be a transaction at all.
+ */
+export type Queryable = {
+    query: (text: string, values?: unknown[]) => Promise<{ rows: any[]; rowCount: number | null }>;
+};
+
+export type AuditLogEntry = {
+    salonId: string;
+    actorUserId: string;
+    targetType: "staff" | "role";
+    targetId: string;
+    action: string;
+    permissionKey?: string | null;
+    beforeValue?: unknown;
+    afterValue?: unknown;
+    source: "role_default" | "individual_override" | "role_edit" | "role_assignment";
+    ipAddress?: string | null;
+    userAgent?: string | null;
+};
+
+/** `($1,$2,$3),($4,$5,$6),…` — placeholder tuples for a multi-row INSERT. */
+const placeholders = (rows: number, width: number, offset = 0) =>
+    Array.from({ length: rows }, (_, r) =>
+        `(${Array.from({ length: width }, (_, c) => `$${offset + r * width + c + 1}`).join(",")})`
+    ).join(",");
+
 export const rolesRepository = {
     // ── Global permission catalog ───────────────────────────────────────────
     async listPermissions(): Promise<Permission[]> {
@@ -163,6 +193,82 @@ export const rolesRepository = {
 
     async deleteAllStaffOverrides(staffId: string): Promise<void> {
         await pool.query(`DELETE FROM staff_permission_overrides WHERE staff_id = $1`, [staffId]);
+    },
+
+    // ── Bulk writers ─────────────────────────────────────────────────────────
+    // One statement per operation instead of one per key. Saving every
+    // permission for a staff member used to issue 2 queries per key (upsert +
+    // audit row); at ~390 keys that is ~780 sequential round trips, which ran
+    // well past the mobile client's 15s timeout and, with no transaction,
+    // left half-granted staff behind. Each takes a `db` so the caller can run
+    // them on one client inside a real transaction.
+
+    /** Upserts many (staff_id, permission_key) → allowed rows in one statement. */
+    async setStaffOverridesBulk(
+        staffId: string,
+        entries: { key: string; allowed: boolean }[],
+        setBy: string | null,
+        db: Queryable = pool
+    ): Promise<void> {
+        if (entries.length === 0) return;
+        const values = entries.flatMap((e) => [staffId, e.key, e.allowed, setBy]);
+        await db.query(
+            `INSERT INTO staff_permission_overrides (staff_id, permission_key, allowed, set_by)
+             VALUES ${placeholders(entries.length, 4)}
+             ON CONFLICT (staff_id, permission_key)
+             DO UPDATE SET allowed = EXCLUDED.allowed, set_by = EXCLUDED.set_by, updated_at = NOW()`,
+            values
+        );
+    },
+
+    /** Clears the overrides for `keys`, restoring inheritance from the role. */
+    async deleteStaffOverridesBulk(staffId: string, keys: string[], db: Queryable = pool): Promise<void> {
+        if (keys.length === 0) return;
+        await db.query(
+            `DELETE FROM staff_permission_overrides WHERE staff_id = $1 AND permission_key = ANY($2::varchar[])`,
+            [staffId, keys]
+        );
+    },
+
+    /** Upserts many (role_id, permission_key) → allowed rows in one statement. */
+    async setRolePermissionsBulk(
+        roleId: string,
+        entries: { key: string; allowed: boolean }[],
+        db: Queryable = pool
+    ): Promise<void> {
+        if (entries.length === 0) return;
+        const values = entries.flatMap((e) => [roleId, e.key, e.allowed]);
+        await db.query(
+            `INSERT INTO role_permissions (role_id, permission_key, allowed)
+             VALUES ${placeholders(entries.length, 3)}
+             ON CONFLICT (role_id, permission_key) DO UPDATE SET allowed = EXCLUDED.allowed`,
+            values
+        );
+    },
+
+    /** Writes many audit rows in one statement. Same columns as insertAuditLog. */
+    async insertAuditLogs(entries: AuditLogEntry[], db: Queryable = pool): Promise<void> {
+        if (entries.length === 0) return;
+        const values = entries.flatMap((entry) => [
+            entry.salonId,
+            entry.actorUserId,
+            entry.targetType,
+            entry.targetId,
+            entry.action,
+            entry.permissionKey ?? null,
+            entry.beforeValue !== undefined ? JSON.stringify(entry.beforeValue) : null,
+            entry.afterValue !== undefined ? JSON.stringify(entry.afterValue) : null,
+            entry.source,
+            entry.ipAddress ?? null,
+            entry.userAgent ?? null,
+        ]);
+        await db.query(
+            `INSERT INTO permission_audit_log (
+                salon_id, actor_user_id, target_type, target_id, action, permission_key,
+                before_value, after_value, source, ip_address, user_agent
+             ) VALUES ${placeholders(entries.length, 11)}`,
+            values
+        );
     },
 
     async insertAuditLog(entry: {
