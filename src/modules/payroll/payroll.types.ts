@@ -41,6 +41,9 @@ export type StaffPayrollSummary = {
     staff_designation: string | null;
     base_salary: number;
     compensation_type: string;
+    // Only meaningful when compensation_type === "hourly": base_salary = hours_worked x hourly_rate.
+    hourly_rate: number | null;
+    hours_worked: number | null;
     commission_by_category: CommissionByCategory;
     commission_total: number;
     tips_total: number;
@@ -56,6 +59,26 @@ export type StaffPayrollSummary = {
     payment_date: string | null;
     payroll_entry_id: string | null;
     adjustments: PayrollAdjustment[];
+};
+
+// Everything the staff Payroll "Salary Statement" page prints, in one response.
+export type PayrollStatement = {
+    summary: StaffPayrollSummary;
+    salon: { business_name: string; logo_url: string | null; email: string | null; phone: string | null; currency: string | null };
+    branch: { name: string | null; address: string | null; phone: string | null; email: string | null };
+    employee: { name: string; designation: string | null; employee_code: string | null; joined_date: string | null };
+    document: { payroll_id: string; generated_on: string };
+    attendance: {
+        scheduled_days: number;
+        working_days: number;
+        half_days: number;
+        leave_days: number;
+        absent_days: number;
+        late_marks: number;
+        total_hours: number;
+    };
+    payment: { amount: number; method: string; reference: string | null; paid_at: string; receipt_no: string } | null;
+    amount_in_words: string | null;
 };
 
 export type PayrollAdjustment = {
