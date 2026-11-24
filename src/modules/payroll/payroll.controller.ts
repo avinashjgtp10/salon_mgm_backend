@@ -84,6 +84,16 @@ export const payrollController = {
         } catch (err) { return next(err); }
     },
 
+    async statement(req: AuthRequest, res: Response, next: NextFunction) {
+        try {
+            const salonId = getSalonId(req);
+            const data = await payrollService.getStatement(
+                salonId, String(req.params.staffId), String(req.query.period_start), String(req.query.period_end)
+            );
+            return sendSuccess(res, 200, data, "Payroll statement fetched successfully");
+        } catch (err) { return next(err); }
+    },
+
     async history(req: AuthRequest, res: Response, next: NextFunction) {
         try {
             const salonId = getSalonId(req);
