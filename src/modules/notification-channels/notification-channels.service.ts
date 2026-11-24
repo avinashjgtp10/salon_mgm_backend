@@ -266,10 +266,6 @@ export const notificationChannelsService = {
 
   async dispatchSms(payload: AutomationTriggerPayload, eventType: DefaultPurchaseEventType, namedVars: Record<string, string>): Promise<void> {
     try {
-      if (payload.clientId) {
-        const client = await notificationChannelsRepository.findClientContact(payload.clientId)
-        if (client && client.sms_notifications === false) return
-      }
       if (!payload.phone || payload.phone.trim().length < 5) return
 
       const tpl = await notificationChannelsRepository.findOrSeedTemplate(payload.salonId, eventType, "SMS")
@@ -309,7 +305,6 @@ export const notificationChannelsService = {
       if (payload.clientId) {
         const client = await notificationChannelsRepository.findClientContact(payload.clientId)
         if (client) {
-          if (client.email_notifications === false) return
           to = to ?? client.email
         }
       }

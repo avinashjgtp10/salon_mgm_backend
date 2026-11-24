@@ -391,7 +391,7 @@ async function processOne(id: string): Promise<void> {
             t.id AS template_id, t.name AS template_name, t.language, t.status AS template_status,
             t.body_text, t.header_type, t.header_media_id, t.buttons,
             to_jsonb(t)->>'lto_text' AS lto_text, to_jsonb(t)->'carousel' AS carousel,
-            c.phone_number, c.phone_country_code, c.whatsapp_marketing,
+            c.phone_number, c.phone_country_code,
             COALESCE(NULLIF(c.full_name, ''), NULLIF(TRIM(COALESCE(c.first_name,'') || ' ' || COALESCE(c.last_name,'')), '')) AS client_name,
             sal.business_name AS salon_name
      FROM service_chain_messages m
@@ -418,8 +418,6 @@ async function processOne(id: string): Promise<void> {
     if (row.enrolment_status !== 'active') return await setOutcome(id, 'CANCELLED', { reason: 'Journey is no longer active' })
     if (!row.is_active || row.deleted_at) return await setOutcome(id, 'CANCELLED', { reason: 'Chain is paused or deleted' })
     if (!String(row.phone_number ?? '').trim()) return await setOutcome(id, 'SKIPPED', { reason: 'Client has no phone number' })
-    // Chain messages are marketing templates: an explicit opt-out always wins.
-    if (row.whatsapp_marketing === false) return await setOutcome(id, 'SKIPPED', { reason: 'Client opted out of WhatsApp marketing' })
     // A sub-step follows its step. While that step is still waiting (scheduled, postponed or being sent) the sub-step waits
     // too; if the step never went out (skipped, failed, cancelled), neither does this.
     if (row.parent_step_id && ['SCHEDULED', 'POSTPONED', 'SENDING'].includes(row.parent_status)) {

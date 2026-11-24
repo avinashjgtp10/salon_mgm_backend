@@ -2,6 +2,15 @@ import pool from '../../../../config/database'
 import { WhatsAppConfig, SaveConfigBody } from './config.types'
 export const configRepository = {
 
+  // Display name of a salon (for the credentials download's file name / header).
+  async findSalonName(salonId: string): Promise<string | null> {
+    const { rows } = await pool.query(
+      `SELECT COALESCE(business_name, slug) AS name FROM salons WHERE id = $1`,
+      [salonId]
+    )
+    return rows[0]?.name ?? null
+  },
+
   async findBySalonId(salonId: string): Promise<WhatsAppConfig | null> {
     const { rows } = await pool.query(
       `SELECT * FROM whatsapp_configs WHERE salon_id = $1`,
