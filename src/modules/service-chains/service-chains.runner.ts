@@ -63,7 +63,7 @@ async function findNewPurchases(limit = 300) {
      JOIN appointments a ON a.salon_id = ch.salon_id
      CROSS JOIN LATERAL jsonb_array_elements(COALESCE(a.services, '[]'::jsonb)) AS item
      JOIN LATERAL (
-       SELECT MIN(p.created_at) AS first_paid FROM payments p
+       SELECT MIN(p.created_at)::timestamptz AS first_paid FROM payments p
        WHERE p.appointment_id = a.id AND p.status IN ('partial', 'completed')
      ) fp ON fp.first_paid IS NOT NULL
      WHERE ch.is_active AND ch.deleted_at IS NULL AND ch.starting_service_id IS NOT NULL
@@ -232,7 +232,7 @@ async function checkEligibility(row: any, eagerOnly = false): Promise<Eligibilit
        WHERE a.salon_id = $1 AND a.client_id = $2 AND a.deleted_at IS NULL AND a.id <> $3 AND item->>'service_id' = $4)
      SELECT
        EXISTS (SELECT 1 FROM m WHERE EXISTS (SELECT 1 FROM payments p WHERE p.appointment_id = m.id
-                 AND p.status IN ('partial','completed') AND p.created_at > $5)) AS bought,
+                 AND p.status IN ('partial','completed') AND p.created_at > $5::timestamptz)) AS bought,
        EXISTS (SELECT 1 FROM m WHERE m.status NOT IN ('cancelled','no-show','deleted')
                  AND m.scheduled_at > $5 AND m.scheduled_at <= NOW() AND (m.item_status = 'completed' OR m.status = 'paid')) AS completed,
        (SELECT m.id FROM m WHERE m.status IN ('booked','partial','paid') AND m.scheduled_at > NOW() ORDER BY m.scheduled_at LIMIT 1) AS upcoming_id,

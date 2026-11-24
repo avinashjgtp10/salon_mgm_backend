@@ -165,6 +165,22 @@ export const clientsRepository = {
             where.push(`NOT ${hasActiveMembershipSql}`);
         }
 
+        // Saved special dates. Plain literals only (nothing user-supplied reaches the SQL). A birthdate counts as saved when the day/month text
+        // is not empty; an anniversary when the date is set.
+        const hasBirthdaySql = `(c.birthday_day_month IS NOT NULL AND BTRIM(c.birthday_day_month) <> '')`;
+        const hasAnniversarySql = `c.anniversary IS NOT NULL`;
+        if (q.dates_saved === "has_birthday") {
+            where.push(hasBirthdaySql);
+        } else if (q.dates_saved === "has_anniversary") {
+            where.push(hasAnniversarySql);
+        } else if (q.dates_saved === "has_both") {
+            where.push(hasBirthdaySql);
+            where.push(hasAnniversarySql);
+        } else if (q.dates_saved === "has_neither") {
+            where.push(`NOT ${hasBirthdaySql}`);
+            where.push(`NOT ${hasAnniversarySql}`);
+        }
+
         const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
 
         // clients.total_sales is a dead column, never written anywhere — every
