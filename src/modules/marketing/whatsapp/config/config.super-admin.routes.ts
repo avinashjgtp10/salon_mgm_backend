@@ -44,6 +44,8 @@ router.post('/otp/verify', async (req, res, next) => {
 })
 
 router.get('/',               configController.getConfig)
+// Download everything saved for this salon (secrets included) - needs a fresh emailed code, used up by the download.
+router.get('/download',       configOtpService.requireVerifiedFor('download WhatsApp credentials'), configController.downloadConfig)
 router.put('/',               configOtpService.requireVerified, validateSaveConfig, configController.saveConfig)
 router.delete('/',            configOtpService.requireVerified, configController.deleteConfig)
 router.post('/test',          configController.testConnection)

@@ -48,6 +48,8 @@ export const servicesController = {
         online_booking: q.online_booking,
         commissions: q.commissions,
         resource_requirements: q.resource_requirements,
+        sort_by: typeof q.sort_by === "string" ? q.sort_by : undefined,
+        sort_order: typeof q.sort_order === "string" ? (q.sort_order.toUpperCase() === "ASC" ? "ASC" : "DESC") : undefined,
         page: q.page ? Number(q.page) : undefined,
         limit: q.limit ? Number(q.limit) : undefined,
       };

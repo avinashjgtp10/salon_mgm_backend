@@ -86,15 +86,8 @@ async function runScheduledJobs(): Promise<void> {
     }
   }
 
-  // ── 10:00 AM IST: Pending Payment Reminders (rolling preview) ─────────────
-  if (hour === 10 && minute < 5) {
-    const today = getTodayIST()
-    if (lastRunDate['10am'] !== today) {
-      lastRunDate['10am'] = today
-      logger.info('[WA-AUTO-SCHEDULER] Running 10AM IST payment reminder preview job...')
-      await waScheduledMessagesService.upsertGroupBPreview('pending_payment_reminder')
-    }
-  }
+  // The 10:00 AM IST Pending Payment Reminder job was removed on purpose: it
+  // queued a reminder for every non-completed (draft) sale, paid or not.
 }
 
 export function startAutomationScheduler(): void {

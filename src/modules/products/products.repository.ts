@@ -19,6 +19,32 @@ const PRODUCT_COLUMNS_P = `p.id, p.name, p.barcode, p.brand_id, p.category_id, p
 
 // ─── Products Repository ──────────────────────────────────────────────────────
 
+// What each sortable column of the Products list orders by (`p` = the table prefix: "" or "p."). The list pages on the
+// server, so the order is decided here — sorting only the rows already on screen reorders one page, not the catalogue.
+// Several columns show a DERIVED value, so the SQL mirrors what the grid displays rather than the raw column.
+const PRODUCT_SORTS: Record<string, (p: string) => string> = {
+    name: (p) => `LOWER(${p}name)`,
+    created_at: (p) => `${p}created_at`,
+    supply_price: (p) => `${p}supply_price`,
+    retail_price: (p) => `${p}retail_price`,
+    // "Retail price" column: the retail price, or the supply price when no retail price is set.
+    price: (p) => `COALESCE(NULLIF(${p}retail_price, 0), NULLIF(${p}supply_price, 0), ${p}retail_price, ${p}supply_price)`,
+    // "Stock Left" column: bottles for a bottle-tracked product (a part-used bottle still counts as one), else the amount.
+    stock: (p) => `CASE WHEN ${p}bottle_size > 0 THEN CEIL(COALESCE(${p}amount, 0) / ${p}bottle_size) ELSE COALESCE(${p}amount, 0) END`,
+    product_type: (p) => `${p}product_type`,
+    // The grid shows the category / supplier NAME; the table only holds their ids.
+    category: (p) => `LOWER((SELECT sort_cat.name FROM service_categories sort_cat WHERE sort_cat.id = ${p}category_id))`,
+    supplier: (p) => `LOWER((SELECT sort_sup.name FROM suppliers sort_sup WHERE sort_sup.id = ${p}supplier_id))`,
+};
+
+/** The ORDER BY for a products list. Unknown / missing sort_by = newest first. Nulls last either way, and `id` last
+ *  so equal rows keep a fixed order — otherwise paging through ties can repeat or skip rows between pages. */
+const buildProductOrderBy = (filters: ProductListFilters, p: string): string => {
+    const expr = PRODUCT_SORTS[filters.sort_by ?? "created_at"] ?? PRODUCT_SORTS.created_at;
+    const dir = filters.sort_order === "ASC" ? "ASC" : "DESC";
+    return `ORDER BY ${expr(p)} ${dir} NULLS LAST, ${p}id`;
+};
+
 export const productsRepository = {
     async findById(id: string, salonId: string): Promise<Product | null> {
         const { rows } = await pool.query(
@@ -165,13 +191,6 @@ export const productsRepository = {
     async list(filters: ProductListFilters, salonId: string): Promise<{ data: Product[]; total: number }> {
         const { where, values } = productsRepository._buildFilterConditions(filters, salonId);
 
-        const allowedSorts: Record<string, string> = {
-            name: "name", created_at: "created_at",
-            supply_price: "supply_price", retail_price: "retail_price",
-        };
-        const orderCol = allowedSorts[filters.sort_by ?? "created_at"] ?? "created_at";
-        const orderDir = filters.sort_order === "ASC" ? "ASC" : "DESC";
-
         const page = filters.page ?? 1;
         const limit = filters.limit ?? 20;
         const offset = (page - 1) * limit;
@@ -180,7 +199,7 @@ export const productsRepository = {
         const [{ rows: countRows }, { rows }] = await Promise.all([
             pool.query(`SELECT COUNT(*) AS total FROM products ${where}`, values),
             pool.query(
-                `SELECT ${PRODUCT_COLUMNS} FROM products ${where} ORDER BY ${orderCol} ${orderDir} LIMIT $${dataIdx} OFFSET $${dataIdx + 1}`,
+                `SELECT ${PRODUCT_COLUMNS} FROM products ${where} ${buildProductOrderBy(filters, "")} LIMIT $${dataIdx} OFFSET $${dataIdx + 1}`,
                 [...values, limit, offset]
             ),
         ]);
@@ -194,13 +213,6 @@ export const productsRepository = {
     async listExport(filters: ProductListFilters, salonId: string): Promise<Product[]> {
         const { where, values } = productsRepository._buildFilterConditions(filters, salonId, "p.");
 
-        const allowedSorts: Record<string, string> = {
-            name: "name", created_at: "created_at",
-            supply_price: "supply_price", retail_price: "retail_price",
-        };
-        const orderCol = allowedSorts[filters.sort_by ?? "created_at"] ?? "created_at";
-        const orderDir = filters.sort_order === "ASC" ? "ASC" : "DESC";
-
         const { rows } = await pool.query(
             `SELECT ${PRODUCT_COLUMNS_P}, pb.name as brand_name, sc.name as category_name, sup.name as supplier_name
              FROM products p
@@ -208,7 +220,7 @@ export const productsRepository = {
              LEFT JOIN service_categories sc ON p.category_id = sc.id
              LEFT JOIN suppliers sup ON p.supplier_id = sup.id
              ${where}
-             ORDER BY p.${orderCol} ${orderDir}`,
+             ${buildProductOrderBy(filters, "p.")}`,
             values
         );
         return rows;
