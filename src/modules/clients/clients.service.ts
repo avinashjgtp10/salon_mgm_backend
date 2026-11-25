@@ -646,12 +646,12 @@ export const clientsService = {
                 occupation: null,
                 country: null,
                 avatar_url: null,
-                sms_marketing: toBool(r.smsmarketing ?? r.sms_marketing) ?? true,
-                email_marketing: toBool(r.emailmarketing ?? r.email_marketing) ?? true,
-                whatsapp_marketing: toBool(r.whatsappmarketing ?? r.whatsapp_marketing) ?? true,
-                sms_notifications: toBool(r.smsnotifications ?? r.sms_notifications) ?? true,
-                email_notifications: toBool(r.emailnotifications ?? r.email_notifications) ?? true,
-                whatsapp_notifications: toBool(r.whatsappnotifications ?? r.whatsapp_notifications) ?? false,
+                sms_marketing: true,
+                email_marketing: true,
+                whatsapp_marketing: true,
+                sms_notifications: true,
+                email_notifications: true,
+                whatsapp_notifications: false,
             };
         };
 
