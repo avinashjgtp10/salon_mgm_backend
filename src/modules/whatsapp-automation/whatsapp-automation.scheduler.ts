@@ -7,6 +7,7 @@ import logger from '../../config/logger'
 import { waScheduledMessagesService } from './wa-scheduled-messages.service'
 import { dateLocale } from "../../config/currency";
 import { runServiceChainTick } from '../service-chains/service-chains.runner'
+import { platformScheduledMessagesService } from '../platform-scheduled-messages/platform-scheduled-messages.service'
 
 let schedulerInterval: NodeJS.Timeout | null = null
 let dueTickInterval: NodeJS.Timeout | null = null
@@ -105,6 +106,9 @@ export function startAutomationScheduler(): void {
   runServiceChainTick().catch(err =>
     logger.error('[WA-AUTO-SCHEDULER] Initial service chain tick error:', err?.message)
   )
+  platformScheduledMessagesService.runRescheduledTick().catch(err =>
+    logger.error('[WA-AUTO-SCHEDULER] Initial rescheduled-reminder tick error:', err?.message)
+  )
 
   // Daily-job poll — unchanged cadence, only Group B/New Year left in it now.
   schedulerInterval = setInterval(() => {
@@ -123,6 +127,10 @@ export function startAutomationScheduler(): void {
     // Service Chains: enrol new purchases, then send whatever is due.
     runServiceChainTick().catch(err =>
       logger.error('[WA-AUTO-SCHEDULER] Service chain tick error:', err?.message)
+    )
+    // Super Meta > Scheduled Messages: subscription reminders an admin rescheduled, whose time has come.
+    platformScheduledMessagesService.runRescheduledTick().catch(err =>
+      logger.error('[WA-AUTO-SCHEDULER] Rescheduled-reminder tick error:', err?.message)
     )
   }, 5 * 60 * 1000)
 }

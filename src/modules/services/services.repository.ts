@@ -26,6 +26,7 @@ import {
   UpdateConsultationFormBody,
   UpdateServiceBody,
 } from "./services.types";
+import { assertServiceNameLength } from "./service-name.limit";
 
 // Correlated subquery, spliced into every services SELECT below — returns
 // each service's configured consumable recipe as a JSON array so callers
@@ -247,6 +248,9 @@ export const servicesRepository = {
   },
 
   async create(data: CreateServiceBody, salonId: string): Promise<Service> {
+    // The HTTP validator already checks this; it is repeated here because the services import and the package-template import call
+    // this method directly, and a name over the VARCHAR(255) column would otherwise surface as a raw database error on that row.
+    assertServiceNameLength(data.name);
     // servicesService.create() already runs an optimistic findDuplicate()
     // check before calling this — fast path, good UX for the common case.
     // But that's a plain SELECT-then-INSERT with nothing serializing it: two
@@ -341,6 +345,7 @@ export const servicesRepository = {
     ]);
 
     const raw = patch as Record<string, unknown>;
+    assertServiceNameLength(raw.name); // see create(): the column is VARCHAR(255)
     const normalized: Record<string, unknown> = {};
 
     // duration → duration_minutes

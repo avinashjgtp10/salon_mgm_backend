@@ -470,6 +470,39 @@ async verifyAccessToken(params: {
     }
   },
 
+  // Is this uploaded media id still usable? Meta forgets an upload after ~30 days (then GET answers 400 code 100 "Object ... does
+  // not exist", or 404). Only that answer means "expired": a network error, a 5xx or a bad token is rethrown, so a passing outage
+  // never makes anyone re-upload an image that is fine.
+  async isMediaAlive(accessToken: string, mediaId: string): Promise<boolean> {
+    try {
+      await http.get(`${WA_BASE_URL}/${WA_API_VERSION}/${mediaId}`, { headers: { Authorization: `Bearer ${accessToken}` } })
+      return true
+    } catch (err: any) {
+      const status = err?.response?.status
+      const code = err?.response?.data?.error?.code
+      if (status === 404 || (status === 400 && code === 100)) return false
+      throw err
+    }
+  },
+
+  // The sample image of each card of a carousel template, in card order (null where Meta has none). Lives on Meta for as long
+  // as the template does, like getTemplateHeaderExample above.
+  async getTemplateCarouselExamples(accessToken: string, metaTemplateId: string): Promise<Array<{ buffer: Buffer; mimeType: string } | null>> {
+    const res = await http.get(
+      `${WA_BASE_URL}/${WA_API_VERSION}/${metaTemplateId}`,
+      { headers: { Authorization: `Bearer ${accessToken}` }, params: { fields: 'components' } }
+    )
+    const carousel = (res.data?.components ?? []).find((c: any) => c.type === 'CAROUSEL')
+    const out: Array<{ buffer: Buffer; mimeType: string } | null> = []
+    for (const card of carousel?.cards ?? []) {
+      const url: string | undefined = (card.components ?? []).find((c: any) => c.type === 'HEADER')?.example?.header_handle?.[0]
+      if (!url) { out.push(null); continue }
+      const file = await http.get(url, { responseType: 'arraybuffer' })
+      out.push({ buffer: Buffer.from(file.data), mimeType: String(file.headers?.['content-type'] ?? 'image/jpeg') })
+    }
+    return out
+  },
+
   async testConnection(phoneNumberId: string, accessToken: string) {
     const res = await http.get(
       `${WA_BASE_URL}/${WA_API_VERSION}/${phoneNumberId}`,

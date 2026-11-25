@@ -375,6 +375,13 @@ export const payrollService = {
                 [netSalary, body.payment_method, entry.id, salonId]
             );
 
+            // The payout covers this period's commission and tips as well as the salary, so those earnings are settled in the SAME
+            // transaction: the Commission and Tip tables show them as Settled the moment the payroll shows Paid, and if either step
+            // fails the payment is rolled back too, so the three can never disagree. Only pending rows dated inside the period are
+            // touched (the same rows the payroll summary counted); anything outside the period or already settled is left alone.
+            await commissionCalculationService.settleStaffCommissionForPeriod(client, salonId, staffId, body.period_start, body.period_end, paidBy ?? null);
+            await tipCalculationService.settleStaffTipForPeriod(client, salonId, staffId, body.period_start, body.period_end, body.payment_method, paidBy ?? null);
+
             await client.query("COMMIT");
         } catch (err) {
             await client.query("ROLLBACK");

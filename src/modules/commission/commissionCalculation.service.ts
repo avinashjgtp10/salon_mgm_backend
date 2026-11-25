@@ -234,6 +234,46 @@ const commissionEarnedRepository = {
         return rowCount ?? 0;
     },
 
+    // Settles EVERY pending commission row a staff member earned between two dates (inclusive), using the caller's own database
+    // connection so it can sit inside the caller's transaction. Payroll uses this: paying a payroll period pays that period's commission
+    // too, and the Commission table must stop showing it as Pending in the same moment. The date test is the same one the payroll summary
+    // uses to pick the period's commission (earned_at::date BETWEEN start AND end), so exactly the rows that were paid are the ones settled.
+    // Rows outside the period stay pending, and rows already paid are left alone. Also writes the settlement-history row a normal Settle
+    // writes, so the history agrees with the rows.
+    async settleForPeriod(
+        db: { query: (sql: string, params?: unknown[]) => Promise<{ rows: any[] }> },
+        salonId: string,
+        staffId: string,
+        startDate: string,
+        endDate: string,
+        settledBy?: string | null
+    ): Promise<{ settledAmount: number; remainingBalance: number; rowsSettled: number }> {
+        const { rows: settled } = await db.query(
+            `UPDATE commission_earned
+                SET status = 'paid', paid_at = NOW(), updated_at = NOW()
+              WHERE salon_id = $1 AND staff_id = $2 AND status = 'pending'
+                AND earned_at::date BETWEEN $3::date AND $4::date
+          RETURNING commission_amount`,
+            [salonId, staffId, startDate, endDate]
+        );
+        if (settled.length === 0) return { settledAmount: 0, remainingBalance: 0, rowsSettled: 0 };
+
+        const settledAmount = Math.round(settled.reduce((sum: number, r: any) => sum + parseFloat(r.commission_amount), 0) * 100) / 100;
+        const { rows: left } = await db.query(
+            `SELECT COALESCE(SUM(commission_amount), 0) AS pending FROM commission_earned
+              WHERE salon_id = $1 AND staff_id = $2 AND status = 'pending'`,
+            [salonId, staffId]
+        );
+        const remainingBalance = Math.round(parseFloat(left[0].pending) * 100) / 100;
+
+        await db.query(
+            `INSERT INTO commission_settlements (salon_id, staff_id, settled_amount, remaining_balance, status, settled_by)
+             VALUES ($1,$2,$3,$4,$5,$6)`,
+            [salonId, staffId, settledAmount, remainingBalance, remainingBalance <= 0 ? "paid" : "partial", settledBy ?? null]
+        );
+        return { settledAmount, remainingBalance, rowsSettled: settled.length };
+    },
+
     // Settles `amount` against a staff member's pending commission_earned rows,
     // oldest first. A row fully covered by the remaining amount is marked paid
     // outright; a row only partially covered is split in two — the paid
@@ -1244,6 +1284,14 @@ export const commissionCalculationService = {
 
     async settleStaffCommission(salonId: string, staffId: string, amount: number, settledBy?: string | null) {
         return commissionEarnedRepository.settlePartial(salonId, staffId, amount, settledBy);
+    },
+
+    // Payroll: settle all of a staff member's pending commission for a pay period, inside the payroll payment's own transaction.
+    async settleStaffCommissionForPeriod(
+        db: Parameters<typeof commissionEarnedRepository.settleForPeriod>[0],
+        salonId: string, staffId: string, startDate: string, endDate: string, settledBy?: string | null
+    ) {
+        return commissionEarnedRepository.settleForPeriod(db, salonId, staffId, startDate, endDate, settledBy);
     },
 
     async getSettlementHistory(salonId: string, staffId: string, limit?: number) {

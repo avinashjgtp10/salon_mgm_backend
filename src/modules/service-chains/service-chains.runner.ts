@@ -10,11 +10,13 @@ import { zonedInstant } from '../attendance/staffAttendance.rules'
 import { configRepository } from '../marketing/whatsapp/config/config.repository'
 import { whatsappMetaApi } from '../marketing/whatsapp/shared/whatsapp.api'
 import { buildTemplateSendComponents, templateHasMediaHeader } from '../marketing/whatsapp/shared/template-components'
+import { templateNeedsExpiry } from '../marketing/whatsapp/shared/offer-components'
+import { ensureTemplateMediaFresh, MediaRefreshError } from '../marketing/whatsapp/shared/template-media-refresh'
 import { inboxRepository } from '../marketing/whatsapp/inbox/inbox.repository'
 import { formatPhone } from '../whatsapp-automation/whatsapp-automation.service'
 import { maskPhone } from '../utils/mask.util'
 import type { ChainVariableField } from './service-chains.types'
-import { BLOCK_CODES, decideEligibility, decidePostponed, isTemporaryFailure, nextRetryAt, type Eligibility, type PostponedState } from './service-chains.rules'
+import { BLOCK_CODES, chainOfferExpiryMs, decideEligibility, decidePostponed, isTemporaryFailure, nextRetryAt, type Eligibility, type PostponedState } from './service-chains.rules'
 
 // Append-only audit trail: one row per state change of a step. Best effort - history must never break sending.
 async function logEvent(messageId: string, event: string, toStatus: string | null, reason?: string | null, appointmentId?: string | null) {
@@ -389,7 +391,7 @@ async function processOne(id: string): Promise<void> {
             st.service_id AS step_service_id, st.skip_if_bought_days, st.variable_map, st.parent_step_id, pm.status AS parent_status,
             COALESCE(ssv.name, psv.name) AS step_service_name, csv.name AS starting_service_name,
             t.id AS template_id, t.name AS template_name, t.language, t.status AS template_status,
-            t.body_text, t.header_type, t.header_media_id, t.buttons,
+            t.body_text, t.header_type, t.header_media_id, t.buttons, t.meta_template_id,
             to_jsonb(t)->>'lto_text' AS lto_text, to_jsonb(t)->'carousel' AS carousel,
             c.phone_number, c.phone_country_code,
             COALESCE(NULLIF(c.full_name, ''), NULLIF(TRIM(COALESCE(c.first_name,'') || ' ' || COALESCE(c.last_name,'')), '')) AS client_name,
@@ -442,8 +444,25 @@ async function processOne(id: string): Promise<void> {
       return await setOutcome(id, 'FAILED', { code: 'MISSING_MEDIA_ID', message: 'Template has a media header but no media ID stored' })
     }
 
+    // An image (or carousel card) Meta has forgotten - it keeps an upload only ~30 days - is rebuilt from the template's sample
+    // before sending, instead of every message of that template failing.
+    if (templateHasMediaHeader(row) || (Array.isArray(row.carousel) && row.carousel.length > 0)) {
+      try {
+        const fresh = await ensureTemplateMediaFresh(
+          { id: row.template_id, salon_id: row.salon_id, meta_template_id: row.meta_template_id, header_type: row.header_type, header_media_id: row.header_media_id, carousel: row.carousel },
+          { phone_number_id: waConfig.phone_number_id, access_token: waConfig.access_token })
+        row.header_media_id = fresh.header_media_id
+        row.carousel = fresh.carousel
+      } catch (mediaErr: any) {
+        if (mediaErr instanceof MediaRefreshError) return await setOutcome(id, 'FAILED', { code: 'MEDIA_EXPIRED', message: mediaErr.message })
+        throw mediaErr   // a Meta / network problem: handled below like any other send failure (temporary ones are retried)
+      }
+    }
+
     const tz = await getSalonTimezone(row.salon_id)
     const variables = resolveVariables(row.variable_map, row, tz)
+    // A limited-time-offer template needs the moment the offer ends; a chain step has no setting for it (see chainOfferExpiryMs).
+    if (templateNeedsExpiry(row)) variables.offer_expires_at = String(chainOfferExpiryMs(Date.now()))
     const digits = formatPhone(String(row.phone_number), row.phone_country_code).replace(/\D/g, '')
     const to = `+${digits}`
 

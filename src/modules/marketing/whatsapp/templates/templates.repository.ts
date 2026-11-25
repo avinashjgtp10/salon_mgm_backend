@@ -93,6 +93,14 @@ export const templatesRepository = {
     return rows[0]
   },
 
+  // Carousel cards keep their image media id inside the carousel JSON; this stores the refreshed list (same cards, new ids).
+  async updateCarousel(id: string, salonId: string, carousel: unknown[]): Promise<void> {
+    await pool.query(
+      `UPDATE wa_templates SET carousel = $1::jsonb, updated_at = NOW() WHERE id = $2 AND salon_id = $3`,
+      [JSON.stringify(carousel), id, salonId]
+    )
+  },
+
   async updateMediaId(id: string, salonId: string, mediaId: string): Promise<WATemplate | null> {
     const { rows } = await pool.query(
       `UPDATE wa_templates

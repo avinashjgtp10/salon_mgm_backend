@@ -35,6 +35,15 @@ const optUuid = (v: unknown, label: string): string | null => (v === undefined |
 // One or more training modules, required for a Product Training meeting.
 const moduleIds = (v: unknown): string[] => { const ids = Array.isArray(v) ? [...new Set(v.map((x) => uuid(x, "Training module")))] : []; if (!ids.length) throw bad("Select at least one training module"); return ids; };
 const date = (v: unknown, label: string): string => { const s = String(v ?? "").trim(); if (!DATE.test(s) || isNaN(Date.parse(s))) throw bad(`${label} must be a date (YYYY-MM-DD)`); return s; };
+// When an activity happened: a plain date (YYYY-MM-DD, as before) or a full date-and-time WITH its time zone (e.g. 2026-11-25T14:30:00.000Z),
+// which is stored exactly. A time with no zone is refused because the server could not know which clock it was read on.
+const ZONED = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:?\d{2})$/;
+const activityMoment = (v: unknown, label: string): string => {
+  const s = String(v ?? "").trim();
+  if (ZONED.test(s)) { const t = Date.parse(s); if (!isNaN(t)) return new Date(t).toISOString(); }
+  if (s.length > 10) throw bad(`${label} must be a date (YYYY-MM-DD) or a date-time with its time zone`);
+  return date(s, label);
+};
 const optDate = (v: unknown, label: string): string | null => (v === undefined || v === null || v === "" ? null : date(v, label));
 const optTime = (v: unknown, label: string): string | null => { if (v === undefined || v === null || v === "") return null; const s = String(v).trim(); if (!TIME.test(s)) throw bad(`${label} must be a time (HH:MM)`); return s; };
 const oneOf = <T extends string>(v: unknown, list: readonly T[], label: string): T => { if (!list.includes(v as T)) throw bad(`${label} must be one of: ${list.join(", ")}`); return v as T; };
@@ -250,7 +259,7 @@ router.post("/activities", wrap(async (req, res) => {
   const scope = await scopeOf(req);
   const input = {
     salon_id: uuid(b.salon_id, "Salon"), developer_id: scope ?? optUuid(b.developer_id, "Team member"), activity_type: oneOf(b.activity_type, ACTIVITY_TYPES, "Activity type"),
-    activity_date: b.activity_date ? date(String(b.activity_date).slice(0, 10), "Activity date") : new Date().toISOString().slice(0, 10),
+    activity_date: b.activity_date ? activityMoment(b.activity_date, "Activity date") : new Date().toISOString(),
     description: text(b.description) ?? "", work_completed: text(b.work_completed), pending_work: text(b.pending_work), work_status: oneOf(b.work_status, WORK_STATUSES, "Work status"),
     next_followup: optDate(b.next_followup, "Next follow-up"),
   };
@@ -268,7 +277,7 @@ router.patch("/activities/:id", wrap(async (req, res) => {
   const patch: Record<string, any> = {};
   if ("developer_id" in b) patch.developer_id = scope ?? optUuid(b.developer_id, "Team member");
   if ("activity_type" in b) patch.activity_type = oneOf(b.activity_type, ACTIVITY_TYPES, "Activity type");
-  if ("activity_date" in b) patch.activity_date = date(String(b.activity_date).slice(0, 10), "Activity date");
+  if ("activity_date" in b) patch.activity_date = activityMoment(b.activity_date, "Activity date");
   if ("description" in b) patch.description = text(b.description) ?? "";
   for (const k of ["work_completed", "pending_work"]) if (k in b) patch[k] = text(b[k]);
   if ("work_status" in b) patch.work_status = oneOf(b.work_status, WORK_STATUSES, "Work status");
