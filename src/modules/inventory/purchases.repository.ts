@@ -1,6 +1,6 @@
 import pool from "../../config/database";
 import { productInventoryRepository, ProductInventoryRow } from "./product-inventory.repository";
-import { CreatePurchaseDTO, CreateHistoricalPurchaseDTO, ListPurchaseFilters, Purchase, PurchaseItem, PurchaseChartFilters } from "./purchases.types";
+import { CreatePurchaseDTO, CreateHistoricalPurchaseDTO, AddHistoricalItemsDTO, ListPurchaseFilters, Purchase, PurchaseItem, PurchaseChartFilters } from "./purchases.types";
 import { inventoryAlertsService } from "./inventory-alerts.service";
 import { AppError } from "../../middleware/error.middleware";
 
@@ -644,6 +644,74 @@ export const purchasesRepository = {
 
             await client.query("COMMIT");
             return { purchase: { ...updated[0], items } };
+        } catch (err) {
+            await client.query("ROLLBACK");
+            throw err;
+        } finally {
+            client.release();
+        }
+    },
+
+    /**
+     * ADD product lines to an existing PAST bill. Unlike updateHistorical (which replaces every line), this only appends: the bill's date, number,
+     * notes and the lines already on it are left exactly as they are. Like the rest of a past bill it never changes stock and carries no expiry.
+     * The bill total is then recomputed from ALL of its lines, so it always equals what the details table shows.
+     * A bill that already moved stock (PO receipt / direct purchase) is refused: adding a product there would mean moving stock.
+     */
+    async addHistoricalItems(id: string, items: AddHistoricalItemsDTO["items"], salonId: string): Promise<{ purchase: Purchase }> {
+        const productIds = Array.from(new Set(items.map((i) => i.product_id)));
+        const client = await pool.connect();
+        try {
+            await client.query("BEGIN");
+
+            // Locked for the whole transaction so two people adding at once can't both compute the total from a stale list of lines.
+            const { rows: found } = await client.query(
+                `SELECT ${historicalBillSql("pu")} AS is_historical
+                   FROM purchases pu WHERE pu.id = $1 AND pu.salon_id = $2 FOR UPDATE OF pu`,
+                [id, salonId],
+            );
+            if (!found.length) throw new AppError(404, "Bill not found", "PURCHASE_NOT_FOUND");
+            if (found[0].is_historical !== true) {
+                throw new AppError(
+                    409,
+                    "This bill already added stock, so products cannot be added to it here. Record a new purchase to receive more stock.",
+                    "BILL_STOCK_LOCKED",
+                );
+            }
+
+            const { rows: productRows } = await client.query(
+                `SELECT id FROM products WHERE id = ANY($1::uuid[]) AND salon_id = $2`,
+                [productIds, salonId],
+            );
+            if (productRows.length !== productIds.length) {
+                throw new AppError(404, "One or more products were not found in this salon", "PRODUCT_NOT_FOUND");
+            }
+
+            for (const line of items) {
+                // The line total INCLUDES its tax: qty x price x (1 + tax% / 100), to the cent (same formula as every other past-bill line).
+                const taxPercent = line.tax_percent ?? 0;
+                const lineTotal = Math.round(line.quantity * line.purchase_price * (1 + taxPercent / 100) * 100) / 100;
+                await client.query(
+                    `INSERT INTO purchase_items (purchase_id, product_id, quantity, purchase_price, tax_percent, total_price, expiry_date, stock_movement_id)
+                     VALUES ($1, $2, $3, $4, $5, $6, NULL, NULL)`,
+                    [id, line.product_id, line.quantity, line.purchase_price, taxPercent, lineTotal],
+                );
+            }
+
+            const { rows: updated } = await client.query(
+                `UPDATE purchases
+                    SET total_amount = (SELECT COALESCE(SUM(total_price), 0) FROM purchase_items WHERE purchase_id = $1), updated_at = NOW()
+                  WHERE id = $1 AND salon_id = $2
+              RETURNING *`,
+                [id, salonId],
+            );
+            const { rows: allItems } = await client.query(
+                `SELECT * FROM purchase_items WHERE purchase_id = $1 ORDER BY created_at ASC`,
+                [id],
+            );
+
+            await client.query("COMMIT");
+            return { purchase: { ...updated[0], items: allItems } };
         } catch (err) {
             await client.query("ROLLBACK");
             throw err;

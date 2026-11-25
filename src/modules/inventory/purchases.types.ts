@@ -88,6 +88,11 @@ export interface CreateHistoricalPurchaseDTO {
     items: { id?: string; product_id: string; quantity: number; purchase_price: number; tax_percent?: number }[];
 }
 
+// Product lines ADDED to an existing past bill (nothing already on the bill is touched). Whole-number quantities, like any new past-bill line.
+export interface AddHistoricalItemsDTO {
+    items: { product_id: string; quantity: number; purchase_price: number; tax_percent?: number }[];
+}
+
 export interface ListPurchaseFilters {
     search?: string;
     supplier_id?: string;

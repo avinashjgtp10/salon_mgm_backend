@@ -130,6 +130,27 @@ export const purchasesController = {
         } catch (err) { next(err); }
     },
 
+    // POST /product-inventory/purchases/historical/:id/items — add product lines to an existing past bill (nothing else on the bill changes).
+    async addHistoricalItems(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
+        try {
+            const salonId = getSalonId(req);
+            const result = await purchasesRepository.addHistoricalItems(
+                String(req.params.id),
+                req.body.items.map((i: any) => ({
+                    product_id: i.product_id,
+                    quantity: Number(i.quantity),
+                    purchase_price: Number(i.purchase_price),
+                    tax_percent: Number(i.tax_percent) || 0,
+                })),
+                salonId,
+            );
+            logger.info("Products added to a past bill", {
+                salonId, userId: req.user?.userId, purchaseNumber: result.purchase.purchase_number, added: req.body.items.length,
+            });
+            sendSuccess(res, 201, result, "Products added to the bill");
+        } catch (err) { next(err); }
+    },
+
     // DELETE /product-inventory/purchases/historical/:id
     async deleteHistorical(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
         try {

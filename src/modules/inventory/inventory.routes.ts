@@ -29,7 +29,7 @@ import {
     validateCreateStockMovement,
     validateStockTake,
 } from "./inventory.validator";
-import { validateCreatePurchase, validateCreateHistoricalPurchase, validateListPurchases } from "./purchases.validator";
+import { validateCreatePurchase, validateCreateHistoricalPurchase, validateAddHistoricalItems, validateListPurchases } from "./purchases.validator";
 import { validateCreateSupplierPayment } from "./supplier-payments.validator";
 import { validateCreateOrder, validateReceiveOrder } from "./orders.validator";
 import { validateResolveSupplierProduct } from "./supplier-products.validator";
@@ -376,6 +376,16 @@ router.put(
     editSuppliers,
     validateCreateHistoricalPurchase,
     purchasesController.updateHistorical
+);
+
+// Add product lines to an existing past bill (append only; the bill's other fields and lines are untouched). Same permission as editing it.
+router.post(
+    "/product-inventory/purchases/historical/:id/items",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    editSuppliers,
+    validateAddHistoricalItems,
+    purchasesController.addHistoricalItems
 );
 
 router.delete(
