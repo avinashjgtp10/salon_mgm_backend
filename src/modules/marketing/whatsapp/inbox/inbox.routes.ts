@@ -48,6 +48,9 @@ router.post('/conversations/:phone/media', auth, replyToConversation, upload.sin
 // POST /api/v1/inbox/messages/:id/react - emoji reaction to a message ({ emoji }, '' removes)
 router.post('/messages/:id/react', auth, replyToConversation, inboxController.react)
 
+// DELETE /api/v1/inbox/messages/:id - delete ONE message from a chat (Inbox only; the customer's phone keeps it).
+router.delete('/messages/:id', auth, replyToConversation, inboxController.deleteMessage)
+
 // POST /api/v1/inbox/conversations/delete - delete one or many conversations and all their messages ({ phones: [...] }).
 // Same permission as replying: anyone who can work a conversation can clear it.
 router.post('/conversations/delete', auth, replyToConversation, inboxController.deleteConversations)

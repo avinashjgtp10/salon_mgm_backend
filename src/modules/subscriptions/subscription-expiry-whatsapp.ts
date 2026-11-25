@@ -2,14 +2,12 @@ import { configRepository } from "../marketing/whatsapp/config/config.repository
 import { getPlatformSalonId } from "../client-announcements/platform-salon";
 import { whatsappAutomationRepository } from "../whatsapp-automation/whatsapp-automation.repository";
 import { whatsappAutomationService } from "../whatsapp-automation/whatsapp-automation.service";
+import { daysRemainingValue } from "../whatsapp-automation/wa-automation-defaults";
 
 // The subscription expiry WhatsApp goes out from SalonOx's OWN Meta account (the platform salon's config, set up in
 // Super Admin > Super Meta), using the 'subscription_expiring' template managed on Super Meta > Automated Messages
 // (editable wording, submit to Meta, status — the same machinery as Message Settings). The owner may never have messaged
 // that number, so only an APPROVED template can be sent.
-
-/** "today" on the expiry day, otherwise "in N day(s)". */
-export const daysText = (days: number): string => (days <= 0 ? "today" : days === 1 ? "in 1 day" : `in ${days} days`);
 
 export type ExpiryWhatsAppResult =
     | { sent: true }
@@ -38,13 +36,14 @@ export async function sendExpiryWhatsApp(p: {
     const template = await whatsappAutomationRepository.findTemplate("subscription_expiring", platformSalonId);
     if (!template) return { sent: false, skipped: "template_pending" };
 
-    // Positional, in EVENT_VARIABLE_NAMES.subscription_expiring order.
+    // Positional, in EVENT_VARIABLE_NAMES.subscription_expiring order. The last one is the bare number or the whole phrase
+    // depending on which wording is live on Meta (see daysRemainingValue).
     const variables: Record<string, string> = {
         "1": p.ownerName?.trim() || "there",
         "2": p.salonName,
         "3": p.planName,
         "4": p.expiryDate,
-        "5": daysText(p.daysRemaining),
+        "5": daysRemainingValue(template.body_text, p.daysRemaining),
     };
     void whatsappAutomationService
         .trigger({

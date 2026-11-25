@@ -3,6 +3,7 @@
 // ============================================================
 
 import pool from '../../config/database'
+import { getSalonTimezone } from '../../config/salonTimezone'
 import {
   AutomationEventType,
   ScheduledMessage,
@@ -13,15 +14,23 @@ import {
 
 // WHERE for the History queries — aliased `l` so the list query can join clients. Owner-facing alerts and unsent
 // (QUEUED) rows are excluded; dates are inclusive days on the time the message went out (or was attempted).
-function historyWhere(params: { salonId: string; dateFrom?: string; dateTo?: string }): { where: string; values: any[] } {
+// A chosen day is the SALON's calendar day (its own timezone), not the database's UTC day: "today" for an IST salon starts at
+// 00:00 IST = 18:30 UTC the evening before. Comparing a timestamptz to a bare date uses the DB session zone (UTC) and put
+// everything scheduled in the first hours of the salon's day under the previous day.
+const dayStart = (dateParam: string, tzParam: string) => `(${dateParam}::date)::timestamp AT TIME ZONE ${tzParam}::text`
+const dayEnd   = (dateParam: string, tzParam: string) => `((${dateParam}::date + interval '1 day') AT TIME ZONE ${tzParam}::text)`
+
+function historyWhere(params: { salonId: string; dateFrom?: string; dateTo?: string; timezone: string }): { where: string; values: any[] } {
   const conditions = [
     'l.salon_id = $1',
     `l.status <> 'QUEUED'`,
     `l.event_type NOT IN ('cash_counter_opened','cash_counter_closed','cash_counter_opened_updated','cash_counter_closed_updated')`,
   ]
   const values: any[] = [params.salonId]
-  if (params.dateFrom) { values.push(params.dateFrom); conditions.push(`COALESCE(l.sent_at, l.created_at) >= $${values.length}::date`) }
-  if (params.dateTo)   { values.push(params.dateTo);   conditions.push(`COALESCE(l.sent_at, l.created_at) < ($${values.length}::date + interval '1 day')`) }
+  if (params.dateFrom || params.dateTo) values.push(params.timezone)
+  const tzParam = `$${values.length}`
+  if (params.dateFrom) { values.push(params.dateFrom); conditions.push(`COALESCE(l.sent_at, l.created_at) >= ${dayStart(`$${values.length}`, tzParam)}`) }
+  if (params.dateTo)   { values.push(params.dateTo);   conditions.push(`COALESCE(l.sent_at, l.created_at) < ${dayEnd(`$${values.length}`, tzParam)}`) }
   return { where: conditions.join(' AND '), values }
 }
 
@@ -226,7 +235,7 @@ export const waScheduledMessagesRepository = {
   async historySummary(params: { salonId: string; dateFrom?: string; dateTo?: string }): Promise<{
     byEvent: { event_type: string; total: number; sent: number; delivered: number; read: number; failed: number; skipped: number }[]
   }> {
-    const { where, values } = historyWhere(params)
+    const { where, values } = historyWhere({ ...params, timezone: await getSalonTimezone(params.salonId) })
     const { rows } = await pool.query(
       `SELECT l.event_type,
               COUNT(*)::int                                                      AS total,
@@ -252,7 +261,7 @@ export const waScheduledMessagesRepository = {
     const limit  = Math.min(100, Math.max(1, parseInt(String(params.limit ?? 20)) || 20))
     const offset = (page - 1) * limit
 
-    const { where: base, values } = historyWhere(params)
+    const { where: base, values } = historyWhere({ ...params, timezone: await getSalonTimezone(params.salonId) })
     const conditions = [base]
     let idx = values.length + 1
     if (params.eventType?.length) { conditions.push(`l.event_type = ANY($${idx++}::text[])`); values.push(params.eventType) }
@@ -301,8 +310,14 @@ export const waScheduledMessagesRepository = {
       if (eventTypes.length) { conditions.push(`event_type = ANY($${idx++}::text[])`); values.push(eventTypes) }
     }
     if (filters.clientId)  { conditions.push(`client_id = $${idx++}`);  values.push(filters.clientId) }
-    if (filters.dateFrom)  { conditions.push(`scheduled_at >= $${idx++}::date`); values.push(filters.dateFrom) }
-    if (filters.dateTo)    { conditions.push(`scheduled_at < ($${idx++}::date + interval '1 day')`); values.push(filters.dateTo) }
+    // The salon's own day (see dayStart): a message scheduled for 12:30 AM IST today is today's, not yesterday's.
+    const tz = await getSalonTimezone(filters.salonId)
+    if (filters.dateFrom || filters.dateTo) {
+      const tzParam = `$${idx++}`
+      values.push(tz)
+      if (filters.dateFrom) { conditions.push(`scheduled_at >= ${dayStart(`$${idx++}`, tzParam)}`); values.push(filters.dateFrom) }
+      if (filters.dateTo)   { conditions.push(`scheduled_at < ${dayEnd(`$${idx++}`, tzParam)}`);     values.push(filters.dateTo) }
+    }
     if (filters.search?.trim()) {
       conditions.push(`phone_number ILIKE $${idx}`)
       values.push(`%${filters.search.trim()}%`)
@@ -337,18 +352,20 @@ export const waScheduledMessagesRepository = {
     ) all_scheduled`
 
     const countRes = await pool.query(`SELECT COUNT(*) FROM ${SOURCE} WHERE ${where}`, values)
-    // What's coming up first (soonest due at the very top — today before
-    // next week), then what's already happened last (most recent first —
-    // yesterday before last month). A plain chronological sort would bury
-    // today's due-soon rows under anything scheduled further in the future.
+    // TODAY (the salon's day) first, in time order - including what already went out or failed this morning, which used to sink
+    // below every future message and so never showed on the first page. Then the coming days, soonest first, then earlier days,
+    // most recent first (yesterday before last month).
+    const tzOrder = `$${idx + 2}::text`
+    const localDay = `(scheduled_at AT TIME ZONE ${tzOrder})::date`
+    const today    = `(NOW() AT TIME ZONE ${tzOrder})::date`
     const dataRes  = await pool.query(
       `SELECT * FROM ${SOURCE} WHERE ${where}
        ORDER BY
-         CASE WHEN scheduled_at >= NOW() THEN 0 ELSE 1 END,
-         CASE WHEN scheduled_at >= NOW() THEN scheduled_at END ASC,
-         CASE WHEN scheduled_at <  NOW() THEN scheduled_at END DESC
+         CASE WHEN ${localDay} = ${today} THEN 0 WHEN ${localDay} > ${today} THEN 1 ELSE 2 END,
+         CASE WHEN ${localDay} >= ${today} THEN scheduled_at END ASC,
+         CASE WHEN ${localDay} <  ${today} THEN scheduled_at END DESC
        LIMIT $${idx} OFFSET $${idx + 1}`,
-      [...values, limit, offset]
+      [...values, limit, offset, tz]
     )
 
     return { data: dataRes.rows, total: parseInt(countRes.rows[0].count) }
