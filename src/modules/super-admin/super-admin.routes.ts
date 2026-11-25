@@ -6,6 +6,7 @@ import { superAdminActivityLogger } from "./super-admin-activity";
 import { superAdminOwnerOnly } from "./super-admin-owner.middleware";
 import { salonClientInvoicesController } from "../salon-client-invoices/salon-client-invoices.controller";
 import waConfigSuperAdminRoutes from "../marketing/whatsapp/config/config.super-admin.routes";
+import { pricingSuperAdminRoutes } from "../marketing/whatsapp/pricing/pricing.routes";
 import clientActivityRoutes from "../client-activity/client-activity.super-admin.routes";
 import clientManagementRoutes from "../client-management/client-management.routes";
 import salonModulesRoutes from "../salon-modules/salon-modules.routes";
@@ -38,6 +39,8 @@ router.use("/client-management", clientManagementRoutes);   // scoped per team m
 
 // A salon's WhatsApp (Meta Cloud API) connection — managed here, by us, not by the salon.
 router.use("/salons/:salonId/wa-config", waConfigSuperAdminRoutes);
+// Meta's WhatsApp price list: when it was last refreshed, and refresh it now.
+router.use("/wa-pricing", pricingSuperAdminRoutes);
 
 // Salon Customization: lock/unlock whole modules for one salon.
 router.use("/salon-modules", salonModulesRoutes);

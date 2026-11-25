@@ -9,6 +9,7 @@ import { initSocket } from './config/socket'
 import { startCampaignScheduler, stopCampaignScheduler } from './modules/marketing/whatsapp/queue/campaign.scheduler'
 import { startAutomationScheduler, stopAutomationScheduler } from './modules/whatsapp-automation/whatsapp-automation.scheduler'
 import { startWaLimitSyncScheduler, stopWaLimitSyncScheduler } from './modules/marketing/whatsapp/config/wa-limit-sync.scheduler'
+import { startWaPricingSyncScheduler, stopWaPricingSyncScheduler } from './modules/marketing/whatsapp/pricing/wa-pricing-sync.scheduler'
 import { startAttendanceReminderScheduler, stopAttendanceReminderScheduler } from './modules/attendance/staffAttendance.scheduler'
 import { startFestivalReminderScheduler, stopFestivalReminderScheduler } from './modules/festivals/festival-reminder.scheduler'
 import { startCallbackDeadlineScheduler, stopCallbackDeadlineScheduler } from './modules/support/support.callbackScheduler'
@@ -53,6 +54,9 @@ httpServer.listen(PORT, () => {
 
   // Keep daily_limit / quality_rating in sync with Meta's tier upgrades
   startWaLimitSyncScheduler()
+
+  // Keep the stored copy of Meta's WhatsApp price list current (Marketing > Policy, campaign cost estimate)
+  startWaPricingSyncScheduler()
 
   // Auto-flip overdue unpaid appointments to no-show
   startNoShowScheduler()
@@ -102,6 +106,7 @@ process.on('SIGTERM', () => {
   stopCampaignScheduler()
   stopAutomationScheduler()
   stopWaLimitSyncScheduler()
+  stopWaPricingSyncScheduler()
   stopNoShowScheduler()
   stopAttendanceReminderScheduler()
   stopFestivalReminderScheduler()
