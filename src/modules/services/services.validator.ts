@@ -1,6 +1,7 @@
 import logger from '../../config/logger';
 import { NextFunction, Request, Response } from "express";
 import { AppError } from "../../middleware/error.middleware";
+import { assertServiceNameLength } from "./service-name.limit";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 const isNonEmptyString      = (v: unknown): v is string => typeof v === "string" && v.trim().length > 0;
@@ -107,6 +108,7 @@ export const validateCreateService = (req: Request, _res: Response, next: NextFu
     const b = req.body;
     warnUnknownKeys(b, "POST /services");
     if (!isNonEmptyString(b.name))           throw new AppError(400, "name is required", "VALIDATION_ERROR");
+    assertServiceNameLength(b.name);         // services.name is VARCHAR(255): refuse a longer one here, not with a database error
     if (!isUUID(b.category_id))              throw new AppError(400, "category_id is required and must be a UUID", "VALIDATION_ERROR");
     if (!isOptionalString(b.treatment_type)) throw new AppError(400, "treatment_type must be a string", "VALIDATION_ERROR");
     if (!isOptionalString(b.description))    throw new AppError(400, "description must be a string", "VALIDATION_ERROR");
@@ -130,6 +132,7 @@ export const validateUpdateService = (req: Request, _res: Response, next: NextFu
     const b = req.body;
     warnUnknownKeys(b, "PATCH /services/:id");
     if (b.name !== undefined && !isNonEmptyString(b.name)) throw new AppError(400, "name must be a non-empty string", "VALIDATION_ERROR");
+    assertServiceNameLength(b.name);         // only when a name is sent: an update that leaves the name alone is never affected
     if (!isOptionalUUID(b.category_id))      throw new AppError(400, "category_id must be a UUID", "VALIDATION_ERROR");
     if (!isOptionalString(b.treatment_type)) throw new AppError(400, "treatment_type must be a string", "VALIDATION_ERROR");
     if (!isOptionalString(b.description))    throw new AppError(400, "description must be a string", "VALIDATION_ERROR");
