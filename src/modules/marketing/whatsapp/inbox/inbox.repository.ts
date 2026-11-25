@@ -84,6 +84,40 @@ export const inboxRepository = {
     }
   },
 
+  // Deletes ONE message from a conversation of this salon (a message id of another salon matches nothing). The
+  // conversation row stays, and its preview (last_message / last_message_at) is re-read from what is left so the chat
+  // list never keeps showing text that no longer exists. Returns the chat's phone, or null when there was no such message.
+  async deleteMessage(salonId: string, messageId: string): Promise<{ conversationId: string; contactPhone: string } | null> {
+    const client = await pool.connect()
+    try {
+      await client.query('BEGIN')
+      const { rows } = await client.query(
+        `DELETE FROM wa_messages m
+         USING wa_conversations c
+         WHERE m.id = $1 AND c.id = m.conversation_id AND c.salon_id = $2
+         RETURNING m.conversation_id, c.contact_phone`,
+        [messageId, salonId]
+      )
+      if (!rows[0]) { await client.query('ROLLBACK'); return null }
+      const conversationId: string = rows[0].conversation_id
+      await client.query(
+        `UPDATE wa_conversations
+         SET last_message    = COALESCE((SELECT body    FROM wa_messages WHERE conversation_id = $1 ORDER BY sent_at DESC LIMIT 1), ''),
+             last_message_at = COALESCE((SELECT sent_at FROM wa_messages WHERE conversation_id = $1 ORDER BY sent_at DESC LIMIT 1), last_message_at),
+             updated_at      = NOW()
+         WHERE id = $1 AND salon_id = $2`,
+        [conversationId, salonId]
+      )
+      await client.query('COMMIT')
+      return { conversationId, contactPhone: rows[0].contact_phone }
+    } catch (err) {
+      try { await client.query('ROLLBACK') } catch { /* connection may already be dead */ }
+      throw err
+    } finally {
+      client.release()
+    }
+  },
+
   // Just the total — powers the sidebar's unread badge without shipping the
   // whole conversation list on every page.
   async getUnreadTotal(salonId: string): Promise<number> {

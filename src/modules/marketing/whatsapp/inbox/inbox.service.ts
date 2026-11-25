@@ -208,6 +208,27 @@ export const inboxService = {
     return { deleted }
   },
 
+  // Delete ONE message from a chat. It is removed from the Inbox only (WhatsApp cannot take a message back from the
+  // customer's phone) and stays gone: every open Inbox screen of the salon is told, so none of them shows it again.
+  async deleteMessage(salonId: string, messageId: unknown) {
+    const id = typeof messageId === 'string' ? messageId.trim() : ''
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
+      throw new AppError(400, 'Invalid message', 'VALIDATION_ERROR')
+    }
+    const removed = await inboxRepository.deleteMessage(salonId, id)
+    if (!removed) throw new AppError(404, 'This message no longer exists. Refresh the chat.', 'NOT_FOUND')
+
+    try {
+      const io = getIO()
+      const room = `salon:${salonId}`
+      io.to(room).emit('inbox:message-deleted', { salonId, contactPhone: removed.contactPhone, id })
+      io.to(room).emit('inbox:conversations', await inboxRepository.getConversations(salonId))
+    } catch (err) {
+      console.error('Socket emit error:', err)
+    }
+    return { id }
+  },
+
   // The salon's WhatsApp display picture for the floating Messaging widget. Never an error:
   // not configured / no picture set / Meta unreachable all just mean "no picture" (null).
   // Meta's link expires, so it is cached per salon for 30 minutes (failures for 5).

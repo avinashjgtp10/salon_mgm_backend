@@ -21,6 +21,7 @@ import platformIntegrationsRoutes from "../platform-integrations/platform-integr
 import subscriptionInvoiceRoutes from "../subscription-invoices/subscription-invoices.routes";
 import clientAnnouncementsRoutes from "../client-announcements/client-announcements.routes";
 import marketingLogsRoutes from "../marketing-logs/marketing-logs.routes";
+import platformScheduledMessagesRoutes from "../platform-scheduled-messages/platform-scheduled-messages.routes";
 
 const router = Router();
 
@@ -61,6 +62,8 @@ router.use("/subscription-invoices", subscriptionInvoiceRoutes);
 router.use("/client-announcements", clientAnnouncementsRoutes);
 // Marketing Logs: every message sent to clients (automation, campaigns, SMS, Email) across all salons.
 router.use("/marketing-logs", marketingLogsRoutes);
+// Scheduled Messages: SalonOx's own upcoming + sent messages to salon owners (subscription ending, salon deactivated).
+router.use("/scheduled-messages", platformScheduledMessagesRoutes);
 
 // Salon-specific permissions
 router.get("/salon-permissions/search",       superAdminController.searchSalonsForPermissions);
