@@ -68,6 +68,33 @@ const STAFF_COUNT_SUBQUERY = `
   (SELECT COUNT(*)::int FROM service_staff ss WHERE ss.service_id = s.id) AS staff_count
 `;
 
+// ─── Sorting ──────────────────────────────────────────────────────────────────
+// What each sortable column of the Service menu orders by. The grid pages through the list on the server, so the
+// order has to be decided here — sorting only the rows already on screen reorders one page, not the menu.
+// Keys are the grid's column ids. Text sorts ignore case; nullable columns put the blanks last in either direction.
+const SERVICE_SORTS: Record<string, string> = {
+  name: "LOWER(s.name)",
+  category_name: "LOWER(c.name)",
+  duration: "s.duration_minutes",
+  price: "s.price",
+  // "All staff" is stored as ZERO assigned staff (see STAFF_COUNT_SUBQUERY), so it sorts as the largest, like it reads.
+  staff_count: `CASE WHEN (SELECT COUNT(*) FROM service_staff sso WHERE sso.service_id = s.id) = 0
+                     THEN 2147483647
+                     ELSE (SELECT COUNT(*) FROM service_staff sso WHERE sso.service_id = s.id) END`,
+  reminder_after_days: "s.reminder_after_days",
+  commission_rate: "s.commission_rate",
+  created_at: "s.created_at",
+};
+
+/** The ORDER BY for a services list. No/unknown sort_by = newest first. `id` last so equal rows keep a fixed
+ *  order — without it, paging through ties can repeat or skip rows between pages. */
+const buildServiceOrderBy = (q: ListServicesQuery): string => {
+  const expr = q.sort_by ? SERVICE_SORTS[q.sort_by] : undefined;
+  if (!expr) return "ORDER BY s.created_at DESC, s.id";
+  const dir = q.sort_order === "ASC" ? "ASC" : "DESC";
+  return `ORDER BY ${expr} ${dir} NULLS LAST, s.created_at DESC, s.id`;
+};
+
 // ─── Query builders ───────────────────────────────────────────────────────────
 
 const buildServiceWhere = (q: ListServicesQuery, salonId: string) => {
@@ -194,7 +221,7 @@ export const servicesRepository = {
        FROM services s
        LEFT JOIN service_categories c ON c.id = s.category_id
        ${whereSql}
-       ORDER BY s.created_at DESC
+       ${buildServiceOrderBy(query)}
        LIMIT $${values.length + 1} OFFSET $${values.length + 2}`,
       [...values, limit, offset]
     );
@@ -213,7 +240,7 @@ export const servicesRepository = {
        FROM services s
        LEFT JOIN service_categories c ON c.id = s.category_id
        ${whereSql}
-       ORDER BY s.created_at DESC`,
+       ${buildServiceOrderBy(query)}`,
       values
     );
     return rows;

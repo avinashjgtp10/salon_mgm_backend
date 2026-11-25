@@ -30,6 +30,8 @@ export function buildPayrollSlipHtml(params: {
       </tr>`;
 
     const rows = [
+        summary.compensation_type === "hourly" ? row("Hours Worked", `${Number(summary.hours_worked ?? 0).toFixed(2)} h`) : "",
+        summary.compensation_type === "hourly" ? row("Hourly Rate", fmt(Number(summary.hourly_rate ?? 0))) : "",
         row("Basic Salary", fmt(summary.base_salary)),
         summary.commission_by_category.services > 0 ? row("Service Commission", `+${fmt(summary.commission_by_category.services)}`, false, "#15803d") : "",
         summary.commission_by_category.products > 0 ? row("Product Commission", `+${fmt(summary.commission_by_category.products)}`, false, "#15803d") : "",

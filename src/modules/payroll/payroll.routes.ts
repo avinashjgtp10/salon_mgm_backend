@@ -25,6 +25,8 @@ router.post("/:staffId/pay", auth, requireModule("payroll"), requirePermission("
 // Salary Slip — calculation breakdown, viewable whether or not the period is
 // paid yet. Payment Receipt — proof of payment, 404s until payStaff has run
 // for this period. Both gated on view_payroll_details, same as /history.
+// Statement — everything the on-screen Salary Statement page shows, in one response.
+router.get("/:staffId/statement", auth, requireModule("payroll"), requirePermission("view_payroll_details"), validateStaffSummaryQuery, payrollController.statement);
 router.get("/:staffId/slip", auth, requireModule("payroll"), requirePermission("view_payroll_details"), validateStaffSummaryQuery, payrollController.salarySlip);
 router.get("/:staffId/receipt", auth, requireModule("payroll"), requirePermission("view_payroll_details"), validateStaffSummaryQuery, payrollController.paymentReceipt);
 // History reads the same adjustment audit trail edit_payroll writes to, so

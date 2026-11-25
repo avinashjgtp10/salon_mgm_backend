@@ -96,6 +96,28 @@ export const configService = {
     }
   },
 
+  // Super Admin > Salons > <salon> > WhatsApp connection > Download. The salon's name plus the six saved
+  // credentials (real secrets), as one JSON document - nothing else. Reads the saved row only (no Meta calls).
+  // The route is OTP-gated and super-admin only; nothing here reads another salon.
+  async buildDownload(salonId: string) {
+    const config = await configRepository.findBySalonId(salonId)
+    if (!config) throw new AppError(404, 'This salon has no WhatsApp connection to download', 'NOT_FOUND')
+    const salonName = await configRepository.findSalonName(salonId)
+    const slug = String(salonName ?? 'salon').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'salon'
+    return {
+      filename: `whatsapp-credentials-${slug}.json`,
+      file: {
+        salon_name:           salonName,
+        phone_number_id:      config.phone_number_id,
+        waba_id:              config.waba_id,
+        app_id:               config.app_id ?? null,
+        app_secret:           config.app_secret ?? null,
+        access_token:         config.access_token ?? null,
+        webhook_verify_token: config.webhook_verify_token,
+      },
+    }
+  },
+
   async saveConfig(salonId: string, body: SaveConfigBody) {
 
     // Trim EVERY credential field before anything touches it. These are all

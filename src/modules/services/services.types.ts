@@ -116,6 +116,10 @@ export type ListServicesQuery = {
   online_booking?: "enabled" | "disabled" | "all";
   commissions?: "enabled" | "disabled" | "all";
   resource_requirements?: "required" | "not_required" | "all";
+  /** One of SERVICE_SORTS' keys (name, category_name, duration, price, staff_count, reminder_after_days,
+   *  commission_rate, created_at). Anything else — or nothing — means newest first. */
+  sort_by?: string;
+  sort_order?: "ASC" | "DESC";
   page?: number;
   limit?: number;
 };

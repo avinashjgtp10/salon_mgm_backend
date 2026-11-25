@@ -3,6 +3,7 @@ import { configService } from './config.service'
 import { whatsappMetaApi } from '../shared/whatsapp.api'
 import { configRepository } from './config.repository'
 import pool from '../../../../config/database'  // ← ADD THIS
+import logger from '../../../../config/logger'
 
 type AuthRequest = Request & { user?: { userId: string; salonId?: string; role?: string } }
 
@@ -18,6 +19,21 @@ export const configController = {
       const data = await configService.getConfig(salonId, reveal)
       res.setHeader('Cache-Control', 'no-store')
       return res.status(200).json(data)
+    } catch (e) { return next(e) }
+  },
+
+  // Super Admin only (mounted behind the super-admin router + the emailed-code gate). Returns the file's name and
+  // contents; the browser saves it. `salonId` is the one chosen in the URL (scopeToSalon), never the caller's own.
+  async downloadConfig(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = req.user?.salonId
+      if (!salonId) return res.status(400).json({ error: 'salonId missing from token' })
+      if (req.user?.role !== 'super_admin') return res.status(403).json({ error: 'Super admin only' })
+      const data = await configService.buildDownload(salonId)
+      // Who pulled which salon's secrets - the one place this is recorded.
+      logger.warn('[wa-config] credentials downloaded', { salonId, adminId: req.user?.userId })
+      res.setHeader('Cache-Control', 'no-store')
+      return res.status(200).json({ success: true, data })
     } catch (e) { return next(e) }
   },
 
