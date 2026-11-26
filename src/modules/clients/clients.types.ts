@@ -233,6 +233,9 @@ export type PackageMembershipFilter = "has_package" | "has_membership" | "has_bo
 // Filters on clients.is_blocked (NOT is_active — that's the soft-delete flag).
 export type BlockedStatusFilter = "blocked" | "unblocked";
 
+// Which special dates a client has saved: birthdate (clients.birthday_day_month) and/or anniversary (clients.anniversary).
+export type DatesSavedFilter = "has_birthday" | "has_anniversary" | "has_both" | "has_neither";
+
 export type ClientsListQuery = {
     offset?: number;
     limit?: number;
@@ -251,6 +254,7 @@ export type ClientsListQuery = {
     max_sales?: number;
     package_membership?: PackageMembershipFilter;
     blocked_status?: BlockedStatusFilter;
+    dates_saved?: DatesSavedFilter;
 
     // "list" trims the SELECT to only what the Client List table renders
     // (skips address/notes/tags/ltv/ewallet/reward-balance columns and the

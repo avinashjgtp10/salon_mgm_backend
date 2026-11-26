@@ -27,6 +27,8 @@
       "package": "Package",
       "membership": "Membership",
       "posMachine": "Payment Machine",
+      "online": "Online Payment",
+      "split": "Split",
       "other": "Other"
     },
     "tax": "Tax",

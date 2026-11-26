@@ -6,7 +6,7 @@
 //
 //   request  -> 6-digit code emailed to the approver (valid 10 min, 1 per 30 s)
 //   verify   -> correct code opens a 10-minute window for THIS admin + salon
-//   gate     -> PUT / DELETE need that window, and it is used up by one success
+//   gate     -> PUT / DELETE / download need that window, and it is used up by one success
 //
 // State lives in Redis only (no migration): hashed code, attempt counter,
 // resend cooldown and the verified marker.
@@ -33,6 +33,26 @@ const k = {
   tries:    (a: string, s: string) => `wa-cfg:tries:${a}:${s}`,
   cooldown: (a: string, s: string) => `wa-cfg:cool:${a}:${s}`,
   ok:       (a: string, s: string) => `wa-cfg:ok:${a}:${s}`,
+}
+
+// Middleware factory: the route needs an open verification window for THIS admin + salon, and uses it up on
+// success. `what` only words the 428 message ("... to change WhatsApp credentials" / "... to download ...").
+const requireVerifiedFor = (what: string) => async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const adminId = (req as any).user?.userId as string | undefined
+    const salonId = String(req.params.salonId ?? '')
+    if (!adminId || !salonId) throw new AppError(401, 'Unauthorized', 'UNAUTHORIZED')
+    if (!(await redis.exists(k.ok(adminId, salonId)))) {
+      throw new AppError(428, `Email OTP verification is required to ${what}`, 'WA_CONFIG_OTP_REQUIRED')
+    }
+    // One verification = one action: used up once the request succeeds.
+    res.on('finish', () => {
+      if (res.statusCode < 400) redis.del(k.ok(adminId, salonId)).catch(() => {})
+    })
+    return next()
+  } catch (e) {
+    return next(e)
+  }
 }
 
 export const configOtpService = {
@@ -84,21 +104,8 @@ export const configOtpService = {
   },
 
   // Middleware for the credential-changing routes (PUT / DELETE).
-  requireVerified: async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const adminId = (req as any).user?.userId as string | undefined
-      const salonId = String(req.params.salonId ?? '')
-      if (!adminId || !salonId) throw new AppError(401, 'Unauthorized', 'UNAUTHORIZED')
-      if (!(await redis.exists(k.ok(adminId, salonId)))) {
-        throw new AppError(428, 'Email OTP verification is required to change WhatsApp credentials', 'WA_CONFIG_OTP_REQUIRED')
-      }
-      // One verification = one change: used up once the request succeeds.
-      res.on('finish', () => {
-        if (res.statusCode < 400) redis.del(k.ok(adminId, salonId)).catch(() => {})
-      })
-      return next()
-    } catch (e) {
-      return next(e)
-    }
-  },
+  requireVerified: requireVerifiedFor('change WhatsApp credentials'),
+
+  // Same gate, other wording - for the credentials download.
+  requireVerifiedFor,
 }

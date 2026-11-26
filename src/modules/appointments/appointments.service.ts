@@ -50,6 +50,7 @@ import {
 } from "./appointments.types";
 import { getBillRoundingUnit, formatSalonMoney, getSalonCurrency, getSalonDateLocale } from "../../config/currency";
 import { salonTranslator } from "../../config/i18n";
+import { describePaymentMethod } from "../payments/payment-method-label";
 
 // A "Booked" (never paid) appointment has no persisted, tax-inclusive total
 // anywhere — `appointments` only stores the raw inputs (discount, ex_charges,
@@ -695,6 +696,9 @@ export const appointmentsService = {
         // ── Email: New Appointment (to salon owner) ───────────────────────────
         ;(async () => {
             try {
+                // Calendar bookings only. A Quick Sale books and pays in one step, so nothing was booked for later: its owner email is
+                // "Payment Received" (sent from checkout). Every other booking notification above is skipped for Quick Sale the same way.
+                if (body.source === "quick_sale") return;
                 const full = await appointmentsRepository.findById(appointment.id);
                 if (!full) return;
                 const ownerEmail = await salonsRepository.findOwnerEmailById(full.salon_id);
@@ -1784,14 +1788,21 @@ export const appointmentsService = {
                     if (!ownerEmail) return;
                     const allowed = await canSendEmail(existing.salon_id, "newPayment");
                     if (!allowed) return;
+                    const currency = await getSalonCurrency(existing.salon_id);
+                    // The method the bill was really paid with, read from the sale (the payments service sets it server-side). The checkout
+                    // request itself usually carries no payment_method, which is why this used to print "N/A".
+                    const methodText = describePaymentMethod(
+                        preExistingSale.payment_method || params.payment_method, preExistingSale.payment_reference,
+                        await salonTranslator(existing.salon_id), currency,
+                    );
                     await emailService.sendNewPaymentEmail({
                         to:            ownerEmail,
                         salonId:       existing.salon_id,
                         salonName:     (existing as any).salon_name ?? "your salon",
                         clientName:    existing.client_name         ?? "Walk-in",
                         amount:        String(preExistingSale.total_amount ?? "0"),
-                        currency:      await getSalonCurrency(existing.salon_id),
-                        paymentMethod: params.payment_method        ?? "N/A",
+                        currency,
+                        paymentMethod: methodText || "N/A",
                         invoiceId:     preExistingSale.invoice_number ?? "",
                     });
                 } catch (err: any) { logger.error("[email] newPayment (preexisting) failed:", err?.message ?? err); }
@@ -2056,14 +2067,20 @@ export const appointmentsService = {
                 logger.debug(`[email] newPayment (checkout) → to=${ownerEmail}`);
                 const allowed = await canSendEmail(existing.salon_id, "newPayment");
                 if (!allowed) { logger.debug("[email] newPayment: skipped (preference off)"); return; }
+                const currency = await getSalonCurrency(existing.salon_id);
+                // The method the bill was really paid with, read from the sale; see the same note in the pre-existing-sale branch above.
+                const methodText = describePaymentMethod(
+                    sale.payment_method || params.payment_method, sale.payment_reference,
+                    await salonTranslator(existing.salon_id), currency,
+                );
                 await emailService.sendNewPaymentEmail({
                     to:            ownerEmail,
                     salonId:       existing.salon_id,
                     salonName:     (existing as any).salon_name ?? "your salon",
                     clientName:    existing.client_name         ?? "Walk-in",
                     amount:        String(sale.total_amount     ?? "0"),
-                    currency:      await getSalonCurrency(existing.salon_id),
-                    paymentMethod: params.payment_method        ?? "N/A",
+                    currency,
+                    paymentMethod: methodText || "N/A",
                     invoiceId:     sale.invoice_number ?? "",
                 });
                 logger.debug(`[email] newPayment sent to ${ownerEmail}`);

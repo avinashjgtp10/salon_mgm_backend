@@ -15,7 +15,6 @@ import {
   TriggerOutcome,
   UpdateSalonAutomationSettingBody,
   ListAutomationLogsFilters,
-  MARKETING_EVENTS,
 } from './whatsapp-automation.types'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -77,7 +76,6 @@ export const whatsappAutomationService = {
    * Call from any service with .catch(() => {}) — NEVER throws to caller.
    *
    * Flow:
-   * 1. Check client opted in (whatsapp_notifications or whatsapp_marketing)
    * 2. Check salon has this automation enabled
    * 3. Fetch global template config
    * 4. Get the salon's own WA credentials (same account used for marketing campaigns)
@@ -121,20 +119,6 @@ export const whatsappAutomationService = {
       if (!salonEnabled) {
         logger.debug(`[WA-TRACE] SKIP ${eventType} — salon ${salonId} disabled this automation`)
         return { skippedReason: 'This message is switched off for the salon (Message Settings)' }
-      }
-
-      // 2b. Respect the client's WhatsApp opt-out. The scheduler jobs filter on
-      // these flags in SQL, but the event-driven call sites (confirmations,
-      // purchases, thank-you, etc.) route through here without checking — so a
-      // client who opted out of WhatsApp would still be messaged. Only skip on
-      // an explicit opt-out (unknown/walk-in client falls through and sends).
-      if (clientId) {
-        const optIn = await whatsappAutomationRepository.getClientOptIn(clientId)
-        const isMarketing = MARKETING_EVENTS.includes(eventType)
-        if (optIn && ((isMarketing && !optIn.marketing) || (!isMarketing && !optIn.notifications))) {
-          logger.debug(`[WA-TRACE] SKIP ${eventType} — client ${clientId} opted out of ${isMarketing ? 'marketing' : 'notifications'}`)
-          return { skippedReason: `Client opted out of WhatsApp ${isMarketing ? 'marketing' : 'notification'} messages` }
-        }
       }
 
       // 3. Fetch template — salon's own approved copy for purchase events, else the global row

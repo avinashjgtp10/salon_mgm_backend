@@ -116,6 +116,7 @@ export const purchasesController = {
                     bill_number: req.body.bill_number?.trim() || null,
                     notes: req.body.notes?.trim() || null,
                     items: req.body.items.map((i: any) => ({
+                        id: typeof i.id === "string" ? i.id : undefined,
                         product_id: i.product_id,
                         quantity: Number(i.quantity),
                         purchase_price: Number(i.purchase_price),
@@ -129,11 +130,32 @@ export const purchasesController = {
         } catch (err) { next(err); }
     },
 
+    // POST /product-inventory/purchases/historical/:id/items — add product lines to an existing past bill (nothing else on the bill changes).
+    async addHistoricalItems(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
+        try {
+            const salonId = getSalonId(req);
+            const result = await purchasesRepository.addHistoricalItems(
+                String(req.params.id),
+                req.body.items.map((i: any) => ({
+                    product_id: i.product_id,
+                    quantity: Number(i.quantity),
+                    purchase_price: Number(i.purchase_price),
+                    tax_percent: Number(i.tax_percent) || 0,
+                })),
+                salonId,
+            );
+            logger.info("Products added to a past bill", {
+                salonId, userId: req.user?.userId, purchaseNumber: result.purchase.purchase_number, added: req.body.items.length,
+            });
+            sendSuccess(res, 201, result, "Products added to the bill");
+        } catch (err) { next(err); }
+    },
+
     // DELETE /product-inventory/purchases/historical/:id
     async deleteHistorical(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
         try {
             const salonId = getSalonId(req);
-            await purchasesRepository.deleteHistorical(String(req.params.id), salonId);
+            await purchasesRepository.deleteHistorical(String(req.params.id), salonId, req.user?.userId ?? null);
             logger.info("Historical purchase deleted", { salonId, userId: req.user?.userId, purchaseId: req.params.id });
             sendSuccess(res, 200, { id: String(req.params.id) }, "Past bill deleted");
         } catch (err) { next(err); }

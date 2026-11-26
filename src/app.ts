@@ -45,6 +45,7 @@ import marketingConfigRoutes from './modules/marketing/whatsapp/config/config.ro
 import marketingWebhooksRoutes from './modules/marketing/whatsapp/webhooks/webhooks.routes'
 import marketingFlowsRoutes from './modules/marketing/whatsapp/flows/flows.routes'
 import marketingInsightsRoutes from './modules/marketing/whatsapp/insights/insights.routes'
+import marketingPricingRoutes from './modules/marketing/whatsapp/pricing/pricing.routes'
 import profileRoutes from "./modules/profile/profile.routes";
 import inboxRouter from './modules/marketing/whatsapp/inbox/inbox.routes';
 import salonDashboardRoutes from "./modules/salon-dashboard/salon-dashboard.routes";
@@ -311,6 +312,7 @@ app.use('/api/v1/campaigns', marketingCampaignsRoutes)
 app.use('/api/v1/wa-config', marketingConfigRoutes)
 app.use('/api/v1/wa-flows', marketingFlowsRoutes)
 app.use('/api/v1/wa-insights', marketingInsightsRoutes)
+app.use('/api/v1/wa-pricing', marketingPricingRoutes)
 app.use('/api/v1/reviews', reviewsRoutes)
 // PUBLIC — client-facing feedback form, deep-linked from the review_request
 // WhatsApp button, no login.

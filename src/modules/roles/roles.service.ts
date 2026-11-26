@@ -6,7 +6,8 @@ import {
     invalidateRolePermissionsCache,
     invalidateStaffOverridesCache,
 } from "../../middleware/permission.middleware";
-import { rolesRepository } from "./roles.repository";
+import pool from "../../config/database";
+import { rolesRepository, type AuditLogEntry, type Queryable } from "./roles.repository";
 import { assertNoOtherManager } from "../staff/staff.service";
 import {
     Permission,
@@ -24,6 +25,34 @@ interface ActorContext {
     salonId?: string;
     ipAddress?: string | null;
     userAgent?: string | null;
+}
+
+/**
+ * Runs `fn` on a single pooled client wrapped in BEGIN/COMMIT, rolling back on
+ * any throw. The permission writes below use it so a saved set of permissions
+ * is all-or-nothing: before this, a client timeout or a failed audit insert
+ * mid-loop left a staff member holding an arbitrary subset of what was sent.
+ * The client must be the same one for every statement — issuing BEGIN through
+ * the pool would run it on whichever connection happened to be free.
+ */
+async function withTransaction<T>(fn: (db: Queryable) => Promise<T>): Promise<T> {
+    const client = await pool.connect();
+    try {
+        await client.query("BEGIN");
+        const result = await fn(client as unknown as Queryable);
+        await client.query("COMMIT");
+        return result;
+    } catch (error) {
+        try {
+            await client.query("ROLLBACK");
+        } catch {
+            // The original error is the useful one; a rollback that itself
+            // fails (connection already gone) must not mask it.
+        }
+        throw error;
+    } finally {
+        client.release();
+    }
 }
 
 // ── Anti-escalation ──────────────────────────────────────────────────────────
@@ -94,23 +123,23 @@ export const rolesService = {
         await assertNoEscalation(actor, grantedTrueKeys);
 
         const role = await rolesRepository.createRole(salonId, body.name.trim(), body.description ?? null);
-        for (const [key, allowed] of Object.entries(permissions)) {
-            await rolesRepository.setRolePermission(role.id, key, allowed);
-        }
-        invalidateRolePermissionsCache(role.id);
-
-        await rolesRepository.insertAuditLog({
-            salonId,
-            actorUserId: actor.userId,
-            targetType: "role",
-            targetId: role.id,
-            action: "role_created",
-            beforeValue: null,
-            afterValue: { name: role.name, permissions },
-            source: "role_edit",
-            ipAddress: actor.ipAddress,
-            userAgent: actor.userAgent,
+        const entries = Object.entries(permissions).map(([key, allowed]) => ({ key, allowed }));
+        await withTransaction(async (db) => {
+            await rolesRepository.setRolePermissionsBulk(role.id, entries, db);
+            await rolesRepository.insertAuditLogs([{
+                salonId,
+                actorUserId: actor.userId,
+                targetType: "role",
+                targetId: role.id,
+                action: "role_created",
+                beforeValue: null,
+                afterValue: { name: role.name, permissions },
+                source: "role_edit",
+                ipAddress: actor.ipAddress,
+                userAgent: actor.userAgent,
+            }], db);
         });
+        invalidateRolePermissionsCache(role.id);
 
         return { ...role, permissions, staff_count: 0 };
     },
@@ -139,25 +168,32 @@ export const rolesService = {
         });
 
         if (body.permissions) {
-            invalidateRolePermissionsCache(id);
+            const changed: { key: string; allowed: boolean }[] = [];
+            const auditEntries: AuditLogEntry[] = [];
             for (const [key, allowed] of Object.entries(body.permissions)) {
-                if (beforePermissions[key] !== allowed) {
-                    await rolesRepository.setRolePermission(id, key, allowed);
-                    await rolesRepository.insertAuditLog({
-                        salonId,
-                        actorUserId: actor.userId,
-                        targetType: "role",
-                        targetId: id,
-                        action: allowed ? "permission_granted" : "permission_revoked",
-                        permissionKey: key,
-                        beforeValue: beforePermissions[key] ?? false,
-                        afterValue: allowed,
-                        source: "role_edit",
-                        ipAddress: actor.ipAddress,
-                        userAgent: actor.userAgent,
-                    });
-                }
+                if (beforePermissions[key] === allowed) continue;
+                changed.push({ key, allowed });
+                auditEntries.push({
+                    salonId,
+                    actorUserId: actor.userId,
+                    targetType: "role",
+                    targetId: id,
+                    action: allowed ? "permission_granted" : "permission_revoked",
+                    permissionKey: key,
+                    beforeValue: beforePermissions[key] ?? false,
+                    afterValue: allowed,
+                    source: "role_edit",
+                    ipAddress: actor.ipAddress,
+                    userAgent: actor.userAgent,
+                });
             }
+            if (changed.length > 0) {
+                await withTransaction(async (db) => {
+                    await rolesRepository.setRolePermissionsBulk(id, changed, db);
+                    await rolesRepository.insertAuditLogs(auditEntries, db);
+                });
+            }
+            invalidateRolePermissionsCache(id);
         }
 
         return this.getRoleWithPermissions(id, salonId);
@@ -258,11 +294,19 @@ export const rolesService = {
 
         const before = await rolesRepository.getStaffOverrides(staffId);
 
+        // Split the payload into the two statements it needs. Unchanged keys
+        // are still skipped, exactly as the per-key loop did, so a no-op save
+        // writes nothing and logs nothing.
+        const upserts: { key: string; allowed: boolean }[] = [];
+        const resets: string[] = [];
+        const auditEntries: AuditLogEntry[] = [];
+
         for (const [key, allowed] of Object.entries(overrides)) {
             const prev = key in before ? before[key] : null;
-            if (prev === allowed) continue; // no real change — skip the write and the audit row
-            await rolesRepository.setStaffOverride(staffId, key, allowed, actor.userId);
-            await rolesRepository.insertAuditLog({
+            if (prev === allowed) continue;
+            if (allowed === null) resets.push(key);
+            else upserts.push({ key, allowed });
+            auditEntries.push({
                 salonId,
                 actorUserId: actor.userId,
                 targetType: "staff",
@@ -276,6 +320,16 @@ export const rolesService = {
                 userAgent: actor.userAgent,
             });
         }
+
+        if (auditEntries.length > 0) {
+            await withTransaction(async (db) => {
+                await rolesRepository.setStaffOverridesBulk(staffId, upserts, actor.userId, db);
+                await rolesRepository.deleteStaffOverridesBulk(staffId, resets, db);
+                await rolesRepository.insertAuditLogs(auditEntries, db);
+            });
+        }
+        // Only after the commit: a cache cleared mid-transaction could be
+        // refilled from the pre-commit state by a concurrent request.
         invalidateStaffOverridesCache(staffId);
 
         return this.getStaffEffectivePermissions(staffId, salonId);

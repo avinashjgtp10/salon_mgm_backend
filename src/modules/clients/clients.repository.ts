@@ -14,6 +14,7 @@ import {
     CampaignFilterParams,
 } from "./clients.types";
 import { clientPhoneKey, CLIENT_PHONE_KEY_SQL } from "./clients.phone";
+import { formatClientCode, NEXT_CLIENT_NUMBER_SQL } from "./clientCode";
 
 const buildFullName = (first: string, last?: string | null) =>
     `${String(first || "").trim()} ${String(last || "").trim()}`.trim();
@@ -163,6 +164,22 @@ export const clientsRepository = {
         } else if (q.package_membership === "has_none") {
             where.push(`NOT ${hasActivePackageSql}`);
             where.push(`NOT ${hasActiveMembershipSql}`);
+        }
+
+        // Saved special dates. Plain literals only (nothing user-supplied reaches the SQL). A birthdate counts as saved when the day/month text
+        // is not empty; an anniversary when the date is set.
+        const hasBirthdaySql = `(c.birthday_day_month IS NOT NULL AND BTRIM(c.birthday_day_month) <> '')`;
+        const hasAnniversarySql = `c.anniversary IS NOT NULL`;
+        if (q.dates_saved === "has_birthday") {
+            where.push(hasBirthdaySql);
+        } else if (q.dates_saved === "has_anniversary") {
+            where.push(hasAnniversarySql);
+        } else if (q.dates_saved === "has_both") {
+            where.push(hasBirthdaySql);
+            where.push(hasAnniversarySql);
+        } else if (q.dates_saved === "has_neither") {
+            where.push(`NOT ${hasBirthdaySql}`);
+            where.push(`NOT ${hasAnniversarySql}`);
         }
 
         const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
@@ -328,9 +345,10 @@ export const clientsRepository = {
     ): Promise<Client> {
         const fullName = buildFullName(body.first_name, body.last_name);
 
-        // A code typed by hand is kept as is. When it is left empty, the client gets the next number for this salon
-        // (1, 2, 3, ...): one more than the highest all-digit code already used. The per-salon lock keeps two clients
-        // created at the same moment from taking the same number.
+        // A code typed by hand is kept as is. When it is left empty — which is every client that does not come from the
+        // Add Client form with a code filled in: online booking, imports, announcements — the client gets this salon's
+        // next code in the CL001 format (see clientCode.ts). The per-salon lock keeps two clients created at the same
+        // moment from reading the same highest number and taking the same code.
         const db = await pool.connect();
         try {
         await db.query("BEGIN");
@@ -338,11 +356,8 @@ export const clientsRepository = {
         const typedCode = typeof body.client_code === "string" ? body.client_code.trim() : "";
         let clientCode: string = typedCode;
         if (!clientCode) {
-            const next = await db.query(
-                `SELECT COALESCE(MAX(client_code::bigint), 0) + 1 AS n FROM clients WHERE salon_id = $1 AND client_code ~ '^[0-9]{1,9}$'`,
-                [salonId]
-            );
-            clientCode = String(next.rows[0].n);
+            const next = await db.query(NEXT_CLIENT_NUMBER_SQL, [salonId]);
+            clientCode = formatClientCode(Number(next.rows[0].n));
         }
 
         const { rows } = await db.query(
@@ -400,9 +415,9 @@ export const clientsRepository = {
                 body.email_notifications ?? true,
                 body.sms_notifications ?? true,
                 body.whatsapp_notifications ?? true,
-                body.email_marketing ?? false,
-                body.sms_marketing ?? false,
-                body.whatsapp_marketing ?? false,
+                body.email_marketing ?? true,
+                body.sms_marketing ?? true,
+                body.whatsapp_marketing ?? true,
                 referral.code,
                 referral.rewardStatus,
                 body.state ?? null,

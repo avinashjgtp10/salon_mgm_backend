@@ -19,6 +19,7 @@ const VALID_STATUSES: CommissionRuleStatus[] = ["active", "draft", "expired"];
 const isNonEmptyString = (v: unknown) => typeof v === "string" && v.trim().length > 0;
 const isOptionalString = (v: unknown) => v === undefined || typeof v === "string";
 const isPositiveNumber = (v: unknown) => typeof v === "number" && Number.isFinite(v) && v > 0;
+const isNonNegativeNumber = (v: unknown) => typeof v === "number" && Number.isFinite(v) && v >= 0;
 const isEnum = <T extends string>(v: unknown, allowed: T[]) => typeof v === "string" && (allowed as string[]).includes(v);
 const isOptionalEnum = <T extends string>(v: unknown, allowed: T[]) =>
     v === undefined || (typeof v === "string" && (allowed as string[]).includes(v));
@@ -59,7 +60,12 @@ const validateShared = (b: any, isCreate: boolean) => {
         if (b.condition_target !== undefined && b.condition_target !== null)
             throw new AppError(400, "condition_target is not used by milestone_ladder rules", "VALIDATION_ERROR");
     } else if (isCreate || b.rate !== undefined) {
-        if (!isPositiveNumber(b.rate))
+        // tiered_target's `rate` is the "below target" rate, which may be 0 (no
+        // commission until the target is hit). Every other type needs a positive rate.
+        if (type === "tiered_target") {
+            if (!isNonNegativeNumber(b.rate))
+                throw new AppError(400, "rate is required and must be 0 or more for tiered_target rules", "VALIDATION_ERROR");
+        } else if (!isPositiveNumber(b.rate))
             throw new AppError(400, "rate is required and must be a positive number", "VALIDATION_ERROR");
         if ((type === "percentage" || type === "tiered_target") && b.rate > 100)
             throw new AppError(400, "rate cannot exceed 100 for percentage rules", "VALIDATION_ERROR");

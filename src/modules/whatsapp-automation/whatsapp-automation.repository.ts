@@ -336,17 +336,6 @@ export const whatsappAutomationRepository = {
     return rows[0]
   },
 
-  // Client's WhatsApp opt-in flags. Returns null if the client can't be found
-  // (walk-in / bad id) — caller treats that as "no explicit opt-out, allow".
-  async getClientOptIn(clientId: string): Promise<{ notifications: boolean; marketing: boolean } | null> {
-    const { rows } = await pool.query(
-      `SELECT whatsapp_notifications, whatsapp_marketing FROM clients WHERE id = $1`,
-      [clientId]
-    )
-    if (!rows[0]) return null
-    return { notifications: rows[0].whatsapp_notifications !== false, marketing: rows[0].whatsapp_marketing !== false }
-  },
-
   // ── Per-Salon Automation Settings ─────────────────────────────────────────
   // Salons can enable/disable specific automations
   // If no row exists → default is ENABLED
@@ -604,7 +593,6 @@ export const whatsappAutomationRepository = {
                'MM-DD'
              )
          AND c.phone_number       IS NOT NULL
-         AND c.whatsapp_marketing = TRUE
          AND c.is_active          = TRUE`
     )
     return rows
@@ -637,7 +625,6 @@ export const whatsappAutomationRepository = {
        LEFT JOIN clients c ON c.id = sa.client_id
        WHERE sa.status NOT IN ('completed')
          AND c.phone_number       IS NOT NULL
-         AND c.whatsapp_notifications = TRUE
          AND (
            (sa.due_date IS NOT NULL AND sa.due_date < NOW())
            OR
@@ -679,8 +666,7 @@ export const whatsappAutomationRepository = {
        WHERE cm.status      = 'active'
          AND (cm.end_date AT TIME ZONE 'Asia/Kolkata')::date
              = ((NOW() AT TIME ZONE 'Asia/Kolkata') + ($1 || ' days')::INTERVAL)::date
-         AND c.phone_number           IS NOT NULL
-         AND c.whatsapp_notifications = TRUE`,
+         AND c.phone_number           IS NOT NULL`,
       [daysBefore]
     )
     return rows
@@ -721,8 +707,7 @@ export const whatsappAutomationRepository = {
          AND cp.expiry_date IS NOT NULL
          AND (cp.expiry_date)::date
              = ((NOW() AT TIME ZONE 'Asia/Kolkata') + ($1 || ' days')::INTERVAL)::date
-         AND cp.mobile                IS NOT NULL
-         AND c.whatsapp_notifications = TRUE`,
+         AND cp.mobile                IS NOT NULL`,
       [daysBefore]
     )
     return rows
@@ -772,7 +757,6 @@ export const whatsappAutomationRepository = {
          AND (a.scheduled_at AT TIME ZONE 'Asia/Kolkata')::date
              = ((NOW() AT TIME ZONE 'Asia/Kolkata')::date + 1)
          AND c.phone_number           IS NOT NULL
-         AND c.whatsapp_notifications = TRUE
          AND NOT EXISTS (
            SELECT 1 FROM wa_automation_logs l
            WHERE l.reference_id = a.id::text || ':' ||
@@ -823,7 +807,6 @@ export const whatsappAutomationRepository = {
          AND (a.scheduled_at AT TIME ZONE 'Asia/Kolkata')::date
              = ((NOW() AT TIME ZONE 'Asia/Kolkata')::date + 1)
          AND c.phone_number           IS NOT NULL
-         AND c.whatsapp_notifications = TRUE
          AND NOT EXISTS (
            SELECT 1 FROM wa_automation_logs l
            WHERE l.reference_id = a.id::text
@@ -861,7 +844,6 @@ export const whatsappAutomationRepository = {
        FROM clients c
        JOIN salons s ON s.id = c.salon_id
        WHERE c.phone_number       IS NOT NULL
-         AND c.whatsapp_marketing = TRUE
          AND c.is_active          = TRUE
          AND (
            SELECT MAX(a.scheduled_at)
@@ -901,7 +883,6 @@ export const whatsappAutomationRepository = {
        FROM clients c
        JOIN salons s ON s.id = c.salon_id
        WHERE c.phone_number       IS NOT NULL
-         AND c.whatsapp_marketing = TRUE
          AND c.is_active          = TRUE`
     )
     return rows

@@ -7,6 +7,7 @@ import logger from '../../config/logger'
 import { waScheduledMessagesService } from './wa-scheduled-messages.service'
 import { dateLocale } from "../../config/currency";
 import { runServiceChainTick } from '../service-chains/service-chains.runner'
+import { platformScheduledMessagesService } from '../platform-scheduled-messages/platform-scheduled-messages.service'
 
 let schedulerInterval: NodeJS.Timeout | null = null
 let dueTickInterval: NodeJS.Timeout | null = null
@@ -86,15 +87,8 @@ async function runScheduledJobs(): Promise<void> {
     }
   }
 
-  // ── 10:00 AM IST: Pending Payment Reminders (rolling preview) ─────────────
-  if (hour === 10 && minute < 5) {
-    const today = getTodayIST()
-    if (lastRunDate['10am'] !== today) {
-      lastRunDate['10am'] = today
-      logger.info('[WA-AUTO-SCHEDULER] Running 10AM IST payment reminder preview job...')
-      await waScheduledMessagesService.upsertGroupBPreview('pending_payment_reminder')
-    }
-  }
+  // The 10:00 AM IST Pending Payment Reminder job was removed on purpose: it
+  // queued a reminder for every non-completed (draft) sale, paid or not.
 }
 
 export function startAutomationScheduler(): void {
@@ -111,6 +105,9 @@ export function startAutomationScheduler(): void {
   )
   runServiceChainTick().catch(err =>
     logger.error('[WA-AUTO-SCHEDULER] Initial service chain tick error:', err?.message)
+  )
+  platformScheduledMessagesService.runRescheduledTick().catch(err =>
+    logger.error('[WA-AUTO-SCHEDULER] Initial rescheduled-reminder tick error:', err?.message)
   )
 
   // Daily-job poll — unchanged cadence, only Group B/New Year left in it now.
@@ -130,6 +127,10 @@ export function startAutomationScheduler(): void {
     // Service Chains: enrol new purchases, then send whatever is due.
     runServiceChainTick().catch(err =>
       logger.error('[WA-AUTO-SCHEDULER] Service chain tick error:', err?.message)
+    )
+    // Super Meta > Scheduled Messages: subscription reminders an admin rescheduled, whose time has come.
+    platformScheduledMessagesService.runRescheduledTick().catch(err =>
+      logger.error('[WA-AUTO-SCHEDULER] Rescheduled-reminder tick error:', err?.message)
     )
   }, 5 * 60 * 1000)
 }
