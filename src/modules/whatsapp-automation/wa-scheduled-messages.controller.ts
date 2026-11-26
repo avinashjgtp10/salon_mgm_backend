@@ -79,8 +79,12 @@ export const waScheduledMessagesController = {
       const status    = toArray(req.query.status)
       const eventType = toArray(req.query.eventType)
       const clientId  = req.query.clientId  as string | undefined
-      const dateFrom  = req.query.dateFrom  as string | undefined
-      const dateTo    = req.query.dateTo    as string | undefined
+      // Days are the salon's own calendar days ('YYYY-MM-DD'); anything else is refused here instead of failing in the database.
+      if ((req.query.dateFrom && !isDay(req.query.dateFrom)) || (req.query.dateTo && !isDay(req.query.dateTo))) {
+        return next(new AppError(400, 'Dates must look like 2026-11-25', 'VALIDATION_ERROR'))
+      }
+      const dateFrom  = isDay(req.query.dateFrom) ? req.query.dateFrom : undefined
+      const dateTo    = isDay(req.query.dateTo)   ? req.query.dateTo   : undefined
       const search    = req.query.search    as string | undefined
 
       const invalidStatus = status?.find(s => !VALID_STATUSES.includes(s as ScheduledMessageStatus))

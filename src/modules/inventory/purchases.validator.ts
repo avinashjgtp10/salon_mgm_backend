@@ -91,6 +91,46 @@ export const validateCreateHistoricalPurchase = (
             if (!isUUID(item.product_id)) {
                 throw new AppError(400, `items[${i}].product_id must be a UUID`, "VALIDATION_ERROR");
             }
+            // A line carrying an existing purchase_items id (editing a bill that already moved stock) keeps its stored quantity, which can be
+            // fractional; the repository rejects any change to it. New lines must be whole numbers.
+            const keepsStoredQty = typeof item.id === "string" && isUUID(item.id);
+            if (typeof item.quantity !== "number" || !Number.isFinite(item.quantity) || item.quantity <= 0 || (!keepsStoredQty && !Number.isInteger(item.quantity))) {
+                throw new AppError(400, `items[${i}].quantity must be a positive whole number`, "VALIDATION_ERROR");
+            }
+            if (typeof item.purchase_price !== "number" || !Number.isFinite(item.purchase_price) || item.purchase_price < 0) {
+                throw new AppError(400, `items[${i}].purchase_price must be a non-negative number`, "VALIDATION_ERROR");
+            }
+            if (item.tax_percent !== undefined && item.tax_percent !== null &&
+                (typeof item.tax_percent !== "number" || !Number.isFinite(item.tax_percent) || item.tax_percent < 0 || item.tax_percent > 100)) {
+                throw new AppError(400, `items[${i}].tax_percent must be a number between 0 and 100`, "VALIDATION_ERROR");
+            }
+        }
+        return next();
+    } catch (err) {
+        return next(err);
+    }
+};
+
+// ─── Add products to an existing past bill ─────────────────────────────────────
+// Only the new lines are sent; the bill's date, number, notes and existing lines are never part of this request.
+export const validateAddHistoricalItems = (
+    req: Request,
+    _res: Response,
+    next: NextFunction
+): void => {
+    try {
+        const items = req.body?.items;
+        if (!isUUID(req.params.id)) {
+            throw new AppError(400, "bill id must be a UUID", "VALIDATION_ERROR");
+        }
+        if (!Array.isArray(items) || items.length === 0 || items.length > 200) {
+            throw new AppError(400, "items must be a non-empty array (at most 200)", "VALIDATION_ERROR");
+        }
+        for (let i = 0; i < items.length; i++) {
+            const item = items[i];
+            if (!isUUID(item?.product_id)) {
+                throw new AppError(400, `items[${i}].product_id must be a UUID`, "VALIDATION_ERROR");
+            }
             if (typeof item.quantity !== "number" || !Number.isInteger(item.quantity) || item.quantity <= 0) {
                 throw new AppError(400, `items[${i}].quantity must be a positive whole number`, "VALIDATION_ERROR");
             }

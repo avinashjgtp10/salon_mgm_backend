@@ -44,6 +44,8 @@ export interface Purchase {
     payment_status?: "paid" | "due" | "overdue";
     // FALSE for a past bill added with "Add Past Bill (no stock change)"; TRUE for everything else.
     stock_applied?: boolean;
+    // Computed by the server (list + getById): true when the bill never changed stock and has no purchase order (past or migrated bill), so Edit / Delete are allowed.
+    is_historical?: boolean;
     bill_number?: string | null;
     notes?: string | null;
     // Only on the supplier Orders list (list()): per-bill sums over its lines. subtotal_amount is before tax.
@@ -82,6 +84,12 @@ export interface CreateHistoricalPurchaseDTO {
     purchase_date: string;
     bill_number?: string | null;
     notes?: string | null;
+    // id = the existing purchase_items row (sent when editing); required to edit a bill that already moved stock.
+    items: { id?: string; product_id: string; quantity: number; purchase_price: number; tax_percent?: number }[];
+}
+
+// Product lines ADDED to an existing past bill (nothing already on the bill is touched). Whole-number quantities, like any new past-bill line.
+export interface AddHistoricalItemsDTO {
     items: { product_id: string; quantity: number; purchase_price: number; tax_percent?: number }[];
 }
 

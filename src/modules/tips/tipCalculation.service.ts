@@ -245,6 +245,45 @@ const tipEarnedRepository = {
         );
         return rowCount ?? 0;
     },
+
+    // Settles EVERY pending tip row a staff member earned between two dates (inclusive), on the caller's own database connection so it can sit
+    // inside the caller's transaction. Payroll uses this: paying a payroll period pays that period's tips too, and the Tip table must stop
+    // showing them as Pending at the same moment. Same date test as the payroll summary (earned_at::date BETWEEN start AND end); rows outside
+    // the period stay pending and rows already paid are left alone. Writes the tip_settlements row a normal Settle writes.
+    async settleForPeriod(
+        db: { query: (sql: string, params?: unknown[]) => Promise<{ rows: any[] }> },
+        salonId: string,
+        staffId: string,
+        startDate: string,
+        endDate: string,
+        paymentMethod?: string | null,
+        settledBy?: string | null
+    ): Promise<{ settledAmount: number; remainingBalance: number; rowsSettled: number }> {
+        const { rows: settled } = await db.query(
+            `UPDATE tip_earned
+                SET status = 'paid', paid_at = NOW(), updated_at = NOW()
+              WHERE salon_id = $1 AND staff_id = $2 AND status = 'pending'
+                AND earned_at::date BETWEEN $3::date AND $4::date
+          RETURNING tip_amount`,
+            [salonId, staffId, startDate, endDate]
+        );
+        if (settled.length === 0) return { settledAmount: 0, remainingBalance: 0, rowsSettled: 0 };
+
+        const settledAmount = Math.round(settled.reduce((sum: number, r: any) => sum + parseFloat(r.tip_amount), 0) * 100) / 100;
+        const { rows: left } = await db.query(
+            `SELECT COALESCE(SUM(tip_amount), 0) AS pending FROM tip_earned WHERE salon_id = $1 AND staff_id = $2 AND status = 'pending'`,
+            [salonId, staffId]
+        );
+        const remainingBalance = Math.round(parseFloat(left[0].pending) * 100) / 100;
+
+        await db.query(
+            `INSERT INTO tip_settlements (salon_id, staff_id, settled_amount, remaining_balance, status, payment_method, settled_by)
+             VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+            // tip_settlements.payment_method is VARCHAR(30).
+            [salonId, staffId, settledAmount, remainingBalance, remainingBalance <= 0 ? "paid" : "partial", paymentMethod ? paymentMethod.slice(0, 30) : null, settledBy ?? null]
+        );
+        return { settledAmount, remainingBalance, rowsSettled: settled.length };
+    },
 };
 
 // ─── tip_settlements repository (audit trail) ──────────────────────────────
@@ -329,6 +368,14 @@ export const tipCalculationService = {
 
     async settleStaffTip(salonId: string, staffId: string, amount: number, paymentMethod?: string | null, settledBy?: string | null) {
         return tipEarnedRepository.settlePartial(salonId, staffId, amount, paymentMethod, settledBy);
+    },
+
+    // Payroll: settle all of a staff member's pending tips for a pay period, inside the payroll payment's own transaction.
+    async settleStaffTipForPeriod(
+        db: Parameters<typeof tipEarnedRepository.settleForPeriod>[0],
+        salonId: string, staffId: string, startDate: string, endDate: string, paymentMethod?: string | null, settledBy?: string | null
+    ) {
+        return tipEarnedRepository.settleForPeriod(db, salonId, staffId, startDate, endDate, paymentMethod, settledBy);
     },
 
     async getSettlementHistory(salonId: string, staffId: string, limit?: number) {

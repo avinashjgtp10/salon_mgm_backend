@@ -249,7 +249,7 @@ export const DEFAULT_PURCHASE_TEMPLATES: Record<
         label: "Subscription Expiring",
         category: "UTILITY",
         language: "en",
-        bodyText: "Hi {{owner_name}}, your SalonOx subscription ({{plan_name}}) for {{salon_name}} expires on {{expiry_date}}, {{days_left}}. Renew from Settings > Billing to keep using SalonOx without interruption.",
+        bodyText: "Hi *{{customer_name}}* 👋\n\nYour *SalonOx {{plan_name}}* subscription for *{{salon_name}}* is expiring on *{{expiry_date}}* (in {{days_remaining}} days).\n\nTo continue enjoying uninterrupted access to SalonOx, please renew your subscription before the expiry date.\n\n🔄 *Renew Subscription:* Settings → Billing\n\nNeed help with renewal or have any questions?\n\n📞 You can contact your assigned *SalonOx Coordinator* for assistance.\n\nThank you for being a valued SalonOx customer! 💜\n\n*Team SalonOx*",
     },
 };
 
@@ -292,8 +292,20 @@ export const EVENT_VARIABLE_NAMES: Record<DefaultPurchaseEventType, string[]> = 
   cash_counter_closed:  ["salon_name", "closing_date", "closing_time", "collection_breakdown", "total_collection", "expenses", "in_store_cash"],
   cash_counter_opened_updated: ["salon_name", "opening_date", "opening_time", "opening_amount"],
   cash_counter_closed_updated: ["salon_name", "closing_date", "closing_time", "collection_breakdown", "total_collection", "expenses", "in_store_cash"],
-  subscription_expiring: ["owner_name", "salon_name", "plan_name", "expiry_date", "days_left"],
+  // The owner's first name, then (in this order, matching subscription-expiry-whatsapp.ts) salon, plan, end date, days left.
+  subscription_expiring: ["customer_name", "salon_name", "plan_name", "expiry_date", "days_remaining"],
 };
+
+// The "days remaining" slot of the subscription_expiring template. The wording first approved on Meta put the WHOLE phrase in it
+// ("in 3 days" / "in 1 day" / "today", written as "..., {{days_left}}."); the current wording writes the unit itself
+// ("(in {{days_remaining}} days)"), so it needs the bare number. Which one applies is read from the LIVE (approved) wording, so
+// the value switches by itself the moment the new wording is approved, and a message is never "expires on 1 Dec, 3".
+export function daysRemainingValue(liveBodyText: string | null | undefined, days: number): string {
+    const n = Math.max(Math.floor(days), 0);
+    const writesTheUnit = /\bin\s*\{\{\s*(?:days_remaining|days_left)\s*\}\}\s*days?\b/i.test(liveBodyText ?? "");
+    if (writesTheUnit) return String(n);
+    return n === 0 ? "today" : n === 1 ? "in 1 day" : `in ${n} days`;
+}
 
 // Converts a salon's named-placeholder wording into Meta's required
 // sequential {{1}}, {{2}}, ... form, right before submission — the DB copy

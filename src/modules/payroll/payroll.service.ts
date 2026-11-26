@@ -2,6 +2,7 @@ import pool from "../../config/database";
 import logger from "../../config/logger";
 import { AppError } from "../../middleware/error.middleware";
 import { staffWagesRepository } from "../staff/staffSettings.repository";
+import { attendanceService } from "../attendance/attendance.service";
 import { commissionCalculationService } from "../commission/commissionCalculation.service";
 import { tipCalculationService } from "../tips/tipCalculation.service";
 import { emailService } from "../utils/email.service";
@@ -14,9 +15,10 @@ import {
     payrollEntryRepository, payrollAdjustmentRepository, payrollPaymentRepository, salaryAdvanceRepository,
 } from "./payroll.repository";
 import {
-    AdjustPayrollBody, CommissionByCategory, PayPayrollBody, StaffPayrollSummary,
+    AdjustPayrollBody, CommissionByCategory, PayPayrollBody, StaffPayrollSummary, PayrollStatement, PayrollPayment,
     CreateSalaryAdvanceBody, SalaryAdvanceListQuery, UpdateSalaryAdvanceBody,
 } from "./payroll.types";
+import { amountInWords } from "../salon-client-invoices/amount-in-words.util";
 
 type SalonBranding = { business_name: string; logo_url: string | null; email: string | null; phone: string | null; address: string | null; timezone: string | null; currency: string | null };
 
@@ -103,13 +105,92 @@ async function getCommissionByCategoryForSalon(
     return byStaff;
 }
 
+// Total hours each staff member worked in the period, keyed by staff id. Uses the same
+// attendanceService.getRange the Attendance report uses, so payroll hours always match that
+// report: break time is already excluded and approved-leave days are already zeroed.
+async function getHoursWorkedByStaff(salonId: string, startDate: string, endDate: string): Promise<Map<string, number>> {
+    const { records } = await attendanceService.getRange(salonId, startDate, endDate);
+    const hours = new Map<string, number>();
+    for (const r of records) {
+        hours.set(r.staff_id, (hours.get(r.staff_id) ?? 0) + Number(r.hours_worked ?? 0));
+    }
+    return hours;
+}
+
+// "Rupees Three Hundred Sixty Two and Twenty Five Paise Only". The shared helper is Indian-rupee only,
+// so for any other currency the statement simply leaves the line out rather than print the wrong currency.
+function netPayInWords(amount: number, currency: string | null): string | null {
+    if (currency && currency.toUpperCase() !== "INR") return null;
+    const safe = Math.max(0, Math.round(amount * 100) / 100);
+    const rupees = Math.floor(safe);
+    const paise = Math.round((safe - rupees) * 100);
+    const base = amountInWords(rupees).replace(/ Only$/, "");
+    if (!paise) return `${base} Only`;
+    const paiseWords = amountInWords(paise).replace(/^Rupees /, "").replace(/ Only$/, "");
+    return `${base} and ${paiseWords} Paise Only`;
+}
+
+// The staff member's own branch; falls back to the salon's main branch when none is set. Each query uses
+// exactly the parameters it is given — Postgres rejects an unused $n ("could not determine data type").
+async function loadBranch(salonId: string, branchId: string | null) {
+    const { rows } = branchId
+        ? await pool.query(`SELECT * FROM branches WHERE id = $1 AND salon_id = $2`, [branchId, salonId])
+        : await pool.query(`SELECT * FROM branches WHERE salon_id = $1 ORDER BY is_main DESC, created_at ASC LIMIT 1`, [salonId]);
+    const b = rows[0];
+    return {
+        name: (b?.name ?? null) as string | null,
+        address: b ? ([b.address_line1, b.address_line2, b.city, b.state, b.pincode].filter(Boolean).join(", ") || null) : null,
+        phone: (b?.phone ?? null) as string | null,
+        email: (b?.email ?? null) as string | null,
+    };
+}
+
+// Renders the "Salary Payment Receipt" PDF — used by both the e-mailed copy and the on-screen download,
+// so the two can never drift apart.
+async function renderReceiptPdfFor(
+    salonId: string, staffId: string, summary: StaffPayrollSummary, payment: PayrollPayment, periodStart: string, periodEnd: string
+): Promise<Buffer> {
+    const [salon, staffRes] = await Promise.all([
+        getSalonBranding(salonId),
+        pool.query(`SELECT first_name, last_name, designation, staff_code, joined_date, branch_id FROM staff WHERE id = $1 AND salon_id = $2`, [staffId, salonId]),
+    ]);
+    const st = staffRes.rows[0];
+    if (!st) throw new AppError(404, "Staff member not found", "NOT_FOUND");
+    const branch = await loadBranch(salonId, st.branch_id ?? null);
+
+    return renderPayrollReceiptPdf({
+        // The header shows the staff member's branch contact details, falling back to the salon's own.
+        salon: { ...salon, address: branch.address || salon.address, phone: branch.phone || salon.phone, email: branch.email || salon.email },
+        branchName: branch.name,
+        staffName: [st.first_name, st.last_name].filter(Boolean).join(" "),
+        staffDesignation: st.designation ?? null,
+        employeeCode: st.staff_code ?? null,
+        joinedDate: dateOnly(st.joined_date),
+        periodStart,
+        periodEnd,
+        documentId: buildReceiptDocumentId(payment.id, periodStart),
+        summary,
+        payment,
+        amountInWords: netPayInWords(Number(payment.amount), salon.currency),
+    });
+}
+
+function dateOnly(value: unknown): string | null {
+    if (value instanceof Date && !isNaN(value.getTime())) {
+        const p = (n: number) => String(n).padStart(2, "0");
+        return `${value.getFullYear()}-${p(value.getMonth() + 1)}-${p(value.getDate())}`;
+    }
+    return typeof value === "string" ? value.slice(0, 10) : null;
+}
+
 export const payrollService = {
     async getStaffSummary(salonId: string, periodStart: string, periodEnd: string): Promise<StaffPayrollSummary[]> {
-        const [staffRows, commissionByStaff, tipsByStaff, entries] = await Promise.all([
+        const [staffRows, commissionByStaff, tipsByStaff, entries, hoursByStaff] = await Promise.all([
             getActiveStaffForSalon(salonId),
             getCommissionByCategoryForSalon(salonId, periodStart, periodEnd),
             tipCalculationService.getEarnedBySalon(salonId, periodStart, periodEnd),
             payrollEntryRepository.listForPeriod(salonId, periodStart, periodEnd),
+            getHoursWorkedByStaff(salonId, periodStart, periodEnd),
         ]);
 
         const tipsMap = new Map(tipsByStaff.map((t) => [t.staff_id, t]));
@@ -134,7 +215,17 @@ export const payrollService = {
             // pg returns NUMERIC columns as strings ("9000.00"). Left as-is, "+" below
             // concatenates instead of adding ("9000.00" + 1720 -> "9000.001720"), which
             // silently dropped commission and bonus from Net. Coerce every addend.
-            const baseSalary = Number(entry?.base_salary && entry.base_salary > 0 ? entry.base_salary : (wage?.salary_amount ?? 0));
+            // How basic salary is worked out depends on the staff member's pay type:
+            //   hourly -> hours worked in the period x hourly rate
+            //   salary -> the fixed salary_amount
+            // A manual "Basic Salary" adjustment saved on the payroll entry still wins over both.
+            const isHourly = wage?.compensation_type === "hourly";
+            const hourlyRate = isHourly ? Number(wage?.hourly_rate ?? 0) : null;
+            const hoursWorked = isHourly ? Math.round((hoursByStaff.get(staff.id) ?? 0) * 100) / 100 : null;
+            const calculatedBase = isHourly
+                ? Math.round((hoursWorked ?? 0) * (hourlyRate ?? 0) * 100) / 100
+                : Number(wage?.salary_amount ?? 0);
+            const baseSalary = Number(entry?.base_salary && entry.base_salary > 0 ? entry.base_salary : calculatedBase);
             // commission/tips columns on payroll_entries hold a manual
             // adjustment override once one has been made (see
             // payroll.repository.updateField's comment) — otherwise the
@@ -161,6 +252,8 @@ export const payrollService = {
                 staff_designation: staff.designation,
                 base_salary: baseSalary,
                 compensation_type: wage?.compensation_type ?? "none",
+                hourly_rate: hourlyRate,
+                hours_worked: hoursWorked,
                 commission_by_category: { services: commission.services, products: commission.products, memberships: commission.memberships, packages: commission.packages, other: commission.other },
                 commission_total: commissionTotal,
                 tips_total: tipsTotal,
@@ -282,6 +375,13 @@ export const payrollService = {
                 [netSalary, body.payment_method, entry.id, salonId]
             );
 
+            // The payout covers this period's commission and tips as well as the salary, so those earnings are settled in the SAME
+            // transaction: the Commission and Tip tables show them as Settled the moment the payroll shows Paid, and if either step
+            // fails the payment is rolled back too, so the three can never disagree. Only pending rows dated inside the period are
+            // touched (the same rows the payroll summary counted); anything outside the period or already settled is left alone.
+            await commissionCalculationService.settleStaffCommissionForPeriod(client, salonId, staffId, body.period_start, body.period_end, paidBy ?? null);
+            await tipCalculationService.settleStaffTipForPeriod(client, salonId, staffId, body.period_start, body.period_end, body.payment_method, paidBy ?? null);
+
             await client.query("COMMIT");
         } catch (err) {
             await client.query("ROLLBACK");
@@ -315,13 +415,9 @@ export const payrollService = {
             if (!payment) return false;
 
             const salon = await getSalonBranding(salonId);
-            const periodLabel = `${period.period_start} to ${period.period_end}`;
             // The PDF keeps the English wording; only the e-mail's own "from … to …" follows the salon's language.
             const emailPeriodLabel = translator(await getSalonLanguage(salonId))("email.salary.periodRange", { from: period.period_start, to: period.period_end });
-            const documentId = buildReceiptDocumentId(payment.id, period.period_start);
-            const pdfBuffer = await renderPayrollReceiptPdf({
-                salon, staffName: staff.name, staffDesignation: staff.designation, periodLabel, documentId, payment, netSalary: summary.net_salary,
-            });
+            const pdfBuffer = await renderReceiptPdfFor(salonId, staffId, summary, payment, period.period_start, period.period_end);
             const pdfFilename = `payment-receipt-${period.period_start}-to-${period.period_end}.pdf`;
 
             await emailService.sendSalaryReceiptEmail({
@@ -376,15 +472,84 @@ export const payrollService = {
         const payment = await payrollPaymentRepository.findByEntryId(summary.payroll_entry_id);
         if (!payment) throw new AppError(404, "No payment recorded for this payroll period", "NOT_PAID");
 
-        const staff = await getStaffNameAndDesignation(staffId);
-        const salon = await getSalonBranding(salonId);
-        const periodLabel = `${periodStart} to ${periodEnd}`;
-        const documentId = buildReceiptDocumentId(payment.id, periodStart);
-
-        const buffer = await renderPayrollReceiptPdf({
-            salon, staffName: staff.name, staffDesignation: staff.designation, periodLabel, documentId, payment, netSalary: summary.net_salary,
-        });
+        const buffer = await renderReceiptPdfFor(salonId, staffId, summary, payment, periodStart, periodEnd);
         return { buffer, filename: `payment-receipt-${periodStart}-to-${periodEnd}.pdf` };
+    },
+
+    // Everything the "Salary Statement" page prints for one staff member and period, in one call.
+    async getStatement(salonId: string, staffId: string, periodStart: string, periodEnd: string): Promise<PayrollStatement> {
+        const [summary] = await this.getStaffSummary(salonId, periodStart, periodEnd)
+            .then((rows) => rows.filter((r) => r.staff_id === staffId));
+        if (!summary) throw new AppError(404, "Staff member not found for this salon", "NOT_FOUND");
+
+        const [salon, staffRes, attendance] = await Promise.all([
+            getSalonBranding(salonId),
+            pool.query(
+                `SELECT first_name, last_name, designation, staff_code, joined_date, branch_id FROM staff WHERE id = $1 AND salon_id = $2`,
+                [staffId, salonId]
+            ),
+            attendanceService.getRange(salonId, periodStart, periodEnd),
+        ]);
+        const staffRow = staffRes.rows[0];
+        if (!staffRow) throw new AppError(404, "Staff member not found", "NOT_FOUND");
+
+        const b = await loadBranch(salonId, staffRow.branch_id ?? null);
+
+        // Scheduled days = days in the period that the staff member's schedule marks as working
+        // (a dated override beats the recurring weekly row, same rule the attendance module uses).
+        const { rows: schedRows } = await pool.query(
+            `SELECT COUNT(*)::int AS n
+               FROM generate_series($2::date, $3::date, interval '1 day') AS d(day)
+              WHERE COALESCE((
+                    SELECT ss.is_available FROM staff_schedules ss
+                     WHERE ss.staff_id = $1
+                       AND (ss.date = d.day::date OR (ss.date IS NULL AND ss.day_of_week = EXTRACT(DOW FROM d.day)::int))
+                     ORDER BY ss.date NULLS LAST LIMIT 1), false)`,
+            [staffId, periodStart, periodEnd]
+        );
+
+        const mine = attendance.records.filter((r) => r.staff_id === staffId);
+        const onLeave = (r: (typeof mine)[number]) => r.on_approved_leave === true;
+        const att = {
+            scheduled_days: Number(schedRows[0]?.n ?? 0),
+            working_days: mine.filter((r) => !onLeave(r) && (r.status === "present" || r.status === "late")).length,
+            half_days: mine.filter((r) => !onLeave(r) && r.status === "half_day").length,
+            leave_days: mine.filter(onLeave).length,
+            absent_days: mine.filter((r) => !onLeave(r) && r.status === "absent").length,
+            late_marks: mine.filter((r) => !onLeave(r) && r.status === "late").length,
+            total_hours: Math.round(mine.reduce((s, r) => s + Number(r.hours_worked ?? 0), 0) * 100) / 100,
+        };
+
+        const paymentRow = summary.status === "paid" && summary.payroll_entry_id
+            ? await payrollPaymentRepository.findByEntryId(summary.payroll_entry_id)
+            : null;
+
+        return {
+            summary,
+            salon: { business_name: salon.business_name, logo_url: salon.logo_url, email: salon.email, phone: salon.phone, currency: salon.currency },
+            branch: { name: b.name, address: b.address || salon.address, phone: b.phone ?? salon.phone, email: b.email ?? salon.email },
+            employee: {
+                name: [staffRow.first_name, staffRow.last_name].filter(Boolean).join(" "),
+                designation: staffRow.designation ?? null,
+                employee_code: staffRow.staff_code ?? null,
+                joined_date: dateOnly(staffRow.joined_date),
+            },
+            document: {
+                payroll_id: buildSlipDocumentId(summary.payroll_entry_id ?? `${staffId}-${periodStart}`, periodStart),
+                generated_on: new Date().toISOString(),
+            },
+            attendance: att,
+            payment: paymentRow
+                ? {
+                    amount: Number(paymentRow.amount),
+                    method: paymentRow.payment_method,
+                    reference: paymentRow.payment_reference,
+                    paid_at: String(paymentRow.paid_at),
+                    receipt_no: buildReceiptDocumentId(paymentRow.id, periodStart),
+                }
+                : null,
+            amount_in_words: netPayInWords(summary.status === "paid" && paymentRow ? Number(paymentRow.amount) : summary.net_salary, salon.currency),
+        };
     },
 
     async getHistory(salonId: string, staffId: string) {

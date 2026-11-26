@@ -141,7 +141,6 @@ export const whatsappAutomationController = {
           await waScheduledMessagesService.runDueTick(); break
         case 'scheduled-group-b-preview':
           await Promise.allSettled([
-            waScheduledMessagesService.upsertGroupBPreview('pending_payment_reminder'),
             waScheduledMessagesService.upsertGroupBPreview('we_miss_you_30d'),
             waScheduledMessagesService.upsertGroupBPreview('we_miss_you_60d'),
             waScheduledMessagesService.upsertGroupBPreview('we_miss_you_90d'),

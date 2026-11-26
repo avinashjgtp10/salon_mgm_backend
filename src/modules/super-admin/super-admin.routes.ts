@@ -6,6 +6,7 @@ import { superAdminActivityLogger } from "./super-admin-activity";
 import { superAdminOwnerOnly } from "./super-admin-owner.middleware";
 import { salonClientInvoicesController } from "../salon-client-invoices/salon-client-invoices.controller";
 import waConfigSuperAdminRoutes from "../marketing/whatsapp/config/config.super-admin.routes";
+import { pricingSuperAdminRoutes } from "../marketing/whatsapp/pricing/pricing.routes";
 import clientActivityRoutes from "../client-activity/client-activity.super-admin.routes";
 import clientManagementRoutes from "../client-management/client-management.routes";
 import salonModulesRoutes from "../salon-modules/salon-modules.routes";
@@ -21,6 +22,7 @@ import platformIntegrationsRoutes from "../platform-integrations/platform-integr
 import subscriptionInvoiceRoutes from "../subscription-invoices/subscription-invoices.routes";
 import clientAnnouncementsRoutes from "../client-announcements/client-announcements.routes";
 import marketingLogsRoutes from "../marketing-logs/marketing-logs.routes";
+import platformScheduledMessagesRoutes from "../platform-scheduled-messages/platform-scheduled-messages.routes";
 
 const router = Router();
 
@@ -39,6 +41,8 @@ router.use("/client-management", clientManagementRoutes);   // scoped per team m
 
 // A salon's WhatsApp (Meta Cloud API) connection — managed here, by us, not by the salon.
 router.use("/salons/:salonId/wa-config", waConfigSuperAdminRoutes);
+// Meta's WhatsApp price list: when it was last refreshed, and refresh it now.
+router.use("/wa-pricing", pricingSuperAdminRoutes);
 
 // Salon Customization: lock/unlock whole modules for one salon.
 router.use("/salon-modules", salonModulesRoutes);
@@ -61,6 +65,8 @@ router.use("/subscription-invoices", subscriptionInvoiceRoutes);
 router.use("/client-announcements", clientAnnouncementsRoutes);
 // Marketing Logs: every message sent to clients (automation, campaigns, SMS, Email) across all salons.
 router.use("/marketing-logs", marketingLogsRoutes);
+// Scheduled Messages: SalonOx's own upcoming + sent messages to salon owners (subscription ending, salon deactivated).
+router.use("/scheduled-messages", platformScheduledMessagesRoutes);
 
 // Salon-specific permissions
 router.get("/salon-permissions/search",       superAdminController.searchSalonsForPermissions);

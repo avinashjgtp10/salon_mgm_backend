@@ -34,6 +34,14 @@ export function decideEligibility(f: EligibilityFacts, r: EligibilityRules): Eli
   return { kind: 'send' }
 }
 
+// ── Offer templates ──────────────────────────────────────────────────────────
+// A limited-time-offer template (countdown "Limited offer") must be sent with the moment the offer ends. A campaign has its
+// contacts carry one; a chain step has nowhere to set it, so the offer simply runs for this long from the moment it is sent.
+export const CHAIN_OFFER_VALID_DAYS = 3
+
+/** The offer's end for a chain message sent at `nowMs` (epoch ms). */
+export const chainOfferExpiryMs = (nowMs: number): number => nowMs + CHAIN_OFFER_VALID_DAYS * 24 * 60 * 60_000
+
 // ── Postponed steps ──────────────────────────────────────────────────────────
 export const RECHECK_AFTER_CANCEL_MS = 24 * 60 * 60_000
 

@@ -3,7 +3,8 @@ import ExcelJS from "exceljs";
 import { membershipsService } from "./memberships.service";
 import { sendSuccess } from "../utils/response.util";
 import { AppError } from "../../middleware/error.middleware";
-import { getSalonCurrency, formatMoneyAscii } from "../../config/currency";
+import { getSalonCurrency, formatMoney, formatMoneyAscii } from "../../config/currency";
+import { MEMBERSHIP_EXPORT_HEADERS, membershipExportRow } from "./memberships.export-columns";
 import { dateLocale } from "../../config/currency";
 
 type AuthRequest = Request & {
@@ -50,11 +51,8 @@ export const membershipsController = {
       const salonId = await getSalonId(req);
       const items = await membershipsService.listAll(req.query, salonId);
 
-      const headers = [
-        "Name", "Description", "Session Type", "Sessions",
-        "Valid For", "Price", "Tax Rate", "Colour",
-        "Online Sales", "Online Redemption", "Services"
-      ];
+      const salonCurrency = await getSalonCurrency(salonId);
+      const money = (n: number) => formatMoney(n, salonCurrency);
 
       const escape = (val: any) => {
         const str = val === null || val === undefined ? "" : String(val);
@@ -63,23 +61,13 @@ export const membershipsController = {
           : str;
       };
 
-      const rows = items.map((m) => [
-        escape(m.name),
-        escape(m.description ?? ""),
-        escape(m.sessionType),
-        escape(m.numberOfSessions ?? "Unlimited"),
-        escape(m.validFor),
-        escape(m.price),
-        escape(m.taxRate ?? "No tax"),
-        escape(m.colour),
-        escape(m.enableOnlineSales ? "Yes" : "No"),
-        escape(m.enableOnlineRedemption ? "Yes" : "No"),
-        escape(m.includedServices.map((s) => s.serviceName).join(" | ")),
-      ]);
+      // The same seven columns as the Memberships screen (see memberships.export-columns.ts).
+      const rows = items.map((m) => membershipExportRow(m, money).map(escape));
 
-      const csv = [headers.join(","), ...rows.map((r) => r.join(","))].join("\n");
+      // The leading BOM makes Excel read the file as UTF-8, so currency symbols such as ₹ show correctly.
+      const csv = "﻿" + [MEMBERSHIP_EXPORT_HEADERS.join(","), ...rows.map((r) => r.join(","))].join("\n");
 
-      res.setHeader("Content-Type", "text/csv");
+      res.setHeader("Content-Type", "text/csv; charset=utf-8");
       res.setHeader("Content-Disposition", `attachment; filename="memberships_${Date.now()}.csv"`);
       return res.send(csv);
     } catch (e) { return next(e); }
@@ -93,30 +81,15 @@ export const membershipsController = {
       const workbook = new ExcelJS.Workbook();
       const sheet = workbook.addWorksheet("Memberships");
 
-      const headers = [
-        "Name", "Description", "Session Type", "Sessions",
-        "Valid For", "Price", "Tax Rate", "Colour",
-        "Online Sales", "Online Redemption", "Services",
-      ];
-      sheet.addRow(headers).font = { bold: true };
+      const salonCurrency = await getSalonCurrency(salonId);
+      const money = (n: number) => formatMoney(n, salonCurrency);
 
-      items.forEach((m) => {
-        sheet.addRow([
-          m.name,
-          m.description ?? "",
-          m.sessionType,
-          m.sessionType === "unlimited" ? "Unlimited" : (m.numberOfSessions ?? ""),
-          m.validFor,
-          Number(m.price),
-          m.taxRate != null ? `${m.taxRate}%` : "No tax",
-          m.colour,
-          m.enableOnlineSales ? "Yes" : "No",
-          m.enableOnlineRedemption ? "Yes" : "No",
-          m.includedServices.map((s) => s.serviceName).join(" | "),
-        ]);
-      });
+      // The same seven columns as the Memberships screen (see memberships.export-columns.ts).
+      sheet.addRow([...MEMBERSHIP_EXPORT_HEADERS]).font = { bold: true };
+      items.forEach((m) => { sheet.addRow(membershipExportRow(m, money)); });
 
-      sheet.columns.forEach((col) => { col.width = 20; });
+      const widths = [30, 20, 34, 22, 18, 16, 14];
+      sheet.columns.forEach((col, i) => { col.width = widths[i] ?? 20; });
 
       const buffer = Buffer.from(await workbook.xlsx.writeBuffer());
       res.setHeader(
@@ -137,66 +110,81 @@ export const membershipsController = {
       const items = await membershipsService.listAll(req.query, salonId);
       const salonCurrency = await getSalonCurrency(salonId);
 
-      // Build HTML → PDF using pdfkit (already in your backend deps)
+      // PDF built with pdfkit: the Memberships screen's seven columns, on a landscape page so every column has room; long text wraps inside its cell.
       const PDFDocument = require("pdfkit");
-      const doc = new PDFDocument({ margin: 40, size: "A4" });
+      const MARGIN = 40;
+      const doc = new PDFDocument({ margin: MARGIN, size: "A4", layout: "landscape", bufferPages: true });
 
       res.setHeader("Content-Type", "application/pdf");
       res.setHeader("Content-Disposition", `attachment; filename="memberships_${Date.now()}.pdf"`);
       doc.pipe(res);
 
-      // Title
-      doc.fontSize(18).font("Helvetica-Bold").text("Memberships Report", { align: "center" });
-      doc.moveDown(0.5);
+      const pageWidth = doc.page.width - MARGIN * 2;           // 762pt on landscape A4
+      const bottomLimit = doc.page.height - MARGIN - 20;       // leave room for the page-number footer
+      const PAD_X = 6;
+      const PAD_Y = 6;
+      const BORDER = "#CBD5E1";
+      // Name | Type | Benefit | Applies To | Fee | Expiry | Created At. Name takes what the fixed columns leave, so the figures line up on every page.
+      const fixed = [95, 175, 105, 95, 80, 70];
+      const colWidths = [pageWidth - fixed.reduce((a, b) => a + b, 0), ...fixed];
+      const colX = colWidths.map((_, i) => MARGIN + colWidths.slice(0, i).reduce((a, b) => a + b, 0));
+      const colHead = [...MEMBERSHIP_EXPORT_HEADERS] as string[];
+      const colAlign: ("left" | "right")[] = ["left", "left", "left", "left", "right", "left", "left"];
+      const textWidth = (i: number) => colWidths[i] - PAD_X * 2;
+
+      // Title block (first page only)
+      doc.fillColor("#000").fontSize(18).font("Helvetica-Bold").text("Memberships Report", MARGIN, MARGIN, { width: pageWidth, align: "center" });
+      doc.moveDown(0.4);
       doc.fontSize(10).font("Helvetica").fillColor("#666")
-        .text(`Generated: ${new Date().toLocaleString(dateLocale(salonCurrency))}`, { align: "center" });
-      doc.moveDown(1);
+        .text(`Generated: ${new Date().toLocaleString(dateLocale(salonCurrency))}`, MARGIN, doc.y, { width: pageWidth, align: "center" });
+      let y = doc.y + 18;
 
-      // Table header
-      const colX    = [40, 180, 270, 340, 400, 460];
-      const colHead = ["Name", "Valid For", "Sessions", "Price", "Tax", "Online Sales"];
+      // One bordered row: cells share the same top and height so borders and text line up.
+      const drawRow = (cells: string[], top: number, height: number, opts: { header?: boolean }) => {
+        if (opts.header) doc.rect(MARGIN, top, pageWidth, height).fill("#F1F5F9");
+        doc.lineWidth(0.5).strokeColor(BORDER);
+        cells.forEach((c, i) => {
+          doc.rect(colX[i], top, colWidths[i], height).stroke();
+          doc.font(opts.header ? "Helvetica-Bold" : "Helvetica").fontSize(opts.header ? 9 : 9).fillColor(opts.header ? "#0F172A" : "#1E293B")
+            .text(c, colX[i] + PAD_X, top + PAD_Y, { width: textWidth(i), align: colAlign[i] });
+        });
+      };
+      const rowHeight = (cells: string[], header: boolean) => {
+        doc.font(header ? "Helvetica-Bold" : "Helvetica").fontSize(9);
+        const tallest = Math.max(...cells.map((c, i) => doc.heightOfString(c, { width: textWidth(i), align: colAlign[i] })));
+        return tallest + PAD_Y * 2;
+      };
 
-      doc.fontSize(9).font("Helvetica-Bold").fillColor("#000");
-      colHead.forEach((h, i) => doc.text(h, colX[i], doc.y, { width: 120, continued: i < colHead.length - 1 }));
-      doc.moveDown(0.3);
+      const drawHeader = () => {
+        const h = rowHeight(colHead, true);
+        drawRow(colHead, y, h, { header: true });
+        y += h;
+      };
+      drawHeader();
 
-      // Divider
-      doc.moveTo(40, doc.y).lineTo(555, doc.y).stroke("#ccc");
-      doc.moveDown(0.3);
-
-      // Rows
-      doc.font("Helvetica").fontSize(8).fillColor("#333");
       items.forEach((m) => {
-        const y = doc.y;
-        const cols = [
-          m.name,
-          m.validFor,
-          m.sessionType === "unlimited" ? "Unlimited" : `${m.numberOfSessions ?? "–"} sessions`,
-          formatMoneyAscii(m.price, salonCurrency),
-          m.taxRate ? `${m.taxRate}%` : "No tax",
-          m.enableOnlineSales ? "Yes" : "No",
-        ];
-        cols.forEach((c, i) => doc.text(String(c), colX[i], y, { width: 115 }));
-        doc.moveDown(1.2);
-
-        // Services sub-row
-        if (m.includedServices.length > 0) {
-          doc.fillColor("#888").fontSize(7)
-            .text(
-              `Services: ${m.includedServices.map((s) => s.serviceName).join(", ")}`,
-              52, doc.y - 8, { width: 500 }
-            );
-          doc.fillColor("#333").fontSize(8);
-          doc.moveDown(0.5);
+        const cells = membershipExportRow(m, (n) => formatMoneyAscii(n, salonCurrency));
+        const h = rowHeight(cells, false);
+        if (y + h > bottomLimit) {            // next row would not fit: new page, repeat the header
+          doc.addPage();
+          y = MARGIN;
+          drawHeader();
         }
-
-        // Row divider
-        doc.moveTo(40, doc.y).lineTo(555, doc.y).stroke("#eee");
-        doc.moveDown(0.3);
-
-        // Page break
-        if (doc.y > 750) doc.addPage();
+        drawRow(cells, y, h, {});
+        y += h;
       });
+
+      // Page numbers
+      const range = doc.bufferedPageRange();
+      for (let i = 0; i < range.count; i++) {
+        doc.switchToPage(range.start + i);
+        // The footer sits inside the bottom margin; without zeroing it pdfkit would start a new blank page for this text.
+        const bottomMargin = doc.page.margins.bottom;
+        doc.page.margins.bottom = 0;
+        doc.font("Helvetica").fontSize(8).fillColor("#94A3B8")
+          .text(`Page ${i + 1} of ${range.count}`, MARGIN, doc.page.height - MARGIN + 6, { width: pageWidth, align: "center", lineBreak: false });
+        doc.page.margins.bottom = bottomMargin;
+      }
 
       doc.end();
     } catch (e) { return next(e); }

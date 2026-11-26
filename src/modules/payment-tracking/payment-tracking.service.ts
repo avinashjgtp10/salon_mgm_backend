@@ -351,6 +351,17 @@ export const paymentTrackingService = {
         return receivableById(pool, receivableId);
     },
 
+    /**
+     * Permanently delete a whole manual / website payment record. Its installments go with it (admin_receivable_payments.receivable_id is
+     * ON DELETE CASCADE), so received / remaining / profit, the ledger and the salon's payment popup all update at once. This cannot be undone.
+     * A record that is already gone answers 404, so a double click can't delete twice.
+     */
+    async deleteReceivable(id: string) {
+        await ensureSchema();
+        const r = await pool.query(`DELETE FROM admin_receivables WHERE id = $1`, [id]);
+        if (!r.rowCount) throw new AppError(404, "Payment record not found or already deleted", "NOT_FOUND");
+    },
+
     async listMoneyAdded(q: { search?: unknown; from?: unknown; to?: unknown }) {
         await ensureSchema();
         const { from, to } = rangeOf(q);

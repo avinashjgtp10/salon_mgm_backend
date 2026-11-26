@@ -85,7 +85,7 @@ export const DEFAULT_SMS_TEMPLATES: Record<DefaultPurchaseEventType, string> = {
     "Cash Counter Updated - {{salon_name}}. Closing details updated. {{closing_date}} {{closing_time}}. {{collection_breakdown}}. Total: {{total_collection}}. Expenses: {{expenses}}. In-Store Cash: {{in_store_cash}}.",
   // SalonOx -> owner message (platform event): its email is sent by the subscription expiry sweep itself, never from here.
   subscription_expiring:
-    "Hi {{owner_name}}, your SalonOx subscription ({{plan_name}}) for {{salon_name}} expires on {{expiry_date}}, {{days_left}}.",
+    "Hi {{customer_name}}, your SalonOx subscription ({{plan_name}}) for {{salon_name}} expires on {{expiry_date}} (in {{days_remaining}} days).",
 }
 
 export const DEFAULT_EMAIL_TEMPLATES: Record<DefaultPurchaseEventType, { subject: string; body: string }> = {
@@ -216,8 +216,8 @@ export const DEFAULT_EMAIL_TEMPLATES: Record<DefaultPurchaseEventType, { subject
     body: "Cash Counter Updated — {{salon_name}}\n\nYour cash counter closing details have been updated successfully.\n\nDate: {{closing_date}}\nTime: {{closing_time}}\n\nUpdated Collection Summary\n{{collection_breakdown}}\n\nTotal Collection: {{total_collection}}\nExpenses: {{expenses}}\nIn-Store Cash: {{in_store_cash}}\n\nThank you for reconciling today's cash counter.",
   },
   subscription_expiring: {
-    subject: "Your SalonOx subscription expires {{days_left}}",
-    body: "Hi {{owner_name}},\n\nYour SalonOx subscription ({{plan_name}}) for {{salon_name}} expires on {{expiry_date}}, {{days_left}}.\n\nRenew from Settings > Billing to keep using SalonOx without interruption.",
+    subject: "Your SalonOx subscription expires in {{days_remaining}} days",
+    body: "Hi {{customer_name}},\n\nYour SalonOx subscription ({{plan_name}}) for {{salon_name}} expires on {{expiry_date}} (in {{days_remaining}} days).\n\nRenew from Settings > Billing to keep using SalonOx without interruption.",
   },
 }
 

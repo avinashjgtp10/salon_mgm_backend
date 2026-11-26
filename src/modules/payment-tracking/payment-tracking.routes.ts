@@ -23,6 +23,7 @@ router.get("/subscription-payments/:salonId", wrap(async (req, res) => { res.jso
 router.get("/receivables", wrap(async (req, res) => { res.json({ success: true, data: await svc.listReceivables(req.query.kind, req.query) }); }));
 router.post("/receivables", wrap(async (req, res) => { res.status(201).json({ success: true, data: await svc.createReceivable(req.body, uid(req)) }); }));
 router.patch("/receivables/:id", wrap(async (req, res) => { res.json({ success: true, data: await svc.updateReceivable(String(req.params.id), req.body) }); }));
+router.delete("/receivables/:id", wrap(async (req, res) => { await svc.deleteReceivable(String(req.params.id)); res.json({ success: true, data: null }); }));
 router.get("/receivables/:id/payments", wrap(async (req, res) => { res.json({ success: true, data: await svc.history(String(req.params.id)) }); }));
 router.post("/receivables/:id/payments", wrap(async (req, res) => { res.status(201).json({ success: true, data: await svc.addPayment(String(req.params.id), req.body, uid(req)) }); }));
 router.patch("/receivables/:id/payments/:paymentId", wrap(async (req, res) => {

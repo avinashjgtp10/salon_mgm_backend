@@ -57,7 +57,9 @@ function ensureTable(): Promise<boolean> {
 // The WhatsApp channel keeps its own claim table (same shape), so the email table and its history are untouched and no
 // migration is needed. Created on first use, like the email one.
 let waTableReady: Promise<boolean> | null = null;
-function ensureWhatsappTable(): Promise<boolean> {
+// Exported so Super Meta > Scheduled Messages (platform-scheduled-messages) can claim a reminder itself: skipping, cancelling or
+// rescheduling one works by writing its claim row, which is what stops this sweep from sending it.
+export function ensureWhatsappTable(): Promise<boolean> {
     if (!waTableReady) {
         waTableReady = pool
             .query(
@@ -92,7 +94,11 @@ export async function runExpiryReminderSweep(): Promise<{ checked: number; sent:
 
     const maxDays = Math.max(...REMINDER_DAYS);
     const { rows } = await pool.query(
-        `SELECT s.id AS subscription_id, s.current_period_end,
+        // current_period_end is a timestamp WITHOUT time zone, which node-postgres would read in the SERVER's own zone: an IST
+        // machine and the UTC server then stamp different period_end values on the same reminder's claim row, and a claim
+        // written by one is missed by the other (the same reminder sent twice, or an admin's Skip ignored). Casting here makes
+        // the instant the same everywhere (the DB session is UTC); on the UTC server nothing changes.
+        `SELECT s.id AS subscription_id, s.current_period_end::timestamptz AS current_period_end,
                 sp.name AS plan_name,
                 COALESCE(sa.business_name, sa.slug, 'your salon') AS salon_name,
                 u.email AS owner_email, u.first_name AS owner_first_name, u.phone AS owner_phone,
