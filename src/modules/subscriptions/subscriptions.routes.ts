@@ -13,6 +13,8 @@ import { requireModule } from "../../middleware/moduleLock.middleware"
 import logger from "../../config/logger"
 import { subscriptionBillingService } from "../subscription-billing/subscription-billing.service"
 import { subscriptionUpgradeService } from "../subscription-upgrade/subscription-upgrade.service"
+import { subscriptionDurationsService } from "../subscription-durations/subscription-durations.service"
+import { salonsService } from "../salons/salons.service"
 
 const router = Router()
 
@@ -36,6 +38,15 @@ router.get("/plans/:id", subscriptionsController.getPlan)
 router.get("/catalog", async (_req, res, next) => {
     try {
         res.json({ success: true, data: await planPricingService.catalog() })
+    } catch (err) { next(err) }
+})
+
+// Public: the active duration options (3 / 6 / 12 months or custom) of every plan, with base price, GST and the final price.
+router.get("/duration-options", async (_req, res, next) => {
+    try {
+        // Never cached: a price, GST or active-status change in Super Admin must show on the website on the next load.
+        res.set("Cache-Control", "no-store")
+        res.json({ success: true, data: await subscriptionDurationsService.listPublic() })
     } catch (err) { next(err) }
 })
 
@@ -129,6 +140,31 @@ router.post("/upgrade/quote", authMiddleware, billingRoute((salonId, req) => sub
 router.post("/upgrade/initiate", authMiddleware, billingRoute((salonId, req) => subscriptionUpgradeService.initiate(salonId, req.user.userId, req.body?.tier, req.body?.cycle, req.body?.country, req.body?.expected_currency)))
 router.post("/upgrade/:id/verify", authMiddleware, billingRoute((salonId, req) => subscriptionUpgradeService.verify(salonId, String(req.params.id), req.body ?? {}, req.user.userId)))
 router.post("/upgrade/:id/cancel", authMiddleware, billingRoute((salonId, req) => subscriptionUpgradeService.cancel(salonId, String(req.params.id))))
+
+// Prepaid duration purchases (Razorpay Orders + Checkout). Owner/admin of the caller's own salon only; the salon id and the amount are never
+// taken from the request: the server reads the option's price from the database.
+router.get("/duration-current", authMiddleware, billingRoute((salonId) => subscriptionDurationsService.currentSnapshot(salonId)))
+router.get("/duration-orders", authMiddleware, billingRoute((salonId) => subscriptionDurationsService.listForSalon(salonId)))
+// A visitor who signed up from the website pays before onboarding has created their salon. A duration term belongs to a
+// salon, so it is created here from the registration details (the same ensureForOwner used when a signup payment arrives);
+// onboarding then fills it in.
+router.post("/duration-orders", authMiddleware, async (req: any, res, next) => {
+    try {
+        ownerOnly(req)
+        let salonId: string
+        try {
+            salonId = await getSalonId(req)
+        } catch (err) {
+            if (!(err instanceof AppError && err.code === "NO_SALON_CONTEXT")) throw err
+            const salon = await salonsService.ensureForOwner(req.user.userId)
+            if (!salon) throw err
+            salonId = salon.id
+        }
+        res.json({ success: true, data: await subscriptionDurationsService.createOrder(salonId, req.user.userId, req.body?.option_id, req.body?.plan) })
+    } catch (err) { next(err) }
+})
+router.post("/duration-orders/:id/verify", authMiddleware, billingRoute((salonId, req) => subscriptionDurationsService.verify(salonId, String(req.params.id), req.body ?? {})))
+router.post("/duration-orders/:id/cancel", authMiddleware, billingRoute((salonId, req) => subscriptionDurationsService.cancel(salonId, String(req.params.id))))
 
 // Razorpay -> us. Public (no auth); authenticity comes from the HMAC signature over the raw body.
 router.post("/webhook", async (req, res) => {

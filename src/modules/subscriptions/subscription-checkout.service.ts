@@ -10,6 +10,7 @@ import { salonsService } from "../salons/salons.service";
 import { salonSubscriptionService } from "../salon-subscription/salon-subscription.service";
 import { salonSubscriptionRepository } from "../salon-subscription/salon-subscription.repository";
 import { subscriptionUpgradeService } from "../subscription-upgrade/subscription-upgrade.service";
+import { subscriptionDurationsService } from "../subscription-durations/subscription-durations.service";
 import { salonModulesService } from "../salon-modules/salon-modules.service";
 import { tierOfPlan } from "../subscription-billing/plan-tier";
 import { subscriptionPricingService } from "../subscription-pricing/pricing.service";
@@ -459,6 +460,9 @@ export const subscriptionCheckoutService = {
     async handleWebhook(event: any): Promise<string> {
         // Order / payment events that belong to a plan upgrade (no subscription attached) go to the upgrade service.
         if (!event?.payload?.subscription?.entity?.id && /^(order|payment)./.test(event?.event ?? "")) {
+            // A prepaid duration purchase answers first (it returns null for an order that is not its own); anything else is an upgrade.
+            const durationResult = await subscriptionDurationsService.handleGatewayEvent(event);
+            if (durationResult !== null) return durationResult;
             return subscriptionUpgradeService.handleGatewayEvent(event);
         }
         const client = await pool.connect();

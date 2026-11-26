@@ -12,7 +12,7 @@ export const subscriptionsRepository = {
     async listPlans(): Promise<SubscriptionPlan[]> {
         const { rows } = await pool.query(
             `SELECT * FROM subscription_plans
-       WHERE is_active = true
+       WHERE is_active = true AND slug NOT LIKE 'duration-%'
        ORDER BY price ASC`
         )
         return rows
