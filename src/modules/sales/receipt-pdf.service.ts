@@ -2,12 +2,11 @@ import { buildReceiptHtml } from "./receipt-html.template";
 import { renderHtmlToPdf } from "../../config/puppeteer";
 import { getSalonLanguage } from "../../config/language";
 
-// Renders the bill as the narrow (80mm) receipt, returned as raw bytes — callers upload them straight to Meta
+// Renders the bill as the A4 invoice, returned as raw bytes — callers upload them straight to Meta
 // (WhatsApp documents) or hand them to an authenticated download endpoint, never needing a publicly-hosted URL.
-// Same look as the browser's web print receipt (frontend features/bookings/utils/printTemplates.ts).
 //
-// The page height is set by a script inside the HTML (it measures the rendered receipt and rewrites @page), so the
-// PDF is exactly as long as the receipt: preferCSSPageSize makes Chromium honour that size instead of A4.
+// layout "narrow" gives the 80mm thermal-style receipt instead. Its page height is set by a script inside the HTML (it
+// measures the rendered receipt and rewrites @page), and preferCSSPageSize makes Chromium honour that size.
 //
 // Uses the shared Chromium instance (config/puppeteer.ts) rather than launching a fresh browser process per call —
 // this used to launch+close a whole new Chromium process every single render, which on a resource-constrained
@@ -18,8 +17,8 @@ export async function renderReceiptPdf(params: Parameters<typeof buildReceiptHtm
     // The receipt is written in the salon's language (salons.language) unless the caller already knows it.
     const language = params.salon.language ?? (await getSalonLanguage(params.sale?.salon_id));
     const html = buildReceiptHtml({ ...params, salon: { ...params.salon, language } });
-    if (params.layout === "a4") {
-        return renderHtmlToPdf(html, { format: "A4", printBackground: true });
+    if (params.layout === "narrow") {
+        return renderHtmlToPdf(html, { printBackground: true, preferCSSPageSize: true });
     }
-    return renderHtmlToPdf(html, { printBackground: true, preferCSSPageSize: true });
+    return renderHtmlToPdf(html, { format: "A4", printBackground: true });
 }

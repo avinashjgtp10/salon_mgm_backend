@@ -104,6 +104,15 @@ export function formatMoney(amount: unknown, currency?: string | null, opts: Mon
     return `${signWithSpacing(currencySymbol(code))}${formatDigits(amount, code, opts)}`;
 }
 
+/**
+ * Amounts on the client's bill (the bill PDF and the item lines of the WhatsApp bill message). An Indian-rupee bill prints
+ * plain figures, without the rupee sign; every other currency keeps its label ("AED 1,234.50"), which a VAT bill needs.
+ */
+export function formatBillMoney(amount: unknown, currency?: string | null, opts: MoneyOptions = {}): string {
+    const code = normalizeCurrency(currency);
+    return code === "INR" ? formatDigits(amount, code, opts) : formatMoney(amount, code, opts);
+}
+
 /** formatMoney for places that cannot print the symbol (PDFKit documents): "Rs. 1,234.50" / "AED 1,234.50". */
 export function formatMoneyAscii(amount: unknown, currency?: string | null, opts: MoneyOptions = {}): string {
     const code = normalizeCurrency(currency);

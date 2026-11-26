@@ -35,7 +35,7 @@ describe('a chain message built from an offer template', () => {
   })
 
   it('leaves templates that are not offers alone', () => {
-    const plain = { body_text: 'Hi {{1}}', header_type: 'none' }
+    const plain = { body_text: 'Hi {{1}}', header_type: 'none', buttons: null, lto_text: null }
     expect(templateNeedsExpiry(plain)).toBe(false)
     expect(buildTemplateSendComponents(plain, { variables: { '1': 'Asha' } }).map((c) => c.type)).toEqual(['body'])
   })

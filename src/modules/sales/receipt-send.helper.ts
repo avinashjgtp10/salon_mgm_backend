@@ -13,7 +13,7 @@ import { sendBillReceiptTemplateMessage } from "../whatsapp-automation/wa-bill-r
 import { generateFeedbackToken } from "../reviews/feedback-token.util";
 import { notificationChannelsService } from "../notification-channels/notification-channels.service";
 import logger from "../../config/logger";
-import { getSalonMoneyFormatter } from "../../config/currency";
+import { formatBillMoney } from "../../config/currency";
 
 // Dedicated production domain for the public feedback form (points at the
 // same frontend deployment/route, just its own subdomain) — no longer tied
@@ -195,7 +195,7 @@ export async function sendPurchaseReceipt(params: ReceiptContextParams): Promise
             ? `We'd love to hear your feedback: ${buildFeedbackLink(appointmentId)}`
             : "We'd love to hear your feedback — just reply to this message!";
         const invoiceLabel = ctx.sale.invoice_number ?? ctx.sale.id.slice(0, 8).toUpperCase();
-        const itemsBlock = buildItemsBlock(params.items, params.paidAmount, params.dueAmount ?? 0, await getSalonMoneyFormatter(params.salonId, { decimals: 0 }));
+        const itemsBlock = buildItemsBlock(params.items, params.paidAmount, params.dueAmount ?? 0, (n) => formatBillMoney(n, ctx.salon.currency, { decimals: 0 }));
 
         let result: { sent: boolean; reason?: string };
 
