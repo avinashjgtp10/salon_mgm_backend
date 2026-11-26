@@ -384,12 +384,15 @@ export const subscriptionDurationsService = {
     },
 
     // ── Salon owner: buy ──────────────────────────────────────────────────────────────────────────────────────────────────
-    async createOrder(salonId: string, userId: string, optionId: unknown) {
+    // `plan` is optional; when the client names the plan too, it must be the plan this duration option belongs to.
+    // No price is ever read from the request.
+    async createOrder(salonId: string, userId: string, optionId: unknown, plan?: unknown) {
         await requireTables();
         if (typeof optionId !== "string" || !optionId) throw new AppError(400, "option_id is required", "VALIDATION_ERROR");
         const { rows: opt } = await pool.query(`SELECT * FROM subscription_plans WHERE id = $1 AND is_active = TRUE AND ${TERM_ROWS}`, [optionId]);
         const o = opt[0];
         if (!o) throw new AppError(404, "That option is not available any more.", "OPTION_UNAVAILABLE");
+        if (plan !== undefined && plan !== o.tier) throw new AppError(400, "That duration does not belong to the selected plan.", "PLAN_DURATION_MISMATCH");
 
         const now = new Date();
         const { term } = await currentTerm(pool, salonId, now);
