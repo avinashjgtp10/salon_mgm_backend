@@ -15,6 +15,9 @@ import { subscriptionBillingService } from "../subscription-billing/subscription
 import { subscriptionUpgradeService } from "../subscription-upgrade/subscription-upgrade.service"
 import { subscriptionDurationsService } from "../subscription-durations/subscription-durations.service"
 import { salonsService } from "../salons/salons.service"
+import { subscriptionsService } from "./subscriptions.service"
+import { subscriptionBillingActions } from "./subscription-cancel.service"
+import { assertSalonAccess, canAccessSalon } from "../../middleware/salon-access"
 
 const router = Router()
 
@@ -188,16 +191,37 @@ router.post("/webhook", async (req, res) => {
     }
 })
 
+// A salon or subscription id in the URL or body proves nothing: every route below checks that the caller may use that salon.
+const salonGuard = (salonIdOf: (req: any) => unknown, opts: { ownerOnly?: boolean } = {}) => async (req: any, _res: any, next: any) => {
+    try {
+        await assertSalonAccess(req.user, salonIdOf(req), opts)
+        next()
+    } catch (err) { next(err) }
+}
+// By subscription id. Someone else's subscription answers "not found", so ids can't be probed. A subscription bought before
+// the salon existed belongs to the user who bought it.
+const subscriptionGuard = (opts: { ownerOnly?: boolean } = {}) => async (req: any, _res: any, next: any) => {
+    try {
+        const sub: any = await subscriptionsService.getSubscription(String(req.params.id))
+        const mine = Boolean(sub.user_id) && sub.user_id === req.user?.userId
+        if (!mine && !(await canAccessSalon(req.user, sub.salon_id, opts))) throw new AppError(404, "Subscription not found", "NOT_FOUND")
+        next()
+    } catch (err) { next(err) }
+}
+
 // ─── Trial ────────────────────────────────────────────────────
-router.post("/trial", authMiddleware, validateStartTrial, subscriptionsController.startTrial)
-router.get("/trial/:salonId", authMiddleware, subscriptionsController.getTrialStatus)
+router.post("/trial", authMiddleware, validateStartTrial, salonGuard((req) => req.body.salon_id, { ownerOnly: true }), subscriptionsController.startTrial)
+router.get("/trial/:salonId", authMiddleware, salonGuard((req) => req.params.salonId), subscriptionsController.getTrialStatus)
+
+// Owner stops automatic renewal. The plan stays active until the end of the period already paid for.
+router.post("/cancel-renewal", authMiddleware, billingRoute((salonId) => subscriptionBillingActions.cancelRenewal(salonId)))
 
 // ─── Subscriptions (read-only) ────────────────────────────────
-router.get("/salon/:salonId", authMiddleware, async (req, res, next) => {
+router.get("/salon/:salonId", authMiddleware, salonGuard((req) => req.params.salonId), async (req, res, next) => {
     await reconcileCaller(req)   // this is the call the app's subscription wall is decided on
     return subscriptionsController.getSubscriptionsBySalon(req, res, next)
 })
-router.get("/:id", authMiddleware, subscriptionsController.getSubscription)
-router.get("/:id/payments", authMiddleware, subscriptionsController.getPayments)
+router.get("/:id", authMiddleware, subscriptionGuard(), subscriptionsController.getSubscription)
+router.get("/:id/payments", authMiddleware, subscriptionGuard({ ownerOnly: true }), subscriptionsController.getPayments)
 
 export default router

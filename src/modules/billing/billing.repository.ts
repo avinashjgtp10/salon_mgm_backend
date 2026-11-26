@@ -36,6 +36,11 @@ export const billingPlansRepository = {
 
 // ─── Billing Subscriptions ────────────────────────────────────────────────────
 
+const UPDATABLE_COLUMNS: (keyof UpdateBillingSubscriptionBody)[] = [
+    "quantity", "payment_method", "card_holder_name", "card_last4", "card_brand", "card_expiry",
+    "account_type", "billing_first_name", "billing_last_name", "billing_address", "vat_number",
+];
+
 export const billingSubscriptionsRepository = {
     async findById(id: string): Promise<BillingSubscription | null> {
         const { rows } = await pool.query(
@@ -130,7 +135,9 @@ export const billingSubscriptionsRepository = {
         patch: UpdateBillingSubscriptionBody,
         plan?: BillingPlan
     ): Promise<BillingSubscription> {
-        const keys = Object.keys(patch) as (keyof UpdateBillingSubscriptionBody)[];
+        // Column names go into the SQL text, so they come only from this list, never from the request's own keys
+        // (which could carry SQL, or set columns such as status or salon_id).
+        const keys = UPDATABLE_COLUMNS.filter((k) => (patch as Record<string, unknown>)[k] !== undefined);
         if (keys.length === 0) {
             const { rows } = await pool.query(
                 `SELECT * FROM billing_subscriptions WHERE id = $1`, [id]

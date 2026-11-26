@@ -6,13 +6,15 @@ import { getRazorpayCredentials, invalidateRazorpayCredentials, type RazorpaySou
 import { encryptSecret, secretBoxConfigured } from "../ai-credentials/secret-box";
 import { clearRefusedCurrencies } from "../subscription-pricing/pricing.service";
 
-// Super Admin's global Razorpay settings (one set for the whole platform). Secrets are stored encrypted and never returned:
-// the status only says whether each one is set, where it comes from, and (for DB-stored ones) its last 4 characters.
+// Super Admin's global Razorpay settings (one set for the whole platform). Secrets are stored encrypted. The status only says
+// whether each one is set, where it comes from, and (for DB-stored ones) its last 4 characters. The one exception is
+// reveal(), which returns them in clear text to a signed-in Super Admin and is recorded in the activity log.
 
 const WEBHOOK_PATH = "/api/v1/subscriptions/webhook";
 const WEBHOOK_EVENTS = [
     "subscription.authenticated", "subscription.activated", "subscription.charged", "subscription.cancelled",
-    "subscription.completed", "subscription.halted", "subscription.paused", "payment.captured", "payment.failed", "order.paid",
+    "subscription.completed", "subscription.halted", "subscription.paused", "subscription.resumed",
+    "payment.captured", "payment.failed", "order.paid", "refund.created", "refund.processed",
 ];
 
 const modeOf = (keyId: string | null): "test" | "live" | null =>
@@ -64,7 +66,14 @@ export const paymentGatewayService = {
     async getStatus() {
         const [row, creds] = await Promise.all([loadRow(), getRazorpayCredentials()]);
         const src = (s: RazorpaySource) => s;
+        // Saved here, yet not the value in use: it could not be decrypted (the server's encryption secret changed, or another
+        // server with a different secret saved it).
+        const unreadable = [
+            row?.key_secret_last4 && creds.sources.keySecret !== "database" ? "Key Secret" : null,
+            row?.webhook_secret_last4 && creds.sources.webhookSecret !== "database" ? "Webhook Secret" : null,
+        ].filter((x): x is string => Boolean(x));
         return {
+            unreadable_secrets: unreadable,
             key_id: creds.keyId,
             mode: modeOf(creds.keyId),
             key_secret: { set: !!creds.keySecret, source: src(creds.sources.keySecret), last4: creds.sources.keySecret === "database" ? row?.key_secret_last4 ?? null : null },
@@ -150,12 +159,16 @@ export const paymentGatewayService = {
         return { key_id: c.keyId, key_secret: c.keySecret, webhook_secret: c.webhookSecret };
     },
 
-    // Re-checks whatever is in effect right now (database or environment).
-    async test() {
-        const { keyId, keySecret } = await getRazorpayCredentials();
-        if (!keyId || !keySecret) throw new AppError(400, "No Razorpay keys are set yet.", "VALIDATION_ERROR");
+    // Checks what the Super Admin has typed; a blank field uses the value in effect now (database or environment). Nothing is saved.
+    async test(body: { key_id?: unknown; key_secret?: unknown } = {}) {
+        const current = await getRazorpayCredentials();
+        const typedId = String(body.key_id ?? "").trim();
+        const typedSecret = String(body.key_secret ?? "").trim();
+        const keyId = typedId || current.keyId;
+        const keySecret = typedSecret || current.keySecret;
+        if (!keyId || !keySecret) throw new AppError(400, "Enter both the Key ID and the Key Secret.", "VALIDATION_ERROR");
         await verifyKeys(keyId, keySecret);
-        return { ok: true, mode: modeOf(keyId) };
+        return { ok: true, mode: modeOf(keyId), tested_typed_values: Boolean(typedId || typedSecret) };
     },
 
     // Removes the database copy; the environment variables (if any) take over again.

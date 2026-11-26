@@ -2,7 +2,7 @@ import { Router, Request, Response, NextFunction } from "express";
 import { paymentGatewayService } from "./payment-gateway.service";
 
 // Mounted inside super-admin.routes.ts, which is already behind authMiddleware + superAdminMiddleware.
-// No route returns a secret: status only says whether each is set and its last 4 characters.
+// Only /reveal returns secrets; the status says just whether each is set and its last 4 characters.
 const router = Router();
 
 type AuthedRequest = Request & { user?: { userId: string } };
@@ -28,9 +28,9 @@ router.put("/",async (req: AuthedRequest, res: Response, next: NextFunction) => 
     } catch (err) { return next(err); }
 });
 
-router.post("/test", async (_req: Request, res: Response, next: NextFunction) => {
+router.post("/test", async (req: Request, res: Response, next: NextFunction) => {
     try {
-        return res.json({ success: true, data: await paymentGatewayService.test() });
+        return res.json({ success: true, data: await paymentGatewayService.test(req.body ?? {}) });
     } catch (err) { return next(err); }
 });
 

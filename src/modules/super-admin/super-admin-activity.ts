@@ -44,11 +44,20 @@ type Rule = {
   method: string;
   re: RegExp;
   action: string;
-  entity: "user" | "salon" | "demo_request" | "invoice";
+  entity: "user" | "salon" | "demo_request" | "invoice" | "payment_gateway" | "billing_issue";
   /** Which capture group is the entity id (0 = none, the label comes from the request body). */
   idGroup: number;
   /** Safe fields to keep from the request body (never passwords or tokens). */
   keep?: string[];
+  /** Builds the details instead of `keep`, for bodies whose values must not be stored. */
+  describe?: (body: any) => Record<string, unknown> | null;
+};
+
+// Which payment settings were submitted. Names only: a key or secret is never written to the log.
+const GATEWAY_FIELDS: [string, string][] = [["key_id", "Key ID"], ["key_secret", "Key Secret"], ["webhook_secret", "Webhook Secret"], ["subscription_currencies", "Currencies"]];
+const changedGatewayFields = (body: any) => {
+  const names = GATEWAY_FIELDS.filter(([k]) => String(body?.[k] ?? "").trim()).map(([, label]) => label);
+  return names.length ? { changed: names.join(", ") } : null;
 };
 
 // Deletes and data clears are not listed: they already have their own, richer log (deleted_account_log / salon_cleanup_log).
@@ -69,6 +78,11 @@ const RULES: Rule[] = [
   { method: "PUT", re: /^\/salon-permissions\/([^/]+)$/, action: "salon_permissions_updated", entity: "salon", idGroup: 1 },
   { method: "PATCH", re: /^\/demo-requests\/([^/]+)\/status$/, action: "demo_request_status_changed", entity: "demo_request", idGroup: 1, keep: ["status"] },
   { method: "POST", re: /^\/salons\/([^/]+)\/invoices$/, action: "salon_invoice_created", entity: "invoice", idGroup: 1 },
+  { method: "GET", re: /^\/payment-gateway\/reveal$/, action: "payment_keys_viewed", entity: "payment_gateway", idGroup: 0 },
+  { method: "PUT", re: /^\/payment-gateway$/, action: "payment_keys_changed", entity: "payment_gateway", idGroup: 0, describe: changedGatewayFields },
+  { method: "DELETE", re: /^\/payment-gateway$/, action: "payment_keys_deleted", entity: "payment_gateway", idGroup: 0 },
+  { method: "POST", re: /^\/billing-issues\/([^/]+)\/resolve$/, action: "billing_issue_resolved", entity: "billing_issue", idGroup: 1, keep: ["note"] },
+  { method: "POST", re: /^\/billing-issues\/([^/]+)\/retry-stop$/, action: "billing_issue_stop_retried", entity: "billing_issue", idGroup: 1 },
 ];
 
 function pick(body: any, keys?: string[]): Record<string, unknown> | null {
@@ -100,13 +114,13 @@ async function record(req: Request, rule: Rule, match: RegExpMatchArray): Promis
   await pool.query(
     `INSERT INTO super_admin_activity_log (actor_id, actor_email, action, entity_type, entity_id, entity_label, details)
      VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-    [actorId, a[0]?.email ?? null, rule.action, rule.entity, entityId, label, pick(req.body, rule.keep)],
+    [actorId, a[0]?.email ?? null, rule.action, rule.entity, entityId, rule.entity === "payment_gateway" ? "Razorpay keys" : label,
+     rule.describe ? rule.describe(req.body) : pick(req.body, rule.keep)],
   );
 }
 
-/** Records every successful Super Admin change (non-GET) that has a rule above. Never affects the request: a failure to log is only logged. */
+/** Records every successful Super Admin request that has a rule above (changes, plus viewing the payment keys). Never affects the request: a failure to log is only logged. */
 export function superAdminActivityLogger(req: Request, res: Response, next: NextFunction): void {
-  if (req.method === "GET") return next();
   res.on("finish", () => {
     if (res.statusCode >= 400) return;
     const full = (req.originalUrl || "").split("?")[0];
@@ -147,8 +161,10 @@ export const ownerActivity = {
     const parts: string[] = [];
     if (hasLog) parts.push(
       `SELECT l.id::text AS id, l.action, COALESCE(l.entity_type, 'other') AS entity_type, l.entity_id::text AS entity_id, l.entity_label AS subject,
-              NULL::text AS salon_id, NULL::text AS salon_name, l.details AS details, l.created_at AS at
-         FROM super_admin_activity_log l WHERE l.actor_id = $1`);
+              NULL::text AS salon_id, NULL::text AS salon_name,
+              CASE WHEN l.actor_id = $1 THEN l.details ELSE COALESCE(l.details, '{}'::jsonb) || jsonb_build_object('by', l.actor_email) END AS details,
+              l.created_at AS at
+         FROM super_admin_activity_log l WHERE l.actor_id = $1 OR l.entity_type = 'payment_gateway'`);   // every Super Admin's use of the payment keys is shown
     if (hasDeleted) parts.push(
       `SELECT d.id::text, CASE WHEN d.account_type = 'salon' THEN 'salon_deleted' ELSE 'account_deleted' END, d.account_type, d.account_id::text,
               COALESCE(NULLIF(d.account_name, ''), d.account_email), NULL::text, NULL::text,

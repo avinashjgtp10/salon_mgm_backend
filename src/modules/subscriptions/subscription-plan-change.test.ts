@@ -179,7 +179,7 @@ describe("scheduling a plan change", () => {
   it("a Razorpay failure creates nothing and leaves the current subscription alone", async () => {
     const token = (await confirmationOf()).details.confirmation_token;
     rzpCreate.mockRejectedValue({ statusCode: 400, error: { description: "start_at must be in the future" } });
-    await expect(subscriptionPlanChangeService.schedule(SALON, USER, "advance", "monthly", token)).rejects.toMatchObject({ statusCode: 502, code: "RAZORPAY_ERROR" });
+    await expect(subscriptionPlanChangeService.schedule(SALON, USER, "advance", "monthly", token)).rejects.toMatchObject({ statusCode: 424, code: "RAZORPAY_ERROR" });
     expect(writes(/INSERT INTO subscriptions|UPDATE subscriptions/)).toHaveLength(0);
     expect(rzpCancel).not.toHaveBeenCalled();
   });
