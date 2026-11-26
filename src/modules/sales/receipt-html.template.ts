@@ -1,7 +1,7 @@
 import { Sale, SaleItem, TipBreakdownEntry } from "./sales.types";
 import { formatSalonPhones } from "../salons/salon-phones";
 import { DEFAULT_SALON_TIMEZONE } from "../../config/salonTimezone";
-import { formatMoney, dateLocale } from "../../config/currency";
+import { formatBillMoney, dateLocale } from "../../config/currency";
 import { languageDateLocale, languageDir, normalizeLanguage } from "../../config/language";
 import { translator } from "../../config/i18n";
 import { TaxBreakdownEntry } from "../payments/payments.types";
@@ -63,7 +63,7 @@ export function buildReceiptHtml(params: {
     rewardPointsValue?: number;
     referralCreditUsed?: number;
     packageCoveredAmount?: number;
-    /** "narrow" (default) = the 80mm receipt used for WhatsApp / downloaded PDFs; "a4" = the full A4 invoice. */
+    /** "a4" (default) = the full A4 invoice used for WhatsApp / downloaded PDFs; "narrow" = the 80mm thermal-style receipt. */
     layout?: "narrow" | "a4";
 }): string {
     const {
@@ -131,7 +131,7 @@ export function buildReceiptHtml(params: {
     // Every amount on the printed page goes through this — the previous
     // version of this file never prepended a currency symbol at all, so
     // every figure on the WhatsApp-sent PDF read as a bare number.
-    const fmt = (n: number) => formatMoney(n, salon.currency);
+    const fmt = (n: number) => formatBillMoney(n, salon.currency);
 
     // A package-covered visit collects no new money (the package's price was
     // already booked as revenue at purchase time) — same isPackagePaid
@@ -531,7 +531,8 @@ ${dir === "rtl" ? RTL_A4_CSS : ""}
 </body>
 </html>`;
 
-    if (params.layout === "a4") return a4Html;
+    // The A4 invoice is the bill. The 80mm thermal-style layout is only for a caller that asks for it.
+    if (params.layout !== "narrow") return a4Html;
 
     // ── Narrow receipt (80mm) ─────────────────────────────────────────────────
     // Same figures as the A4 invoice above (nothing is recomputed), laid out as a compact receipt: centered

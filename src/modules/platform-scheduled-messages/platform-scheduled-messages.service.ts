@@ -1,5 +1,6 @@
 import pool from '../../config/database'
 import logger from '../../config/logger'
+import { dateLocale } from '../../config/currency'
 import { AppError } from '../../middleware/error.middleware'
 import { configRepository } from '../marketing/whatsapp/config/config.repository'
 import { getPlatformSalonId } from '../client-announcements/platform-salon'
@@ -260,7 +261,7 @@ const NOT_READY: Record<string, string> = {
   template_pending: 'The Subscription expiring template is not approved by Meta yet (Super Meta > Automated Messages).',
 }
 
-const expiryDateText = (d: Date) => d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Kolkata' })
+const expiryDateText = (d: Date) => d.toLocaleDateString(dateLocale(),{ day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Kolkata' })
 
 /** Hands the reminder to the WhatsApp sender (the same path the sweep uses). Throws a readable error when it cannot go yet. */
 async function deliver(live: LiveSubscription, reference: string): Promise<void> {
