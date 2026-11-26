@@ -15,8 +15,12 @@ export const subscriptionsService = {
     },
 
     async startTrial(body: StartTrialBody) {
-        const plan = await subscriptionsRepository.findPlanById(body.plan_id)
-        if (!plan) throw new AppError(404, "Plan not found", "NOT_FOUND")
+        const plan: any = await subscriptionsRepository.findPlanById(body.plan_id)
+        if (!plan || plan.is_active === false) throw new AppError(404, "Plan not found", "NOT_FOUND")
+
+        // A trial is only for a salon that has never had a plan (an unfinished checkout doesn't count).
+        if (await subscriptionsRepository.hasHadPlan(body.salon_id))
+            throw new AppError(400, "A free trial is only available before the first plan", "TRIAL_USED")
 
         const alreadyUsed = await subscriptionsRepository.hasUsedTrial(body.salon_id)
         if (alreadyUsed)

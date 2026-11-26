@@ -4,6 +4,7 @@ import { tierOfPlan } from "../subscription-billing/plan-tier";
 import { emailService } from "../utils/email.service";
 import { subscriptionInvoicesService } from "../subscription-invoices/subscription-invoices.service";
 import logger from "../../config/logger";
+import { cancelPendingReplacements, stopRecurring } from "../billing-issues/billing-issues";
 // salons.service reaches this file through subscription-checkout.service; each only uses the other inside functions, so the cycle is safe.
 import { salonsService } from "../salons/salons.service";
 
@@ -153,7 +154,10 @@ export const salonSubscriptionService = {
         const plan = await repo.findPlan(body.plan_id);
         if (!plan || !plan.is_active) throw new AppError(404, "Plan not found or inactive", "NOT_FOUND");
 
-        const result = await repo.grant(salonId, plan.id, start, end);
+        const { replacedRazorpayIds, ...result } = await repo.grant(salonId, plan.id, start, end);
+        // The granted plan replaces what the salon had: the old automatic payments must stop too, or Razorpay keeps charging for them.
+        for (const rzpId of replacedRazorpayIds ?? []) await stopRecurring(rzpId, false, salonId);
+        await cancelPendingReplacements(salonId);
         // Best-effort: billing/telling the owner must never fail (or delay) the grant itself.
         this.billAndEmailGrant(salonId, plan, start, end).catch(() => undefined);
         return { ...result, plan: { id: plan.id, name: plan.name } };

@@ -6,6 +6,8 @@ import { AppError } from "../../middleware/error.middleware";
 import { getRazorpay, getRazorpayCredentials } from "../../config/razorpay";
 import { PLATFORM_BILLING_CURRENCY } from "../../config/currency";
 import { salonModulesService } from "../salon-modules/salon-modules.service";
+import { cancelPendingReplacements, recordBillingIssue, stopRecurring, type IssueInput } from "../billing-issues/billing-issues";
+import { ORDER_RECONCILE_MAX_AGE_DAYS, reconcileRazorpayOrders } from "../billing-issues/order-reconcile";
 import { subscriptionInvoicesRepository as invoiceRepo } from "../subscription-invoices/subscription-invoices.repository";
 import { subscriptionInvoicesService } from "../subscription-invoices/subscription-invoices.service";
 import { dbDate, tierOfPlan } from "../subscription-billing/plan-tier";
@@ -151,6 +153,7 @@ interface Completion {
     salonId?: string; tier?: DurationTier; ownerId?: string | null;
     invoiceId?: string; invoiceCreated?: boolean;
     razorpaySubscriptionsToStop?: string[];
+    review?: IssueInput;
     subscriptionId?: string; periodStart?: Date; periodEnd?: Date; kind?: PurchaseKind;
 }
 
@@ -160,19 +163,26 @@ async function completeOrder(db: PoolClient, orderId: string, pay: { paymentId: 
     if (!o) return { outcome: "not_found" };
     if (o.status === "completed") return { outcome: "already_completed", salonId: o.salon_id };
 
-    const park = async (reason: string): Promise<Completion> => {
+    // `keepPaymentId` is false when another order already holds this payment id (the column is unique).
+    const park = async (reason: string, keepPaymentId = true): Promise<Completion> => {
         await db.query(
-            `UPDATE subscription_payments SET payment_status = 'needs_review', razorpay_payment_id = COALESCE(razorpay_payment_id, $2), failure_reason = $3 WHERE id = $1`,
-            [orderId, pay.paymentId, reason]
+            `UPDATE subscription_payments SET payment_status = 'needs_review', razorpay_payment_id = COALESCE(razorpay_payment_id, $2), failure_reason = $3, paid_at = COALESCE(paid_at, $4) WHERE id = $1`,
+            [orderId, keepPaymentId ? pay.paymentId : null, reason, pay.paidAt.toISOString()]
         );
         logger.error("Duration order payment needs review", { orderId, paymentId: pay.paymentId, reason });
-        return { outcome: "needs_review", reason, salonId: o.salon_id };
+        return {
+            outcome: "needs_review", reason, salonId: o.salon_id,
+            review: { kind: "payment_review", reference: orderId, salonId: o.salon_id, amount: Number(o.total), currency: o.currency, details: `${reason} (payment ${pay.paymentId})` },
+        };
     };
-    if (o.status !== "pending") return o.status === "needs_review" ? { outcome: "needs_review", reason: o.failure_reason, salonId: o.salon_id } : { outcome: "not_pending", reason: `Order is ${o.status}`, salonId: o.salon_id };
+    if (o.status === "needs_review") return { outcome: "needs_review", reason: o.failure_reason, salonId: o.salon_id };
+    // Money for an order that was already cancelled or failed (for example UPI approved after the window was closed). It is
+    // never dropped: it is kept for a person to apply or refund.
+    if (o.status !== "pending") return park(`Payment received after the order was ${o.status}`);
 
     // The same Razorpay payment may never activate a second order.
     const dupe = await db.query(`SELECT 1 FROM subscription_payments WHERE razorpay_payment_id = $1 AND id <> $2`, [pay.paymentId, orderId]);
-    if (dupe.rows[0]) return park("This payment was already used for another order");
+    if (dupe.rows[0]) return park("This payment was already used for another order", false);
 
     // One activation at a time per salon, so two orders finishing together cannot both read the same "current term".
     await db.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [`sub-duration:${o.salon_id}`]);
@@ -233,6 +243,7 @@ async function completeOrder(db: PoolClient, orderId: string, pay: { paymentId: 
 
 // Everything that happens after the money and the term are safely committed. Each step is best-effort and logged; none can undo the purchase.
 async function afterCompletion(c: Completion) {
+    if (c.review) await recordBillingIssue(c.review);
     if (c.outcome !== "completed" || !c.salonId) return;
     try {
         const { rows } = await pool.query(`SELECT owner_id FROM salons WHERE id = $1`, [c.salonId]);
@@ -246,10 +257,8 @@ async function afterCompletion(c: Completion) {
     } catch (err: any) {
         logger.error("Duration purchase: applying plan features failed", { salonId: c.salonId, error: err?.message });
     }
-    for (const rzpId of c.razorpaySubscriptionsToStop ?? []) {
-        try { await ((await getRazorpay()).subscriptions as any).cancel(rzpId, true); }
-        catch (err: any) { logger.warn("Duration purchase: could not stop the old recurring subscription", { rzpId, error: err?.error?.description ?? err?.message }); }
-    }
+    for (const rzpId of c.razorpaySubscriptionsToStop ?? []) await stopRecurring(rzpId, true, c.salonId);
+    await cancelPendingReplacements(c.salonId);
     if (c.invoiceCreated && c.invoiceId) {
         subscriptionInvoicesService.emailInvoice(c.invoiceId).catch((err) => logger.warn("Subscription invoice email failed", { invoiceId: c.invoiceId, error: err?.message }));
     }
@@ -447,7 +456,8 @@ export const subscriptionDurationsService = {
         const o = rows[0];
         if (!o) throw new AppError(404, "Order not found", "NOT_FOUND");
         if (o.status === "completed") return { status: "completed" as const, already: true, order: orderView(o) };
-        if (o.status !== "pending") throw new AppError(409, `This order is ${o.status} and can't be completed.`, "ORDER_NOT_PENDING");
+        // A cancelled or failed order still goes through the checks: if money really arrived, it has to be recorded.
+        if (!["pending", "cancelled", "failed", "needs_review"].includes(o.status)) throw new AppError(409, `This order is ${o.status} and can't be completed.`, "ORDER_NOT_PENDING");
         if (!o.razorpay_order_id || o.razorpay_order_id !== rzOrder) throw new AppError(400, "That payment is for a different order", "ORDER_MISMATCH");
         if (!(await signatureMatches(rzOrder, paymentId, signature))) throw new AppError(400, "Payment signature could not be verified", "INVALID_SIGNATURE");
 
@@ -462,7 +472,7 @@ export const subscriptionDurationsService = {
             completeOrder(db, orderId, { paymentId, method: verified.payment.method ?? null, paidAt: verified.payment.created_at ? new Date(verified.payment.created_at * 1000) : new Date(), signatureVerified: true })
         );
         await afterCompletion(result);
-        if (result.outcome === "needs_review") throw new AppError(409, "Your payment was received but needs a quick review before the plan starts. Our team has been notified.", "ORDER_NEEDS_REVIEW");
+        if (result.outcome === "needs_review") throw new AppError(409, "Your payment was received but needs a quick review before the plan starts. It has been added to our review list; contact support if the plan doesn't start soon.", "ORDER_NEEDS_REVIEW");
         const { rows: fresh } = await pool.query(`${ORDER_SELECT} WHERE p.id = $1`, [orderId]);
         return { status: "completed" as const, already: result.outcome === "already_completed", order: orderView(fresh[0]) };
     },
@@ -504,6 +514,22 @@ export const subscriptionDurationsService = {
         };
     },
 
+    /** Safety net for a missed webhook: apply (or record) money already paid for this salon's recent unpaid orders. */
+    async reconcileOrders(salonId: string): Promise<void> {
+        try { await requireTables(); } catch { return; }
+        const { rows } = await pool.query(
+            `SELECT razorpay_order_id, payment_status FROM subscription_payments
+             WHERE salon_id = $1 AND duration_value IS NOT NULL AND razorpay_order_id IS NOT NULL AND razorpay_payment_id IS NULL
+               AND payment_status IN ('pending', 'cancelled', 'failed') AND created_at > NOW() - ($2 || ' days')::interval
+             ORDER BY created_at DESC LIMIT 5`,
+            [salonId, String(ORDER_RECONCILE_MAX_AGE_DAYS)]
+        );
+        await reconcileRazorpayOrders(
+            rows.map((r) => ({ orderId: r.razorpay_order_id as string, pending: r.payment_status === "pending" })),
+            (event) => this.handleGatewayEvent(event),
+        );
+    },
+
     // ── Razorpay -> us (order / payment events). Returns null when the event is not about a duration order, so the caller can pass it on. ──
     async handleGatewayEvent(event: any): Promise<string | null> {
         const type: string = event?.event ?? "";
@@ -525,7 +551,8 @@ export const subscriptionDurationsService = {
 
         // Same checks as the browser path, applied to the gateway's own signed payload.
         if (pay.currency !== o.currency || Number(pay.amount) !== toPaise(Number(o.total)) || pay.status !== "captured") {
-            await pool.query(`UPDATE subscription_payments SET payment_status = 'needs_review', razorpay_payment_id = COALESCE(razorpay_payment_id, $2), failure_reason = 'Payment amount or status did not match the order' WHERE id = $1 AND payment_status = 'pending'`, [o.id, pay.id]);
+            await pool.query(`UPDATE subscription_payments SET payment_status = 'needs_review', razorpay_payment_id = COALESCE(razorpay_payment_id, $2), failure_reason = 'Payment amount or status did not match the order' WHERE id = $1 AND payment_status IN ('pending', 'cancelled', 'failed')`, [o.id, pay.id]);
+            await recordBillingIssue({ kind: "payment_review", reference: o.id, salonId: o.salon_id, amount: Number(o.total), currency: o.currency, details: `Payment amount or status did not match the order (payment ${pay.id})` });
             return "duration payment did not match: needs review";
         }
         const result = await inTransaction((db) =>

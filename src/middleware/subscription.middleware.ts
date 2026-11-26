@@ -1,4 +1,5 @@
 import logger from '../config/logger';
+import jwt from "jsonwebtoken";
 import { Request, Response, NextFunction } from "express";
 import pool from "../config/database";
 import { getSalonId } from "../modules/utils/salon.util";
@@ -29,6 +30,36 @@ const BLOCKED = {
     },
 };
 
+// Server-side blocking for expired plans, across the whole API. OFF unless SUBSCRIPTION_ENFORCEMENT=true, so it can be tested
+// before it affects anyone. It runs before the routes' own authMiddleware, so it reads the login token itself; a request with
+// no valid token is passed on untouched (public routes stay public, protected ones reject it as they always have).
+const ENFORCEMENT_EXEMPT = ["/api/v1/super-admin", "/api/v1/salons"];   // the app needs the salon itself to show the renewal screen
+
+export const subscriptionEnforcementEnabled = () => String(process.env.SUBSCRIPTION_ENFORCEMENT ?? "").trim().toLowerCase() === "true";
+
+export async function enforceSubscription(req: any, res: Response, next: NextFunction): Promise<void> {
+    if (!subscriptionEnforcementEnabled()) return next();
+    if (isExempt(req.path) || ENFORCEMENT_EXEMPT.some((p) => req.path === p || req.path.startsWith(p + "/"))) return next();
+
+    const [type, token] = String(req.headers.authorization ?? "").split(" ");
+    const secret = process.env.JWT_ACCESS_SECRET;
+    if (type !== "Bearer" || !token || !secret) return next();
+    let user: any;
+    try {
+        user = jwt.verify(token, secret);
+    } catch {
+        return next();
+    }
+    // Neither of these has a plan of their own. (A branch owner who has entered a salon carries its salonId and is checked.)
+    if (user.role === "super_admin" || (user.role === "branch_owner" && !user.salonId)) return next();
+
+    req.user = user;
+    await subscriptionMiddleware(req, res, () => {
+        delete req.user;   // the route's own authMiddleware sets it again, after its session checks
+        next();
+    });
+}
+
 export async function subscriptionMiddleware(
     req: Request & { user?: { userId: string; role?: string; salonId?: string | null } },
     res: Response,
@@ -48,13 +79,14 @@ export async function subscriptionMiddleware(
     }
 
     try {
-        // Check subscriptions table (subscriptions table)
+        // Check subscriptions table (subscriptions table). A trial ends on trial_end when it has no current_period_end.
         const { rows: subRows } = await pool.query(
             `SELECT id, status, current_period_end
              FROM subscriptions
              WHERE salon_id = $1
-               AND status = 'active'
-               AND (current_period_end IS NULL OR current_period_end > NOW())
+               AND status IN ('active', 'trialing')
+               AND COALESCE(CASE WHEN is_trial OR status = 'trialing' THEN COALESCE(trial_end, current_period_end) ELSE current_period_end END,
+                            'infinity') > NOW()
              ORDER BY created_at DESC
              LIMIT 1`,
             [salonId]

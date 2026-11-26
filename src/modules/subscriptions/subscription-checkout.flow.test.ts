@@ -201,17 +201,17 @@ describe("country handling", () => {
 });
 
 describe("Razorpay failures", () => {
-  it("a failed subscription create is a 502 and nothing is stored", async () => {
+  it("a failed subscription create is a 424 (never a 502, which Cloudflare would replace) and nothing is stored", async () => {
     quoteFor(monthly);
     createSub.mockRejectedValue({ statusCode: 400, error: { description: "plan is not active" } });
-    await expect(subscriptionCheckoutService.createCheckout(null, USER, "basic", "monthly", "IN")).rejects.toMatchObject({ statusCode: 502, code: "RAZORPAY_ERROR" });
+    await expect(subscriptionCheckoutService.createCheckout(null, USER, "basic", "monthly", "IN")).rejects.toMatchObject({ statusCode: 424, code: "RAZORPAY_ERROR" });
     expect(inserts()).toHaveLength(0);
   });
 
-  it("a timeout is a 502 and nothing is stored", async () => {
+  it("a timeout is a 424 (never a 502, which Cloudflare would replace) and nothing is stored", async () => {
     quoteFor(monthly);
     createSub.mockRejectedValue(new Error("timeout of 10000ms exceeded"));
-    await expect(subscriptionCheckoutService.createCheckout(null, USER, "basic", "monthly", "IN")).rejects.toMatchObject({ statusCode: 502 });
+    await expect(subscriptionCheckoutService.createCheckout(null, USER, "basic", "monthly", "IN")).rejects.toMatchObject({ statusCode: 424 });
     expect(inserts()).toHaveLength(0);
   });
 

@@ -18,6 +18,7 @@ import subscriptionDurationRoutes from "../subscription-durations/subscription-d
 import countryPricingRoutes from "../plan-pricing/country-pricing.routes";
 import paymentTrackingRoutes from "../payment-tracking/payment-tracking.routes";
 import paymentGatewayRoutes from "../payment-gateway/payment-gateway.routes";
+import billingIssuesRoutes from "../billing-issues/billing-issues.routes";
 import platformIntegrationsRoutes from "../platform-integrations/platform-integrations.routes";
 import subscriptionInvoiceRoutes from "../subscription-invoices/subscription-invoices.routes";
 import clientAnnouncementsRoutes from "../client-announcements/client-announcements.routes";
@@ -58,6 +59,8 @@ router.use("/country-pricing", countryPricingRoutes);
 router.use("/payment-tracking", paymentTrackingRoutes);
 // Platform-wide Razorpay keys (one set for all salons), stored encrypted.
 router.use("/payment-gateway", paymentGatewayRoutes);
+// Subscription payments that need a person: parked payments, charges after cancellation, failed stops, refunds.
+router.use("/billing-issues", billingIssuesRoutes);
 // Platform-wide Google sign-in + billing-email settings, secrets stored encrypted.
 router.use("/platform-integrations", platformIntegrationsRoutes);
 router.use("/subscription-invoices", subscriptionInvoiceRoutes);

@@ -12,7 +12,8 @@ import { salonSubscriptionRepository } from "../salon-subscription/salon-subscri
 import { subscriptionUpgradeService } from "../subscription-upgrade/subscription-upgrade.service";
 import { subscriptionDurationsService } from "../subscription-durations/subscription-durations.service";
 import { salonModulesService } from "../salon-modules/salon-modules.service";
-import { tierOfPlan } from "../subscription-billing/plan-tier";
+import { dbDate, tierOfPlan } from "../subscription-billing/plan-tier";
+import { cancelPendingReplacements, recordBillingIssue, stopRecurring, type IssueInput } from "../billing-issues/billing-issues";
 import { subscriptionPricingService } from "../subscription-pricing/pricing.service";
 import { billingSchemaReady } from "../subscription-pricing/billing-schema";
 import { resolveRazorpayPlan } from "../subscription-pricing/razorpay-plans";
@@ -30,9 +31,20 @@ type Cycle = (typeof CYCLES)[number];
 // Razorpay needs a total number of billing cycles up front. Ten years of each cycle; the owner can cancel any time.
 const TOTAL_COUNT: Record<Cycle, number> = { monthly: 120, quarterly: 40, yearly: 10 };
 
+// A subscription in one of these states is over; nothing Razorpay sends later re-opens it.
+const CLOSED = ["upgraded", "cancelled", "completed"];
+
+// What handling an event asks for once its transaction has committed.
+export interface WebhookEffects { stop: string[]; salonId: string | null; firstActivation: boolean; lateCharge: IssueInput | null }
+const newEffects = (): WebhookEffects => ({ stop: [], salonId: null, firstActivation: false, lateCharge: null });
+
 const isTier = (v: unknown): v is Tier => (TIERS as readonly string[]).includes(v as string);
 const isCycle = (v: unknown): v is Cycle => (CYCLES as readonly string[]).includes(v as string);
 const fromUnix = (n: unknown) => (typeof n === "number" && n > 0 ? new Date(n * 1000) : null);
+const moneyOf = (x: any) => {
+    const currency: string = typeof x.currency === "string" && /^[A-Za-z]{3}$/.test(x.currency) ? x.currency.toUpperCase() : PLATFORM_BILLING_CURRENCY;
+    return { currency, amount: Number(x.amount) / 10 ** exponentOf(currency) };
+};
 
 // reconcilePending() asks Razorpay about an unfinished checkout at most this often, and only for checkouts this recent
 // (an abandoned payment link must not cost an API call on every page load forever).
@@ -151,7 +163,8 @@ export const subscriptionCheckoutService = {
             if (err instanceof AppError) throw err;
             const detail = err?.error?.description ?? err?.message ?? "unknown error";
             logger.error("Razorpay subscription create failed", { salonId, slug, detail, currency: charge.currency });
-            throw new AppError(502, `Razorpay could not start the payment: ${detail}`, "RAZORPAY_ERROR");
+            // 424, not 502: Cloudflare replaces a 502 with its own page, which would hide Razorpay's reason from the customer.
+            throw new AppError(424, `Razorpay could not start the payment: ${detail}`, "RAZORPAY_ERROR");
         }
 
         // What was quoted and charged is stored with the subscription, so it stays the original purchase price and currency
@@ -194,12 +207,14 @@ export const subscriptionCheckoutService = {
             [userId, salonId]
         );
         if (rows.some((r) => r.status === "active")) {
-            await pool.query(
+            const replaced = await pool.query(
                 `UPDATE subscriptions SET status = 'cancelled', cancelled_at = NOW(), updated_at = NOW()
                  WHERE salon_id = $1 AND status IN ('active', 'trialing')
-                   AND id NOT IN (SELECT id FROM subscriptions WHERE user_id = $2 AND status = 'active')`,
+                   AND id NOT IN (SELECT id FROM subscriptions WHERE user_id = $2 AND status = 'active')
+                 RETURNING razorpay_subscription_id`,
                 [salonId, userId]
             );
+            for (const r of replaced.rows ?? []) if (r.razorpay_subscription_id) await stopRecurring(r.razorpay_subscription_id, false, salonId);
             // The payment was confirmed before this salon existed, so the activation had nobody to give the plan's features to
             // (applyPlanFeatures needs the salon). Now that it has one, the paid plan's features are applied.
             const { rows: paid } = await pool.query(
@@ -282,6 +297,16 @@ export const subscriptionCheckoutService = {
         } catch (err: any) {
             logger.warn("Reconciling pending subscriptions failed", { userId, error: err?.message });
         }
+        // Prepaid and upgrade purchases are Razorpay Orders, not subscriptions: the same safety net for a missed webhook.
+        if (salonId) {
+            for (const service of [subscriptionDurationsService, subscriptionUpgradeService]) {
+                try {
+                    await service?.reconcileOrders?.(salonId);
+                } catch (err: any) {
+                    logger.warn("Reconciling pending orders failed", { salonId, error: err?.message });
+                }
+            }
+        }
         return activated;
     },
 
@@ -325,19 +350,23 @@ export const subscriptionCheckoutService = {
 
     // Applies one Razorpay event. Idempotent: Razorpay retries and may deliver events out of order, so every
     // write is either a state set or guarded (payments are de-duplicated by Razorpay payment id).
-    async processEvent(client: PoolClient, event: any): Promise<string> {
+    async processEvent(client: PoolClient, event: any, effects: WebhookEffects = newEffects()): Promise<string> {
         const type: string = event?.event ?? "";
         const sub = event?.payload?.subscription?.entity;
         if (!sub?.id) return `ignored (${type || "no subscription"})`;
 
         const { rows } = await client.query(
-            `SELECT id, salon_id, status FROM subscriptions WHERE razorpay_subscription_id = $1 FOR UPDATE`,
+            `SELECT id, salon_id, status, created_at, cancelled_at, updated_at FROM subscriptions WHERE razorpay_subscription_id = $1 FOR UPDATE`,
             [sub.id]
         );
         const row = rows[0];
         if (!row) return `ignored (unknown subscription ${sub.id})`;
-        // Replaced by a plan upgrade: late events from the old Razorpay subscription must not bring it back to life.
-        if (row.status === "upgraded") return `ignored (${type}: superseded by an upgrade)`;
+        // Replaced, cancelled or finished: no later event brings it back. Razorpay may deliver events late or out of order. Money
+        // it reports is still recorded (see recordChargeAfterClose).
+        if (CLOSED.includes(row.status)) {
+            if (type === "subscription.charged") return this.recordChargeAfterClose(client, row, event, effects);
+            return `ignored (${type}: ${row.status === "upgraded" ? "superseded by an upgrade" : `subscription is ${row.status}`})`;
+        }
 
         const start = fromUnix(sub.current_start);
         const end = fromUnix(sub.current_end);
@@ -353,13 +382,22 @@ export const subscriptionCheckoutService = {
             case "subscription.activated":
             case "subscription.charged": {
                 // The new period is the one that counts: close any other live subscription for this salon so an
-                // older, longer row can't keep overriding it.
+                // older, longer row can't keep overriding it. A first activation is the customer's newest purchase and replaces
+                // everything else; a renewal only replaces rows older than itself, so it can't close something bought after it.
                 if (row.salon_id) {
-                    await client.query(
+                    const firstActivation = row.status === "created" || row.status === "authenticated";
+                    effects.firstActivation = firstActivation;
+                    effects.salonId = row.salon_id;
+                    const replaced = await client.query(
                         `UPDATE subscriptions SET status = 'cancelled', cancelled_at = NOW(), updated_at = NOW()
-                         WHERE salon_id = $1 AND id <> $2 AND status IN ('active', 'trialing')`,
+                         WHERE salon_id = $1 AND id <> $2
+                           AND (status IN ('active', 'trialing') OR (status = 'paused' AND razorpay_subscription_id IS NOT NULL))
+                           ${firstActivation ? "" : "AND created_at < (SELECT created_at FROM subscriptions WHERE id = $2)"}
+                         RETURNING razorpay_subscription_id`,
                         [row.salon_id, row.id]
                     );
+                    // Closing our row does not stop Razorpay: each replaced automatic payment is stopped after the commit.
+                    for (const r of replaced.rows ?? []) if (r.razorpay_subscription_id) effects.stop.push(r.razorpay_subscription_id);
                 }
                 await client.query(
                     `UPDATE subscriptions
@@ -378,37 +416,20 @@ export const subscriptionCheckoutService = {
                     if (pay?.id && pay.status && pay.status !== "captured") {
                         logger.warn("Ignoring a subscription charge that is not captured", { paymentId: pay.id, status: pay.status });
                     } else if (pay?.id) {
-                        const dup = await client.query(`SELECT 1 FROM subscription_payments WHERE transaction_id = $1`, [pay.id]);
-                        if (dup.rowCount === 0) {
-                            // The payment's own currency and amount, as Razorpay reports them (never assumed to be INR).
-                            const payCurrency = typeof pay.currency === "string" && /^[A-Za-z]{3}$/.test(pay.currency) ? pay.currency.toUpperCase() : PLATFORM_BILLING_CURRENCY;
-                            const payAmount = Number(pay.amount) / 10 ** exponentOf(payCurrency);
-                            const hasCurrency = await billingSchemaReady();
-                            const inserted = hasCurrency
-                                ? await client.query(
-                                    `INSERT INTO subscription_payments
-                                        (subscription_id, amount, payment_status, payment_method, transaction_id,
-                                         billing_period_start, billing_period_end, paid_at, currency)
-                                     VALUES ($1, $2, 'paid', $3, $4, $5, $6, $7, $8)
-                                     RETURNING id`,
-                                    [row.id, payAmount, pay.method ?? null, pay.id, start, end, fromUnix(pay.created_at) ?? new Date(), payCurrency]
-                                )
-                                : await client.query(
-                                    `INSERT INTO subscription_payments
-                                        (subscription_id, amount, payment_status, payment_method, transaction_id,
-                                         billing_period_start, billing_period_end, paid_at)
-                                     VALUES ($1, $2, 'paid', $3, $4, $5, $6, $7)
-                                     RETURNING id`,
-                                    [row.id, payAmount, pay.method ?? null, pay.id, start, end, fromUnix(pay.created_at) ?? new Date()]
-                                );
-                            // The tax invoice for this payment (skipped quietly if the salon doesn't exist yet: it is
-                            // billed when onboarding attaches the subscription).
-                            await subscriptionInvoicesService.generateForPaymentTx(client, inserted.rows[0].id);
-                        }
+                        await this.storePayment(client, row.id, pay, start, end, "paid");
                     }
                 }
                 return type === "subscription.charged" ? "charged" : "activated";
             }
+
+            case "subscription.resumed":
+                await client.query(
+                    `UPDATE subscriptions SET status = 'active', current_period_start = COALESCE($2, current_period_start),
+                            current_period_end = COALESCE($3, current_period_end), updated_at = NOW()
+                     WHERE id = $1 AND status = 'paused'`,
+                    [row.id, start, end]
+                );
+                return "resumed";
 
             case "subscription.cancelled":
                 await client.query(
@@ -429,6 +450,52 @@ export const subscriptionCheckoutService = {
             default:
                 return `ignored (${type})`;
         }
+    },
+
+    // Stores one captured subscription payment, once per Razorpay payment id. A 'paid' one also gets its tax invoice.
+    // Returns false when it was already stored.
+    async storePayment(client: PoolClient, subscriptionId: string, pay: any, start: Date | null, end: Date | null, status: "paid" | "needs_review"): Promise<boolean> {
+        const dup = await client.query(`SELECT 1 FROM subscription_payments WHERE transaction_id = $1`, [pay.id]);
+        if (dup.rowCount !== 0) return false;
+        // The payment's own currency and amount, as Razorpay reports them (never assumed to be INR).
+        const { currency, amount } = moneyOf(pay);
+        const hasCurrency = await billingSchemaReady();
+        const inserted = await client.query(
+            `INSERT INTO subscription_payments
+                (subscription_id, amount, payment_status, payment_method, transaction_id,
+                 billing_period_start, billing_period_end, paid_at${hasCurrency ? ", currency" : ""})
+             VALUES ($1, $2, '${status}', $3, $4, $5, $6, $7${hasCurrency ? ", $8" : ""})
+             RETURNING id`,
+            [subscriptionId, amount, pay.method ?? null, pay.id, start, end, fromUnix(pay.created_at) ?? new Date(), ...(hasCurrency ? [currency] : [])]
+        );
+        // The tax invoice for this payment (skipped quietly if the salon doesn't exist yet: it is
+        // billed when onboarding attaches the subscription).
+        if (status === "paid") await subscriptionInvoicesService.generateForPaymentTx(client, inserted.rows[0].id);
+        return true;
+    },
+
+    // A charge reported for a subscription that is already closed. Taken before it was closed = an ordinary payment that arrived
+    // late. Taken afterwards = Razorpay is still charging for a plan the salon no longer has: kept for review (no invoice), and the
+    // automatic payment is stopped. Either way the subscription stays closed.
+    async recordChargeAfterClose(client: PoolClient, row: any, event: any, effects: WebhookEffects): Promise<string> {
+        const sub = event.payload.subscription.entity;
+        const pay = event?.payload?.payment?.entity;
+        if (!pay?.id || (pay.status && pay.status !== "captured")) return `ignored (subscription.charged: subscription is ${row.status})`;
+        const closedAt = dbDate(row.cancelled_at ?? row.updated_at);
+        const paidAt = fromUnix(pay.created_at);
+        const beforeClose = Boolean(closedAt && paidAt && paidAt.getTime() <= closedAt.getTime());
+        const stored = await this.storePayment(client, row.id, pay, fromUnix(sub.current_start), fromUnix(sub.current_end), beforeClose ? "paid" : "needs_review");
+        if (beforeClose) return "late payment recorded (the subscription stays closed)";
+        effects.stop.push(sub.id);
+        effects.salonId = row.salon_id;
+        if (stored) {
+            const money = moneyOf(pay);
+            effects.lateCharge = {
+                kind: "late_charge", reference: pay.id, salonId: row.salon_id, ...money,
+                details: `Razorpay charged ${sub.id} after it had been ${row.status === "upgraded" ? "replaced by another plan" : row.status}. Check whether to refund this payment.`,
+            };
+        }
+        return "charge after close recorded for review";
     },
 
     // A subscription that was paid for before its owner had a salon: create the salon (from the registration details), attach the
@@ -457,7 +524,31 @@ export const subscriptionCheckoutService = {
         if (r?.salon_id && r.owner_id && tier) await salonModulesService.applyPlanTier(r.salon_id, tier, r.owner_id);
     },
 
+    // A refund on a subscription payment is written down for Super Admin. The salon keeps its access: removing it is a decision
+    // for a person. Returns null when the refunded payment is not a subscription payment.
+    async handleRefund(event: any): Promise<string> {
+        const refund = event?.payload?.refund?.entity;
+        if (!refund?.id || !refund.payment_id) return `ignored (${event?.event}: no refund)`;
+        if (event.event === "refund.failed") return "ignored (refund.failed)";
+        // to_jsonb: salon_id and razorpay_payment_id only exist after the durations migration.
+        const { rows } = await pool.query(
+            `SELECT COALESCE(s.salon_id::text, to_jsonb(p)->>'salon_id') AS salon_id
+             FROM subscription_payments p LEFT JOIN subscriptions s ON s.id = p.subscription_id
+             WHERE p.transaction_id = $1 OR to_jsonb(p)->>'razorpay_payment_id' = $1 LIMIT 1`,
+            [refund.payment_id]
+        );
+        if (!rows[0]) return "ignored (refund of a payment that is not a subscription payment)";
+        const { currency, amount } = moneyOf(refund);
+        await recordBillingIssue({
+            kind: "refund", reference: refund.id, salonId: rows[0].salon_id, amount, currency,
+            details: `Refund on subscription payment ${refund.payment_id}. The salon's access was not changed.`,
+        });
+        return "refund recorded";
+    },
+
     async handleWebhook(event: any): Promise<string> {
+        // Refund events carry the payment too, so they are answered before the order / payment routing below.
+        if (/^refund\./.test(event?.event ?? "")) return this.handleRefund(event);
         // Order / payment events that belong to a plan upgrade (no subscription attached) go to the upgrade service.
         if (!event?.payload?.subscription?.entity?.id && /^(order|payment)./.test(event?.event ?? "")) {
             // A prepaid duration purchase answers first (it returns null for an order that is not its own); anything else is an upgrade.
@@ -468,8 +559,16 @@ export const subscriptionCheckoutService = {
         const client = await pool.connect();
         try {
             await client.query("BEGIN");
-            const result = await this.processEvent(client, event);
+            const effects = newEffects();
+            const result = await this.processEvent(client, event, effects);
             await client.query("COMMIT");
+            // Only after the commit: tell Razorpay to stop what was replaced, and note anything that needs a person.
+            if (effects.lateCharge) await recordBillingIssue(effects.lateCharge);
+            for (const rzpId of effects.stop) await stopRecurring(rzpId, false, effects.salonId);
+            if (effects.firstActivation && effects.salonId) {
+                const { rows } = await pool.query(`SELECT id FROM subscriptions WHERE razorpay_subscription_id = $1`, [event?.payload?.subscription?.entity?.id]);
+                await cancelPendingReplacements(effects.salonId, rows[0]?.id ?? null);
+            }
             // After the commit, mail the invoice PDF to the owner (best effort, never blocks Razorpay's 200).
             const paymentId = event?.payload?.payment?.entity?.id;
             // Paid right after registration, before onboarding: give the owner their salon now so the plan attaches to it and the

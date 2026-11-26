@@ -107,7 +107,7 @@ import path from "path";
 import { dateLocale } from "./config/currency";
 
 // ── Subscription gate ──────────────────────────────────────────────────────────
-//import { subscriptionMiddleware } from "./middleware/subscription.middleware";
+import { enforceSubscription } from "./middleware/subscription.middleware";
 
 const app: Application = express();
 app.set("trust proxy", 1);
@@ -274,9 +274,9 @@ app.use("/webhook", marketingWebhooksRoutes);
 app.use("/api/v1/profile", profileRoutes);
 
 // ── Subscription gate — applied after exempt routes are registered ─────────────
-// Every route registered BELOW this line requires an active/trialing subscription.
-// Routes above (auth, billing, subscriptions, webhooks, profile) are always accessible.
-//app.use(subscriptionMiddleware);
+// With SUBSCRIPTION_ENFORCEMENT=true, every route registered BELOW this line requires an active/trialing subscription
+// (it does nothing otherwise). Routes above (auth, billing, subscriptions, webhooks, profile) are always accessible.
+app.use(enforceSubscription);
 
 app.use("/api/v1/users", usersRoutes);
 app.use("/api/v1/categories", categoriesRoutes);

@@ -35,13 +35,15 @@ export const subscriptionsRepository = {
         const trialEnd = new Date()
         trialEnd.setDate(trialEnd.getDate() + 14)
 
+        // current_period_end is set too: an active row without an end date counts as never expiring.
         const { rows } = await pool.query(
             `INSERT INTO subscriptions (
         salon_id, plan_id,
         status, is_trial,
-        trial_start, trial_end
+        trial_start, trial_end,
+        current_period_start, current_period_end
       )
-      VALUES ($1,$2,'active',true,$3,$4)
+      VALUES ($1,$2,'active',true,$3,$4,$3,$4)
       RETURNING *`,
             [
                 data.salon_id,
@@ -61,8 +63,11 @@ export const subscriptionsRepository = {
     },
 
     async findBySalonId(salonId: string): Promise<Subscription[]> {
+        // The last column replaces s.current_period_end in each row: older trial rows only have trial_end, and the app reads a
+        // missing end date as "not expired".
         const { rows } = await pool.query(
-            `SELECT s.*, sp.name as plan_name, sp.price, sp.billing_cycle
+            `SELECT s.*, sp.name as plan_name, sp.price, sp.billing_cycle,
+              CASE WHEN s.is_trial THEN COALESCE(s.current_period_end, s.trial_end) ELSE s.current_period_end END AS current_period_end
        FROM subscriptions s
        JOIN subscription_plans sp ON s.plan_id = sp.id
        WHERE s.salon_id = $1
@@ -90,6 +95,14 @@ export const subscriptionsRepository = {
             `SELECT id FROM subscriptions
        WHERE salon_id = $1 AND is_trial = true
        LIMIT 1`,
+            [salonId]
+        )
+        return rows.length > 0
+    },
+
+    async hasHadPlan(salonId: string): Promise<boolean> {
+        const { rows } = await pool.query(
+            `SELECT 1 FROM subscriptions WHERE salon_id = $1 AND status NOT IN ('created', 'authenticated') LIMIT 1`,
             [salonId]
         )
         return rows.length > 0

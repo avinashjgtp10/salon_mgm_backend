@@ -154,7 +154,7 @@ export const salonSubscriptionRepository = {
                 `UPDATE subscriptions
                  SET status = 'cancelled', cancelled_at = NOW(), updated_at = NOW()
                  WHERE salon_id = $1 AND status IN ('active', 'trialing')
-                 RETURNING id`,
+                 RETURNING id, razorpay_subscription_id`,
                 [salonId]
             );
             const { rows } = await client.query(
@@ -165,7 +165,8 @@ export const salonSubscriptionRepository = {
                 [salonId, planId, start.toISOString(), end.toISOString()]
             );
             await client.query("COMMIT");
-            return { subscription: rows[0], replaced: cancelled.rowCount ?? 0 };
+            const replacedRazorpayIds: string[] = (cancelled.rows ?? []).map((r: any) => r.razorpay_subscription_id).filter(Boolean);
+            return { subscription: rows[0], replaced: cancelled.rowCount ?? 0, replacedRazorpayIds };
         } catch (err) {
             await client.query("ROLLBACK");
             throw err;

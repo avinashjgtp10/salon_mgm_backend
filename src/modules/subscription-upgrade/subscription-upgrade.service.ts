@@ -8,6 +8,8 @@ import { GST_PERCENT } from "../plan-pricing/plan-pricing.service";
 import { subscriptionInvoicesRepository as invoiceRepo } from "../subscription-invoices/subscription-invoices.repository";
 import { subscriptionInvoicesService } from "../subscription-invoices/subscription-invoices.service";
 import { salonModulesService } from "../salon-modules/salon-modules.service";
+import { cancelPendingReplacements, recordBillingIssue, stopRecurring, type IssueInput } from "../billing-issues/billing-issues";
+import { ORDER_RECONCILE_MAX_AGE_DAYS, reconcileRazorpayOrders } from "../billing-issues/order-reconcile";
 import {
     dbDate, isCycle, isTier, normalizeCycle, tierOfPlan, type Cycle, type Tier,
 } from "../subscription-billing/plan-tier";
@@ -214,6 +216,7 @@ interface Completion {
     invoiceCreated: boolean;
     razorpaySubscriptionToCancel: string | null;
     reason?: string;
+    review?: IssueInput;
 }
 
 const money = (n: number, currency: string = PLATFORM_BILLING_CURRENCY) => formatMoneyAscii(n, currency);
@@ -229,6 +232,7 @@ export async function completeUpgrade(db: PoolClient, upgradeId: string, pay: { 
         newSubscriptionId: u.new_subscription_id, invoiceId: null, invoiceCreated: false, razorpaySubscriptionToCancel: null,
     };
     if (u.status === "completed") return { ...base, outcome: "already_completed" };
+    if (u.status === "needs_review") return { ...base, outcome: "needs_review", reason: u.failure_reason };
 
     // Money arrived for an attempt that was already cancelled / failed, or the salon's plan changed meanwhile: do not guess.
     // Park it for a person to review (and refund if needed), keeping the payment reference.
@@ -238,7 +242,8 @@ export async function completeUpgrade(db: PoolClient, upgradeId: string, pay: { 
             [upgradeId, pay.paymentId, reason]
         );
         logger.error("Upgrade payment needs review", { upgradeId, paymentId: pay.paymentId, reason });
-        return { ...base, outcome: "needs_review", reason };
+        const review: IssueInput = { kind: "payment_review", reference: upgradeId, salonId: u.salon_id, amount: Number(u.total), currency: u.currency ?? PLATFORM_BILLING_CURRENCY, details: `${reason} (payment ${pay.paymentId})` };
+        return { ...base, outcome: "needs_review", reason, review };
     };
     if (u.status !== "pending") {
         if (pay.paymentId) return park(`Payment received while the upgrade was ${u.status}`);
@@ -322,6 +327,7 @@ export async function completeUpgrade(db: PoolClient, upgradeId: string, pay: { 
 // What happens once the money (or the zero-payable decision) is committed. Each step is best-effort and logged: the plan
 // change itself is already safely recorded, and every step is safe to run again.
 async function afterCompletion(c: Completion, actingUserId: string | null) {
+    if (c.review) await recordBillingIssue(c.review);
     if (c.outcome !== "completed") return;
     try {
         const { rows } = await pool.query(`SELECT owner_id FROM salons WHERE id = $1`, [c.salonId]);
@@ -334,14 +340,9 @@ async function afterCompletion(c: Completion, actingUserId: string | null) {
     } catch (err: any) {
         logger.error("Upgrade: applying plan features failed", { salonId: c.salonId, error: err?.message });
     }
-    if (c.razorpaySubscriptionToCancel) {
-        try {
-            // Stop the old plan's automatic renewal at the end of the period it already covered.
-            await ((await getRazorpay()).subscriptions as any).cancel(c.razorpaySubscriptionToCancel, true);
-        } catch (err: any) {
-            logger.warn("Upgrade: could not cancel the old Razorpay subscription", { sub: c.razorpaySubscriptionToCancel, error: err?.error?.description ?? err?.message });
-        }
-    }
+    // Stop the old plan's automatic renewal at the end of the period it already covered.
+    if (c.razorpaySubscriptionToCancel) await stopRecurring(c.razorpaySubscriptionToCancel, true, c.salonId);
+    await cancelPendingReplacements(c.salonId);
     if (c.invoiceCreated && c.invoiceId) subscriptionInvoicesService.emailInvoice(c.invoiceId).catch((err) => logger.warn("Subscription invoice email failed", { invoiceId: c.invoiceId, error: err?.message }));
 }
 
@@ -486,7 +487,8 @@ export const subscriptionUpgradeService = {
         const u = rows[0];
         if (!u) throw new AppError(404, "Upgrade not found", "NOT_FOUND");
         if (u.status === "completed") return { status: "completed" as const, already: true };
-        if (u.status !== "pending") throw new AppError(409, `This upgrade is ${u.status} and can't be completed.`, "UPGRADE_NOT_PENDING");
+        // A cancelled or failed attempt still goes through the checks: if money really arrived, it has to be recorded.
+        if (!["pending", "cancelled", "failed", "needs_review"].includes(u.status)) throw new AppError(409, `This upgrade is ${u.status} and can't be completed.`, "UPGRADE_NOT_PENDING");
         if (!u.razorpay_order_id || u.razorpay_order_id !== orderId) throw new AppError(400, "That payment is for a different order", "ORDER_MISMATCH");
         if (!(await signatureMatches(orderId, paymentId, signature))) throw new AppError(400, "Payment signature could not be verified", "INVALID_SIGNATURE");
 
@@ -501,7 +503,7 @@ export const subscriptionUpgradeService = {
             completeUpgrade(db, upgradeId, { paymentId, method: verified.payment.method ?? null, paidAt: verified.payment.created_at ? new Date(verified.payment.created_at * 1000) : new Date() })
         );
         await afterCompletion(result, userId);
-        if (result.outcome === "needs_review") throw new AppError(409, "Your payment was received but needs a quick review before the plan changes. Our team has been notified.", "UPGRADE_NEEDS_REVIEW");
+        if (result.outcome === "needs_review") throw new AppError(409, "Your payment was received but needs a quick review before the plan changes. It has been added to our review list; contact support if the plan doesn't change soon.", "UPGRADE_NEEDS_REVIEW");
         return { status: "completed" as const, already: result.outcome === "already_completed" };
     },
 
@@ -516,6 +518,27 @@ export const subscriptionUpgradeService = {
         if (!cur[0]) throw new AppError(404, "Upgrade not found", "NOT_FOUND");
         if (cur[0].status === "completed") throw new AppError(409, "This upgrade has already been completed.", "ALREADY_COMPLETED");
         return { cancelled: false };
+    },
+
+    /** Safety net for a missed webhook: apply (or record) money already paid for this salon's recent unpaid upgrades. */
+    async reconcileOrders(salonId: string): Promise<void> {
+        let rows: any[] = [];
+        try {
+            ({ rows } = await pool.query(
+                `SELECT razorpay_order_id, status FROM subscription_upgrades
+                 WHERE salon_id = $1 AND razorpay_order_id IS NOT NULL AND razorpay_payment_id IS NULL
+                   AND status IN ('pending', 'cancelled', 'failed') AND created_at > NOW() - ($2 || ' days')::interval
+                 ORDER BY created_at DESC LIMIT 5`,
+                [salonId, String(ORDER_RECONCILE_MAX_AGE_DAYS)]
+            ));
+        } catch (err: any) {
+            if (err?.code === "42P01") return;   // upgrades are not set up on this database
+            throw err;
+        }
+        await reconcileRazorpayOrders(
+            (rows ?? []).map((r) => ({ orderId: r.razorpay_order_id as string, pending: r.status === "pending" })),
+            (event) => this.handleGatewayEvent(event),
+        );
     },
 
     // Razorpay -> us for order / payment events. Safe to receive repeatedly and out of order.
@@ -539,7 +562,8 @@ export const subscriptionUpgradeService = {
 
         // Same checks as the browser path, applied to the gateway's own payload.
         if (pay.currency !== (u.currency ?? PLATFORM_BILLING_CURRENCY) || Number(pay.amount) !== toPaise(Number(u.total)) || pay.status !== "captured") {
-            await pool.query(`UPDATE subscription_upgrades SET status = 'needs_review', razorpay_payment_id = $2, failure_reason = 'Payment amount or status did not match the upgrade' WHERE id = $1 AND status = 'pending'`, [u.id, pay.id]);
+            await pool.query(`UPDATE subscription_upgrades SET status = 'needs_review', razorpay_payment_id = $2, failure_reason = 'Payment amount or status did not match the upgrade' WHERE id = $1 AND status IN ('pending', 'cancelled', 'failed')`, [u.id, pay.id]);
+            await recordBillingIssue({ kind: "payment_review", reference: u.id, salonId: u.salon_id, amount: Number(u.total), currency: u.currency ?? PLATFORM_BILLING_CURRENCY, details: `Payment amount or status did not match the upgrade (payment ${pay.id})` });
             return "upgrade payment did not match: needs review";
         }
         const result = await inTransaction((db) =>

@@ -6,8 +6,46 @@ import {
     validateSubscribeBilling,
     validateUpdateBillingSubscription,
 } from "./billing.validator";
+import { billingService } from "./billing.service";
+import { billingSubscriptionsRepository } from "./billing.repository";
+import { assertSalonAccess, canAccessSalon } from "../../middleware/salon-access";
+import { AppError } from "../../middleware/error.middleware";
 
 const router = Router();
+
+// Being a salon owner is not enough: the salon (or the record's salon) must be the caller's own. A record that belongs to
+// someone else answers "not found", so ids can't be probed.
+const ownSalon = (salonIdOf: (req: any) => unknown) => async (req: any, _res: any, next: any) => {
+    try {
+        await assertSalonAccess(req.user, salonIdOf(req), { ownerOnly: true });
+        next();
+    } catch (err) { next(err); }
+};
+const ownRecord = (load: (id: string) => Promise<{ salon_id?: string | null }>) => async (req: any, _res: any, next: any) => {
+    try {
+        const record = await load(String(req.params.id));
+        if (!(await canAccessSalon(req.user, record.salon_id, { ownerOnly: true }))) throw new AppError(404, "Not found", "NOT_FOUND");
+        next();
+    } catch (err) { next(err); }
+};
+const subscriptionRecord = ownRecord(async (id) => {
+    const row = await billingSubscriptionsRepository.findById(id);
+    if (!row) throw new AppError(404, "Billing subscription not found", "NOT_FOUND");
+    return row;
+});
+
+// /subscribe records a subscription without taking any payment. A salon may only use it for a plan that begins with a free
+// trial, once; being active without paying goes through checkout instead.
+const trialOnly = async (req: any, _res: any, next: any) => {
+    try {
+        const plan: any = await billingService.getPlanById(String(req.body.plan_id));
+        const hasTrial = Number(plan.trial_days ?? 0) > 0 || Number(plan.trial_minutes ?? 0) > 0;
+        if (!hasTrial || (await billingSubscriptionsRepository.findBySalonId(String(req.body.salon_id)))) {
+            throw new AppError(402, "Choose a plan and complete the payment to subscribe.", "PAYMENT_REQUIRED");
+        }
+        next();
+    } catch (err) { next(err); }
+};
 
 // ─── Plans (read-only) ────────────────────────────────────────────────────────
 router.get("/plans", authMiddleware, billingController.listPlans);
@@ -29,6 +67,8 @@ router.post(
     authMiddleware,
     roleMiddleware("salon_owner", "admin"),
     validateSubscribeBilling,
+    ownSalon((req) => req.body.salon_id),
+    trialOnly,
     billingController.subscribe
 );
 
@@ -38,6 +78,7 @@ router.patch(
     authMiddleware,
     roleMiddleware("salon_owner", "admin"),
     validateUpdateBillingSubscription,
+    subscriptionRecord,
     billingController.updateSubscription
 );
 
@@ -46,6 +87,7 @@ router.post(
     "/subscription/:id/cancel",
     authMiddleware,
     roleMiddleware("salon_owner", "admin"),
+    subscriptionRecord,
     billingController.cancelSubscription
 );
 
@@ -61,6 +103,7 @@ router.get(
     "/invoices/:id",
     authMiddleware,
     roleMiddleware("salon_owner", "admin"),
+    ownRecord((id) => billingService.getInvoice(id)),
     billingController.getInvoice
 );
 
