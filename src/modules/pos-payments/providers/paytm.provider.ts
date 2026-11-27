@@ -54,6 +54,10 @@ const ECR_STATUS_RETRYABLE_CODES = new Set(['0010', '0030', '0404']);
 const ECR_ABORT_REQUESTED_CODE = '1845';   // resultCode "R" — requested, outcome still unverified
 const ECR_ABORT_NOT_ABORTABLE_CODE = '1843';
 const ECR_ABORT_NOT_FOUND_CODE = '1844';
+// Staging answers an unknown merchantTransactionId with 1851 "No txn found to
+// abort." (verified against securegw-stage.paytm.in on 2026-11-27) — the same
+// meaning as 1844, and reported as UNKNOWN before it was mapped here.
+const ECR_ABORT_NO_TXN_CODE = '1851';
 const ECR_ABORT_SERVER_ERROR_CODE = '0012'; // safe to retry the abort later
 
 // Axios error codes meaning the request never left this machine, so Paytm
@@ -182,7 +186,7 @@ function interpretAbortResponse(data: any, merchantTransactionId: string): Provi
     return { outcome: 'UNKNOWN', raw: { ...raw, reason: 'merchantTransactionId mismatch' } };
   }
   if (code === ECR_ABORT_NOT_ABORTABLE_CODE) return { outcome: 'NOT_ABORTABLE', raw };
-  if (code === ECR_ABORT_NOT_FOUND_CODE) return { outcome: 'NOT_FOUND', raw };
+  if (code === ECR_ABORT_NOT_FOUND_CODE || code === ECR_ABORT_NO_TXN_CODE) return { outcome: 'NOT_FOUND', raw };
   if (code === ECR_ABORT_SERVER_ERROR_CODE) {
     logger.warn('[pos-payments/paytm] abort hit a Paytm internal error (0012) — retryable', logContext);
     return { outcome: 'UNKNOWN', retryable: true, raw };
@@ -286,21 +290,30 @@ export class PaytmProvider implements PaymentProvider {
   }
 
   /**
-   * ECR request envelope shared by every ECR API: the checksum is generated
-   * over the serialized body only, and that exact string is embedded in the
-   * payload so the bytes Paytm verifies are the bytes that were signed.
+   * ECR request envelope for Status Enquiry and Abort: the checksum is
+   * generated over the FLAT BODY FIELDS, exactly the way Sale signs them
+   * (paytmchecksum sorts the keys and joins the values with "|"), and the
+   * serialized body is then sent unchanged.
+   *
+   * Signing the serialized JSON string instead — which this did until
+   * 2026-11-27 — makes Paytm reject every request with resultCodeId 0330
+   * "Invalid checksum". Verified against securegw-stage.paytm.in with the
+   * staging MID/TID: signing the flat fields answers 0404 ("Merchant
+   * transaction id does not exist") on /ecr/V2/payment/status and 1851 ("No
+   * txn found to abort.") on /ecr/abort/txn, while signing the JSON string
+   * answers 0330 on both. So Sale worked and every Status Enquiry, Abort and
+   * connection probe failed the checksum.
    */
-  private async signedEcrPayload(body: Record<string, unknown>): Promise<string> {
-    const bodyJson = JSON.stringify(body);
-    const checksum = await PaytmChecksum.generateSignature(bodyJson, this.creds.merchantKey);
-    return this.ecrPayload(bodyJson, checksum);
+  private async signedEcrPayload(body: Record<string, string>): Promise<string> {
+    const checksum = await PaytmChecksum.generateSignature(body, this.creds.merchantKey);
+    return this.ecrPayload(JSON.stringify(body), checksum);
   }
 
-  /** signedEcrPayload + the one logged POST, for the APIs that sign the serialized body. */
+  /** signedEcrPayload + the one logged POST, for the APIs that sign the flat body fields. */
   private async sendSignedEcr(args: {
     api: string;
     url: string;
-    body: Record<string, unknown>;
+    body: Record<string, string>;
     merchantTransactionId: string;
     tid: string;
   }) {
