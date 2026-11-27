@@ -4,6 +4,7 @@ import * as XLSX from "xlsx";
 import * as Papa from "papaparse";
 import { Parser as CsvParser } from "json2csv";
 import logger from "../../config/logger";
+import { getIO, salonRoom, salonStaffRoom } from "../../config/socket";
 import { AppError } from "../../middleware/error.middleware";
 import { invalidateStaffPermCache, staffHasPermission } from "../../middleware/permission.middleware";
 import { commissionRulesService } from "../commissionRules/commissionRules.service";
@@ -886,6 +887,12 @@ export const staffPayRunsController = {
 
 // ─── Schedules ────────────────────────────────────────────────────────────────
 
+// Tells the salon's open screens (the Calendar) to read schedules again. Invalidation only: no staff data is
+// sent through the socket.
+const announceScheduleChange = (salonId: string) => {
+  try { getIO().to([salonRoom(salonId), salonStaffRoom(salonId)]).emit("staff_schedule:updated", {}); } catch { /* Socket not initialized in tests. */ }
+};
+
 export const staffSchedulesController = {
   async list(req: AuthRequest, res: Response, next: NextFunction) {
     try {
@@ -895,7 +902,9 @@ export const staffSchedulesController = {
   },
   async upsert(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const data = await staffSchedulesService.upsert(String(req.params.staffId), getSalonId(req), req.body as UpsertStaffSchedulesBody);
+      const salonId = getSalonId(req);
+      const data = await staffSchedulesService.upsert(String(req.params.staffId), salonId, req.body as UpsertStaffSchedulesBody);
+      announceScheduleChange(salonId);
       return sendSuccess(res, 200, data, "Schedules updated successfully");
     } catch (err) { return next(err); }
   },
@@ -915,6 +924,7 @@ export const staffSchedulesController = {
       if (result === "noop") {
         throw new AppError(404, "No schedule entry found for this date", "SCHEDULE_NOT_FOUND");
       }
+      announceScheduleChange(salonId);
       return sendSuccess(res, 200, { result }, "Schedule deleted successfully");
     } catch (err) { return next(err); }
   },
