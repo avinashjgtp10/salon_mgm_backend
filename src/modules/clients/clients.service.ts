@@ -192,10 +192,11 @@ export const clientsService = {
         return clientsRepository.list(query, salonId);
     },
 
-    async create(body: CreateClientBody, salonId: string, include?: string): Promise<ClientWithRelations> {
+    // anyPhoneLength is for the bulk-billing import only: historical sheets keep whatever number the salon recorded.
+    async create(body: CreateClientBody, salonId: string, include?: string, options?: { anyPhoneLength?: boolean }): Promise<ClientWithRelations> {
         const normalized = normalizeCreateBody(body);
         const nb = normalized as any;
-        nb.phone_number = checkClientPhone(nb.phone_number, nb.phone_country_code, "phone_number");
+        if (!options?.anyPhoneLength) nb.phone_number = checkClientPhone(nb.phone_number, nb.phone_country_code, "phone_number");
         nb.additional_phone_number = checkClientPhone(nb.additional_phone_number, nb.additional_phone_country_code, "additional_phone_number");
 
         // One active client per phone number (almost always a duplicate/mistake
