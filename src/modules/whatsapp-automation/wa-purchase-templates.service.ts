@@ -5,7 +5,7 @@ import { whatsappAutomationRepository } from "./whatsapp-automation.repository";
 import { whatsappAutomationService } from "./whatsapp-automation.service";
 import { AutomationEventType, PURCHASE_EVENTS, PLATFORM_EVENTS, CAPTION_ONLY_EVENTS } from "./whatsapp-automation.types";
 import { getPlatformSalonId } from "../client-announcements/platform-salon";
-import { isPurchaseEventType, validateNamedPlaceholders, toMetaNumberedBody, daysRemainingValue, DefaultPurchaseEventType, EVENT_VARIABLE_NAMES } from "./wa-automation-defaults";
+import { isPurchaseEventType, validateNamedPlaceholders, toMetaNumberedBody, daysRemainingValue, variablesForLiveBody, DefaultPurchaseEventType, EVENT_VARIABLE_NAMES } from "./wa-automation-defaults";
 import { submitBodyOnlyTemplate, syncBodyOnlyTemplateStatus } from "../marketing/whatsapp/shared/template-submission.helper";
 import { submitBillReceiptTemplate, sendBillReceiptTemplateMessage, buildSampleReceiptPdf } from "./wa-bill-receipt-template.helper";
 import { salonsRepository } from "../salons/salons.repository";
@@ -130,7 +130,7 @@ export const waPurchaseTemplatesService = {
                 salonId, phone, countryCode: null,
                 templateName: tpl.template_name, language: tpl.language,
                 pdfBuffer, pdfFilename: "sample-receipt.pdf",
-                variables,
+                variables: variablesForLiveBody(variables, tpl.body_text, "bill_receipt"),
             });
             return { sent: result.sent, status: result.sent ? "SENT" : "FAILED", failure_reason: result.reason ?? null };
         }

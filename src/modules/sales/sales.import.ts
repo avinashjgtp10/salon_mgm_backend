@@ -51,6 +51,8 @@ import { stockLedgerService } from "../inventory/stock-ledger.service";
 import { clientsService } from "../clients/clients.service";
 import { CreateClientBody } from "../clients/clients.types";
 import { clientPhoneKey } from "../clients/clients.phone";
+import { salonsRepository } from "../salons/salons.repository";
+import { dialCodeFor } from "../../config/phoneRules";
 import { staffRepository } from "../staff/staff.repository";
 import { rolesRepository } from "../roles/roles.repository";
 import { ensureDefaultRole } from "../roles/roles.service";
@@ -340,6 +342,9 @@ export const salesImportService = {
         // on the Staff page regardless of how many rows named that person.
         const defaultStaffRoleId = await ensureDefaultRole(salonId, "Staff");
 
+        // New clients get the salon's own dial code (UAE +971, otherwise +91).
+        const salonDialCode = dialCodeFor((await salonsRepository.findById(salonId))?.country);
+
         // ── Prefetch reference data once — same reasoning as
         // products.import.ts's own prefetch: per-row lookups on a
         // thousand-row sheet is slow enough to trip a gateway timeout. ──────
@@ -484,9 +489,9 @@ export const salesImportService = {
                                 // bare local number — not the "+91…" the sheet
                                 // may have carried, which would otherwise be
                                 // stored alongside a "+91" country code too.
-                                phone_country_code: clientPhoneDigits ? "+91" : null,
+                                phone_country_code: clientPhoneDigits ? salonDialCode : null,
                                 phone_number: clientPhoneDigits || null,
-                            } as CreateClientBody, salonId);
+                            } as CreateClientBody, salonId, undefined, { anyPhoneLength: true });
                             matchedClient = { id: createdClient.id, name: (createdClient as any).full_name ?? row.clientName.trim() };
                             result.new_clients++;
                         } catch (createErr: any) {
