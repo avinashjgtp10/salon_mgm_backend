@@ -10,6 +10,7 @@ import { sendReceiptDocument } from "./receipt-whatsapp.service";
 import { renderReceiptPdf } from "./receipt-pdf.service";
 import { whatsappAutomationRepository } from "../whatsapp-automation/whatsapp-automation.repository";
 import { sendBillReceiptTemplateMessage } from "../whatsapp-automation/wa-bill-receipt-template.helper";
+import { variablesForLiveBody } from "../whatsapp-automation/wa-automation-defaults";
 import { generateFeedbackToken } from "../reviews/feedback-token.util";
 import { notificationChannelsService } from "../notification-channels/notification-channels.service";
 import logger from "../../config/logger";
@@ -210,12 +211,13 @@ export async function sendPurchaseReceipt(params: ReceiptContextParams): Promise
                 language:     billTemplate.language,
                 pdfBuffer,
                 pdfFilename:  `Receipt-${invoiceLabel}.pdf`,
-                variables: {
+                // Only the values the approved wording uses: a salon may drop {{feedback_line}}.
+                variables: variablesForLiveBody({
                     "1": ctx.client.name,
                     "2": ctx.salon.business_name,
                     "3": itemsBlock,
                     "4": feedbackLine,
-                },
+                }, billTemplate.body_text, "bill_receipt"),
             });
 
             // SMS/Email fan-out — independent of WhatsApp's own template

@@ -326,13 +326,37 @@ export function toMetaNumberedBody(bodyText: string, eventType: DefaultPurchaseE
     return result;
 }
 
+// Placeholders a salon may leave out. Only the LAST position(s) of an event can be listed here (dropping an earlier one would
+// leave a gap in Meta's {{n}} numbering), and the event's send path must send only as many values as the live wording uses.
+// bill_receipt's {{feedback_line}} is our own feedback link, which a salon may not want next to (or instead of) its own.
+const OPTIONAL_VARIABLE_NAMES: Partial<Record<DefaultPurchaseEventType, string[]>> = {
+    bill_receipt: ["feedback_line"],
+};
+
+// Drops the values of optional placeholders the live (Meta-approved) wording doesn't use, because Meta rejects a send whose
+// value count differs from the approved template. Unknown wording (null/empty) keeps every value, as before.
+export function variablesForLiveBody(
+    variables: Record<string, string>,
+    liveBodyText: string | null | undefined,
+    eventType: DefaultPurchaseEventType,
+): Record<string, string> {
+    if (!liveBodyText) return variables;
+    const result = { ...variables };
+    for (const name of OPTIONAL_VARIABLE_NAMES[eventType] ?? []) {
+        if (!new RegExp(`\\{\\{\\s*${name}\\s*\\}\\}`, "i").test(liveBodyText)) {
+            delete result[String(EVENT_VARIABLE_NAMES[eventType].indexOf(name) + 1)];
+        }
+    }
+    return result;
+}
+
 // Every required named placeholder for this event must appear at least once
 // (a salon can reword freely and reuse a name, but can't drop one — trigger()
 // always fills every position, so a missing placeholder would leave that data
 // point unrenderable and, worse, could shift Meta's {{n}} numbering into a
-// gap it rejects). Also rejects any {{...}} token that isn't a recognized
-// name for this event, catching typos before they reach Meta as an opaque
-// rejection.
+// gap it rejects). The exceptions are OPTIONAL_VARIABLE_NAMES above. Also
+// rejects any {{...}} token that isn't a recognized name for this event,
+// catching typos before they reach Meta as an opaque rejection.
 export function validateNamedPlaceholders(bodyText: string, eventType: DefaultPurchaseEventType): void {
     const names = EVENT_VARIABLE_NAMES[eventType];
     if (!names) return;
@@ -345,7 +369,8 @@ export function validateNamedPlaceholders(bodyText: string, eventType: DefaultPu
         throw new AppError(400, `Unknown variable(s): ${unknown.map((n) => `{{${n}}}`).join(", ")}`, "VALIDATION_ERROR");
     }
 
-    const missing = names.filter((n) => !found.includes(n.toLowerCase()));
+    const optional = OPTIONAL_VARIABLE_NAMES[eventType] ?? [];
+    const missing = names.filter((n) => !optional.includes(n) && !found.includes(n.toLowerCase()));
     if (missing.length > 0) {
         throw new AppError(400, `Missing required variable(s): ${missing.map((n) => `{{${n}}}`).join(", ")}`, "VALIDATION_ERROR");
     }
