@@ -22,4 +22,6 @@ export interface PublicBookingRequest {
     client_email: string;
     client_phone: string;
     notes?: string;
+    /** Set when the customer came from the SalonOx Marketplace. */
+    source?: "marketplace";
 }

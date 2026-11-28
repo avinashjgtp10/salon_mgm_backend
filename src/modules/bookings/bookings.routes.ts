@@ -18,6 +18,11 @@ const router = Router();
 // booking link. Reads are throttled; the write is validated, throttled and
 // abuse-guarded before it can touch the database.
 
+// Public Marketplace: published salons only, read-only.
+router.get("/directory", bookingReadRateLimit, bookingsController.getDirectory);
+router.get("/directory/:slug", bookingReadRateLimit, bookingsController.getMarketplaceExtras);
+router.get("/directory-reviews", bookingReadRateLimit, bookingsController.getDirectoryReviews);
+
 // Must precede /salon/:salon_id so "slug" isn't captured as a salon_id.
 router.get("/salon/slug/:slug", bookingReadRateLimit, bookingsController.getSalonBySlug);
 router.get("/salon/:salon_id", bookingReadRateLimit, bookingsController.getSalonDetails);

@@ -110,6 +110,9 @@ export const marketplaceController = {
             let imageUrl: string = (req.body as AddImageBody)?.image_url;
             const file = (req as any).file as Express.Multer.File | undefined;
             const salonId = await getSalonId(req);
+            if (file && !["image/jpeg", "image/png", "image/webp"].includes(file.mimetype)) {
+                throw new AppError(400, "Use a JPG, PNG or WebP photo", "VALIDATION_ERROR");
+            }
             if (file) {
                 imageUrl = await uploadAvatarToS3(file.path, `${salonId}-gallery-${Date.now()}`, file.mimetype, "gallery");
             }

@@ -5,6 +5,7 @@ import { roleMiddleware } from "../../middleware/role.middleware";
 import { requirePermission } from "../../middleware/permission.middleware";
 import { uploadMiddleware } from "../../middleware/upload.middleware";
 import { marketplaceController } from "./marketplace.controller";
+import { onboardingController } from "./onboarding.controller";
 import {
   validateUpsertEssentials, validateUpsertAbout,
   validateUpsertLocation, validateUpsertWorkingHours,
@@ -25,6 +26,23 @@ const viewMarketplace = requirePermission("view_marketplace");
 const manageMarketplace = requirePermission("manage_marketplace");
 
 router.use(authMiddleware, requireModule("online_booking"));
+
+// ── Marketplace add-on: onboarding ───────────────────────────────────────────
+// Changing the salon's own record (name, description) or submitting and accepting terms is the owner's or an
+// admin's job, the same rule as PATCH /salons/:id. Assigning services to staff changes the catalog's own mapping,
+// so it also needs the catalog's edit permission.
+const ownerOrAdmin = roleMiddleware("salon_owner", "admin");
+router.get("/onboarding",                          auth, ownerAdminStaff, viewMarketplace,   onboardingController.getState);
+router.get("/onboarding/preview",                  auth, ownerAdminStaff, viewMarketplace,   onboardingController.preview);
+router.put("/onboarding/step",                     auth, ownerAdminStaff, manageMarketplace, onboardingController.setStep);
+router.put("/onboarding/business",                 auth, ownerOrAdmin,    manageMarketplace, onboardingController.saveBusiness);
+router.put("/onboarding/location",                 auth, ownerAdminStaff, manageMarketplace, onboardingController.confirmLocation);
+router.patch("/onboarding/photos/:imageId",        auth, ownerAdminStaff, manageMarketplace, onboardingController.setPhotoCategory);
+router.put("/onboarding/services",                 auth, ownerAdminStaff, manageMarketplace, onboardingController.saveServices);
+router.put("/onboarding/availability",             auth, ownerAdminStaff, manageMarketplace, onboardingController.saveAvailability);
+router.put("/onboarding/staff/:staffId/services",  auth, ownerAdminStaff, manageMarketplace, requirePermission("edit_services"), onboardingController.assignStaffServices);
+router.put("/onboarding/preferences",              auth, ownerAdminStaff, manageMarketplace, onboardingController.savePreferences);
+router.post("/onboarding/submit",                  auth, ownerOrAdmin,    manageMarketplace, onboardingController.submit);
 
 // ── Full profile ──────────────────────────────────────────────────────────────
 router.get("/profile",          auth, ownerAdminStaff, viewMarketplace, marketplaceController.getProfile);

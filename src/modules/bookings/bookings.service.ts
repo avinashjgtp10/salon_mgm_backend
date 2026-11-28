@@ -2,6 +2,10 @@ import crypto from "crypto";
 import { AppError } from "../../middleware/error.middleware";
 import { isModuleLocked } from "../../middleware/moduleLock.middleware";
 import { bookingsRepository } from "./bookings.repository";
+import { reviewsRepository } from "../reviews/reviews.repository";
+import { getApprovedListing } from "../marketplace/onboarding.listing";
+import { onboardingRepository } from "../marketplace/onboarding.repository";
+import { applyServiceSettings } from "../marketplace/onboarding.rules";
 import { getSalonTimezone } from "../../config/salonTimezone";
 import { clientsRepository } from "../clients/clients.repository";
 import { generateUniqueReferralCode } from "../clients/clients.service";
@@ -499,8 +503,75 @@ async function assertSalonBookable(salonId: string): Promise<void> {
     }
 }
 
+const notListed = () => new AppError(404, "This salon isn't listed on the SalonOx Marketplace.", "NOT_LISTED");
+
+// Opening hours, the map pin and visible reviews (reviewer's first name only).
+async function salonExtras(salon: any) {
+    const [workingHours, pin, breakdown, reviews] = await Promise.all([
+        salon.marketplace_profile_id
+            ? bookingsRepository.findWeekHours(salon.marketplace_profile_id)
+            : Promise.resolve([]),
+        salon.marketplace_profile_id
+            ? bookingsRepository.findMapPin(salon.marketplace_profile_id)
+            : Promise.resolve(null),
+        reviewsRepository.getRatingBreakdown(salon.id),
+        reviewsRepository.listPublic(salon.id, 10),
+    ]);
+    // Average and count come from the same visible rows as the breakdown,
+    // so the three numbers on screen always agree.
+    const reviewCount = Object.values(breakdown).reduce((n, c) => n + c, 0);
+    const starSum = Object.entries(breakdown).reduce((n, [star, c]) => n + Number(star) * c, 0);
+    return {
+        working_hours: workingHours,
+        location: pin,
+        rating: reviewCount ? Math.round((starSum / reviewCount) * 10) / 10 : null,
+        review_count: reviewCount,
+        rating_breakdown: breakdown,
+        reviews,
+    };
+}
+
 export const bookingsService = {
-    async getSalonBySlug(slug: string) {
+    // Marketplace salon list. A salon whose Online Booking module is locked is
+    // left out, the same rule its own booking link follows.
+    async getDirectory() {
+        const salons = await bookingsRepository.findDirectory();
+        const locked = await Promise.all(salons.map((s) => isModuleLocked(s.id, "online_booking")));
+        const listed = salons.filter((_, i) => !locked[i]);
+        const features = await bookingsRepository.findDirectoryFeatures(listed.map((s) => String(s.id)));
+        return { salons: listed.map((s) => ({ ...s, amenities: features.filter((f) => String(f.salon_id) === String(s.id)).map((f) => f.feature_key) })) };
+    },
+
+    // Homepage "Client Reviews": real reviews only, from salons that are really listed.
+    async getDirectoryReviews() {
+        const rows = await bookingsRepository.findDirectoryReviews();
+        const locked = await Promise.all(rows.map((r) => isModuleLocked(r.salon_id, "online_booking")));
+        return {
+            reviews: rows.filter((_, i) => !locked[i]).slice(0, 9).map(({ salon_id: _internal, ...review }) => review),
+        };
+    },
+
+    // What the Marketplace salon page shows on top of getSalonBySlug.
+    async getMarketplaceExtras(slug: string) {
+        const salon = await bookingsRepository.findSalonBySlug(slug);
+        if (!salon) throw new AppError(404, "Salon not found", "NOT_FOUND");
+        await assertSalonBookable(salon.id);
+        if (!(await getApprovedListing(salon.id))) throw notListed();
+        return salonExtras(salon);
+    },
+
+    // The same data for the owner's preview; the caller has already checked who is asking.
+    async buildMarketplacePreview(salon: any) {
+        const [services, staff, fullSalon, extras] = await Promise.all([
+            bookingsRepository.findActiveServices(salon.id),
+            bookingsRepository.findActiveStaff(salon.id),
+            attachPublicExtras(salon),
+            salonExtras(salon),
+        ]);
+        return { page: { salon: fullSalon, services, staff }, extras };
+    },
+
+    async getSalonBySlug(slug: string, fromMarketplace = false) {
         const salon = await bookingsRepository.findSalonBySlug(slug);
         if (salon) await assertSalonBookable(salon.id);
         if (!salon) {
@@ -525,7 +596,16 @@ export const bookingsService = {
             attachPublicExtras(salon),
         ]);
 
-        return { salon: fullSalon, services, staff };
+        if (!fromMarketplace) return { salon: fullSalon, services, staff };
+
+        // The Marketplace shows only what the owner published there, at the Marketplace price.
+        const listing = await getApprovedListing(salon.id);
+        if (!listing) throw notListed();
+        return {
+            salon: { ...fullSalon, marketplace_bookings_enabled: listing.bookingsEnabled },
+            services: applyServiceSettings(services, listing.serviceSettings),
+            staff: staff.filter((m) => !listing.hiddenStaff.has(m.id)),
+        };
     },
 
     async getSalonDetails(salon_id: string) {
@@ -628,6 +708,17 @@ export const bookingsService = {
         if (services.some((s) => !s)) {
             throw new AppError(404, "Service not found for this salon", "NOT_FOUND");
         }
+        const fromMarketplace = body.source === "marketplace";
+        if (fromMarketplace) {
+            const listing = await getApprovedListing(body.salon_id);
+            if (!listing || !listing.bookingsEnabled) {
+                throw new AppError(409, "This salon isn't taking Marketplace bookings right now.", "BOOKING_UNAVAILABLE");
+            }
+            const listed = applyServiceSettings(services.map((x) => x!), listing.serviceSettings);
+            if (listed.length !== services.length) throw new AppError(404, "Service not found for this salon", "NOT_FOUND");
+            // Looked up here, never taken from the browser. Everything below charges and reports this price.
+            listed.forEach((x, i) => { services[i] = x; });
+        }
         const serviceById = new Map(body.service_ids.map((id, i) => [id, services[i]!]));
 
         const durationMinutes = services.reduce((sum, s) => sum + (Number(s!.duration) || 30), 0);
@@ -680,6 +771,84 @@ export const bookingsService = {
         // there's no exclusion constraint underneath. All lines run at the
         // same start time (parallel scheduling), so every assigned staff
         // member must be distinct and simultaneously free.
+        // Finds or creates the client and writes the appointment. Only ever called from inside the booking lock.
+        const saveBooking = async (assignedByLine: string[], dbClient: import("pg").PoolClient) => {
+            // Every booking created here now carries a real stylist per service —
+            // "Any Stylist" no longer leaves an unassigned row for someone to
+            // notice later.
+            const assignedStaffByService = new Map(body.service_ids.map((id, i) => [id, assignedByLine[i]]));
+            // The appointment-level staff_id/is_any_staff stay meaningful for a
+            // single-staff booking (still the common case) and become a
+            // best-effort summary for a mixed one: the first assigned line, with
+            // is_any_staff true unless every line was a specific pick — the
+            // per-service `services` JSONB array below is the real source of
+            // truth either way (see bookingMapper.ts's anyServiceHasOwnStaff).
+            const assignedStaffId: string = assignedByLine[0];
+            const isAnyStaff = hasPerServiceStaff
+                ? lines.some((l) => !l.staffId)
+                : !body.staff_id;
+
+            // Find or create the client for this salon. Phone is the unique
+            // identifier here, not email: findExistingByEmailOrPhone (used
+            // elsewhere) checks email FIRST, which would silently attach this
+            // booking to an unrelated client that merely shares an email (a
+            // family/shared address) while never even looking at the phone number
+            // typed on this exact form. A phone number is entered fresh on every
+            // booking and, unlike email, may contain spaces/dashes the user typed
+            // — normalise to digits before matching or storing so "9876543210"
+            // and "987-654-3210" are recognised as the same client.
+            const phoneDigits = String(body.client_phone || "").replace(/\D/g, "");
+            let client = await clientsRepository.findActiveByPhone(phoneDigits, body.salon_id);
+
+            if (!client) {
+                const nameParts = body.client_name.trim().split(/\s+/);
+                const referralCode = await generateUniqueReferralCode(nameParts[0], body.salon_id);
+                client = await clientsRepository.create(
+                    {
+                        first_name: nameParts[0],
+                        last_name: nameParts.slice(1).join(" ") || null,
+                        email: body.client_email || null,
+                        phone_number: phoneDigits,
+                        // Only a client created here is stamped; an existing client matched
+                        // by phone keeps whatever source they already have.
+                        client_source: "online_booking",
+                    },
+                    body.salon_id,
+                    { code: referralCode, rewardStatus: null }
+                );
+            } else if (client.is_blocked) {
+                // The actual point of "Block" (Clients page) — a blocked client can
+                // still be booked in-person by staff (that flow doesn't go through
+                // here), just not through public online booking.
+                throw new AppError(403, "This client is blocked from booking online. Please contact the salon directly.", "CLIENT_BLOCKED");
+            }
+
+            // durationMinutes is computed once above, before the availability checks.
+            const title = services.map((s) => s!.name).join(", ");
+
+            const appointment = await bookingsRepository.createAppointment({
+                salonId: body.salon_id,
+                clientId: client.id,
+                staffId: assignedStaffId,
+                isAnyStaff,
+                serviceId: body.service_ids[0],
+                title,
+                scheduledAt: body.scheduled_at,
+                durationMinutes,
+                notes: body.notes || null,
+                services: services.map((s, i) => ({
+                    service_id: body.service_ids[i],
+                    name: s!.name,
+                    price: Number(s!.price) || 0,
+                    quantity: 1,
+                    staff_id: assignedStaffByService.get(body.service_ids[i]),
+                })),
+            }, dbClient);
+            if (fromMarketplace) await onboardingRepository.markViaMarketplace(appointment.id, dbClient);
+
+            return { appointment, assignedStaffId, isAnyStaff };
+        };
+
         const assignment = await bookingsRepository.withBookingLock(
             body.salon_id,
             dateStr,
@@ -737,7 +906,9 @@ export const bookingsService = {
                     assignedByLine[i] = assigned;
                 }
 
-                return { assignedByLine, lastReason: null as { message: string; code: string } | null };
+                // Saved before the lock is released, so the next request for this day sees this appointment.
+                const saved = await saveBooking(assignedByLine.map((x) => x!), dbClient);
+                return { assignedByLine, lastReason: null as { message: string; code: string } | null, saved };
             }
         );
 
@@ -749,77 +920,7 @@ export const bookingsService = {
             throw new AppError(409, reason.message, reason.code);
         }
 
-        // Every booking created here now carries a real stylist per service —
-        // "Any Stylist" no longer leaves an unassigned row for someone to
-        // notice later.
-        const assignedStaffByService = new Map(body.service_ids.map((id, i) => [id, assignment.assignedByLine![i]!]));
-        // The appointment-level staff_id/is_any_staff stay meaningful for a
-        // single-staff booking (still the common case) and become a
-        // best-effort summary for a mixed one: the first assigned line, with
-        // is_any_staff true unless every line was a specific pick — the
-        // per-service `services` JSONB array below is the real source of
-        // truth either way (see bookingMapper.ts's anyServiceHasOwnStaff).
-        const assignedStaffId: string = assignment.assignedByLine![0]!;
-        const isAnyStaff = hasPerServiceStaff
-            ? lines.some((l) => !l.staffId)
-            : !body.staff_id;
-
-        // Find or create the client for this salon. Phone is the unique
-        // identifier here, not email: findExistingByEmailOrPhone (used
-        // elsewhere) checks email FIRST, which would silently attach this
-        // booking to an unrelated client that merely shares an email (a
-        // family/shared address) while never even looking at the phone number
-        // typed on this exact form. A phone number is entered fresh on every
-        // booking and, unlike email, may contain spaces/dashes the user typed
-        // — normalise to digits before matching or storing so "9876543210"
-        // and "987-654-3210" are recognised as the same client.
-        const phoneDigits = String(body.client_phone || "").replace(/\D/g, "");
-        let client = await clientsRepository.findActiveByPhone(phoneDigits, body.salon_id);
-
-        if (!client) {
-            const nameParts = body.client_name.trim().split(/\s+/);
-            const referralCode = await generateUniqueReferralCode(nameParts[0], body.salon_id);
-            client = await clientsRepository.create(
-                {
-                    first_name: nameParts[0],
-                    last_name: nameParts.slice(1).join(" ") || null,
-                    email: body.client_email || null,
-                    phone_number: phoneDigits,
-                    // Only a client created here is stamped; an existing client matched
-                    // by phone keeps whatever source they already have.
-                    client_source: "online_booking",
-                },
-                body.salon_id,
-                { code: referralCode, rewardStatus: null }
-            );
-        } else if (client.is_blocked) {
-            // The actual point of "Block" (Clients page) — a blocked client can
-            // still be booked in-person by staff (that flow doesn't go through
-            // here), just not through public online booking.
-            throw new AppError(403, "This client is blocked from booking online. Please contact the salon directly.", "CLIENT_BLOCKED");
-        }
-
-        // durationMinutes is computed once above, before the availability checks.
-        const title = services.map((s) => s!.name).join(", ");
-
-        const appointment = await bookingsRepository.createAppointment({
-            salonId: body.salon_id,
-            clientId: client.id,
-            staffId: assignedStaffId,
-            isAnyStaff,
-            serviceId: body.service_ids[0],
-            title,
-            scheduledAt: body.scheduled_at,
-            durationMinutes,
-            notes: body.notes || null,
-            services: services.map((s, i) => ({
-                service_id: body.service_ids[i],
-                name: s!.name,
-                price: Number(s!.price) || 0,
-                quantity: 1,
-                staff_id: assignedStaffByService.get(body.service_ids[i]),
-            })),
-        });
+        const { appointment, assignedStaffId: _staff, isAnyStaff } = assignment.saved!;
 
         // Live calendar update — the dashboard calendar refreshes on this same
         // socket event used for staff-created appointments (appointments.service.ts).
@@ -1021,10 +1122,55 @@ export const bookingsService = {
         scheduled_at: string
     ) {
         assertManageToken(appointmentId, token);
-        return appointmentsService.update({
-            appointmentId,
-            requesterUserId: "public-client",
-            patch: { scheduled_at },
+        const appointment: any = await appointmentsRepository.findById(appointmentId);
+        if (!appointment) throw new AppError(404, "Booking not found", "NOT_FOUND");
+        const salonId: string = appointment.salon_id;
+
+        // appointmentsService.update() deliberately allows overlaps, because reception may double-book on purpose.
+        // A customer may not, so the new time passes the same checks a new online booking does.
+        const requested = salonLocalParts(scheduled_at, await getSalonTimezone(salonId));
+        const window = resolveDateWindow(requested.dateStr, await bookingsRepository.findBookingPolicy(salonId), await getSalonTimezone(salonId));
+        if (!window.bookable || requested.minutes < window.earliestMinute) {
+            throw new AppError(409, "That time can't be booked online. Please choose a later or different date.", "DATE_NOT_BOOKABLE");
+        }
+
+        // How long each stylist on this booking is needed. The appointment's own stylist is shown as busy for the
+        // whole booking (that is how free slots are calculated); any other stylist for their own services.
+        const total = Number(appointment.duration_minutes) || 30;
+        const needed = new Map<string, number>();
+        for (const line of (appointment.services ?? []) as { service_id?: string; staff_id?: string }[]) {
+            if (!line.staff_id || line.staff_id === appointment.staff_id) continue;
+            const service = line.service_id ? await bookingsRepository.findServiceById(line.service_id, salonId) : null;
+            const minutes = Math.max(15, Number(service?.duration) || total);
+            needed.set(line.staff_id, Math.min(total, (needed.get(line.staff_id) ?? 0) + minutes));
+        }
+        if (appointment.staff_id) needed.set(appointment.staff_id, total);
+
+        return bookingsRepository.withBookingLock(salonId, requested.dateStr, async (dbClient) => {
+            const { windowByStaff } = await getStaffWindowsForDate(salonId, Array.from(needed.keys()), requested.dateStr);
+            const start = requested.minutes;
+            for (const [staffId, minutes] of needed) {
+                const end = start + minutes;
+                const win = windowByStaff.get(staffId);
+                if (!win || start < win.open || end > win.close) {
+                    throw new AppError(409, "This stylist isn't working at the selected time.", "OUTSIDE_WORKING_HOURS");
+                }
+                if (overlapsBreak(win.breaks, start, end)) throw new AppError(409, "This stylist is on a break at the selected time.", "STAFF_ON_BREAK");
+                if (await blockedTimesRepository.hasOverlap({ staffId, date: requested.dateStr, startTime: fmtHHMM(start), endTime: fmtHHMM(end) })) {
+                    throw new AppError(409, "This time is no longer available for the selected stylist.", "BLOCKED_TIME");
+                }
+                const taken = await bookingsRepository.hasAppointmentOverlap(
+                    { salonId, staffId, dateStr: requested.dateStr, startMinute: start, endMinute: end, excludeId: appointmentId },
+                    dbClient
+                );
+                if (taken) throw new AppError(409, "This time has just been booked. Please pick another slot.", "SLOT_TAKEN");
+            }
+            // Saved while the lock is still held.
+            return appointmentsService.update({
+                appointmentId,
+                requesterUserId: "public-client",
+                patch: { scheduled_at },
+            });
         });
     },
 };
