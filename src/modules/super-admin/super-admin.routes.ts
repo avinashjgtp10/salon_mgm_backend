@@ -2,6 +2,7 @@ import { Router } from "express";
 import { authMiddleware } from "../../middleware/auth.middleware";
 import { superAdminMiddleware } from "../../middleware/role.middleware";
 import { superAdminController } from "./super-admin.controller";
+import marketplaceReviewRoutes from "../marketplace/marketplace-review.routes";
 import { superAdminActivityLogger } from "./super-admin-activity";
 import { superAdminOwnerOnly } from "./super-admin-owner.middleware";
 import { salonClientInvoicesController } from "../salon-client-invoices/salon-client-invoices.controller";
@@ -44,6 +45,9 @@ router.use("/client-management", clientManagementRoutes);   // scoped per team m
 router.use("/salons/:salonId/wa-config", waConfigSuperAdminRoutes);
 // Meta's WhatsApp price list: when it was last refreshed, and refresh it now.
 router.use("/wa-pricing", pricingSuperAdminRoutes);
+
+// SalonOx Marketplace: review salons that submitted their onboarding.
+router.use("/marketplace-reviews", marketplaceReviewRoutes);
 
 // Salon Customization: lock/unlock whole modules for one salon.
 router.use("/salon-modules", salonModulesRoutes);

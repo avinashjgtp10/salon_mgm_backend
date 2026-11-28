@@ -37,6 +37,8 @@ export const validateCreateBooking = (req: Request, _res: Response, next: NextFu
   try {
     const b = req.body ?? {};
 
+    if (b.source !== undefined && b.source !== "marketplace") fail("source is not valid");
+
     // ── Salon ────────────────────────────────────────────────────────────────
     if (!isNonEmptyString(b.salon_id) || !UUID_RE.test(b.salon_id.trim())) {
       fail("salon_id must be a valid UUID");

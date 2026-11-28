@@ -102,6 +102,170 @@ const PUBLIC_SALON_SELECT = `
 const PUBLISHED_CONDITION = `(mp.is_published = true)`;
 
 export const bookingsRepository = {
+    // Marketplace list: salons SalonOx has approved, that have published Online
+    // Booking and have at least one service listed. One query, not one per salon.
+    // Deliberately returns no phone or email: PUBLIC_SALON_SELECT can fall back
+    // to the owner's personal contact details, which must not be listed in bulk.
+    // The service filter matches findActiveServices (including the Digital Menu
+    // selection), so a card never advertises a service the salon page hides.
+    async findDirectory(limit = 200) {
+        try {
+        const { rows } = await pool.query(
+            `SELECT s.id, s.slug, COALESCE(NULLIF(ml.city, ''), s.city) AS city, COALESCE(NULLIF(ml.state, ''), s.state) AS state,
+                    s.currency, s.timezone, s.logo_url, mo.bookings_enabled,
+                    -- The week's hours, for the "Open now" filter.
+                    (SELECT json_agg(json_build_object('day_of_week', h.day_of_week, 'is_open', h.is_open, 'open_time', h.open_time, 'close_time', h.close_time))
+                     FROM marketplace_working_hours h WHERE h.profile_id = mp.id) AS hours,
+                    -- The pin the salon confirmed for customers to find it.
+                    ml.latitude::float8 AS latitude, ml.longitude::float8 AS longitude,
+                    -- Weekdays (0 = Sunday) the salon is open, for the Marketplace date search.
+                    ARRAY(SELECT DISTINCT wh.day_of_week::int FROM marketplace_working_hours wh
+                          WHERE wh.profile_id = mp.id AND wh.is_open ORDER BY 1) AS open_days,
+                    COALESCE(NULLIF(s.business_name, ''), NULLIF(TRIM(CONCAT(u.first_name, ' ', COALESCE(u.last_name, ''))), '')) AS business_name,
+                    COALESCE(NULLIF(ml.address_line, ''), NULLIF(s.address, '')) AS address,
+                    COALESCE(img.image_url, NULLIF(mp.cover_url, ''), NULLIF(s.banner_url, '')) AS cover_url,
+                    rv.rating, COALESCE(rv.review_count, 0)::int AS review_count,
+                    sv.service_count, sv.min_price, sv.categories, sv.service_names, top.top_services
+             FROM salons s
+             JOIN marketplace_profiles mp ON mp.salon_id = s.id
+             JOIN marketplace_onboarding mo ON mo.salon_id = s.id AND mo.status = 'approved'
+             LEFT JOIN users u ON u.id = s.owner_id
+             LEFT JOIN marketplace_locations ml ON ml.profile_id = mp.id
+             LEFT JOIN digital_menus dm ON dm.salon_id = s.id
+             JOIN LATERAL (
+                 SELECT COUNT(*)::int AS service_count,
+                        (MIN(COALESCE(mss.display_price, v.price)) FILTER (WHERE COALESCE(mss.display_price, v.price) > 0))::float8 AS min_price,
+                        ARRAY_AGG(DISTINCT COALESCE(NULLIF(TRIM(c.name), ''), 'Other')) AS categories,
+                        (ARRAY_AGG(DISTINCT v.name))[1:300] AS service_names
+                 FROM services v
+                 LEFT JOIN service_categories c ON c.id = v.category_id
+                 LEFT JOIN marketplace_service_settings mss ON mss.salon_id = v.salon_id AND mss.service_id = v.id
+                 WHERE v.salon_id = s.id AND v.is_active = true AND v.online_booking = true
+                   AND COALESCE(mss.is_listed, true)
+                   AND (dm.service_selection_mode IS DISTINCT FROM 'specific'
+                        OR EXISTS (SELECT 1 FROM digital_menu_services dms WHERE dms.menu_id = dm.id AND dms.service_id = v.id))
+             ) sv ON sv.service_count > 0
+             LEFT JOIN LATERAL (
+                 SELECT ROUND(AVG(r.rating)::numeric, 1)::float8 AS rating, COUNT(*) AS review_count
+                 FROM reviews r
+                 WHERE r.salon_id = s.id AND r.is_visible = true AND r.rating IS NOT NULL
+             ) rv ON true
+             LEFT JOIN LATERAL (
+                 SELECT i.image_url FROM marketplace_images i
+                 WHERE i.profile_id = mp.id AND NULLIF(TRIM(COALESCE(i.image_url, '')), '') IS NOT NULL
+                 ORDER BY i.is_cover DESC, i.sort_order ASC NULLS LAST, i.created_at ASC
+                 LIMIT 1
+             ) img ON true
+             -- Up to 3 services for the salon's card: the most booked first, then the salon's own menu order.
+             LEFT JOIN LATERAL (
+                 SELECT json_agg(json_build_object('id', t.id, 'name', t.name, 'duration', t.duration, 'price', t.price, 'price_type', t.price_type) ORDER BY t.position) AS top_services
+                 FROM (
+                     SELECT v.id, v.name, v.duration_minutes AS duration, COALESCE(mss.display_price, v.price)::float8 AS price, v.price_type,
+                            ROW_NUMBER() OVER (ORDER BY COALESCE(b.bookings, 0) DESC, c.display_order NULLS LAST, c.name NULLS LAST, v.name) AS position
+                     FROM services v
+                     LEFT JOIN service_categories c ON c.id = v.category_id
+                     LEFT JOIN marketplace_service_settings mss ON mss.salon_id = v.salon_id AND mss.service_id = v.id
+                     LEFT JOIN (
+                         SELECT service_id, COUNT(*) AS bookings FROM appointments
+                         WHERE salon_id = s.id AND status NOT IN ('cancelled', 'deleted') GROUP BY service_id
+                     ) b ON b.service_id = v.id
+                     WHERE v.salon_id = s.id AND v.is_active = true AND v.online_booking = true
+                       AND COALESCE(mss.is_listed, true)
+                       AND (dm.service_selection_mode IS DISTINCT FROM 'specific'
+                            OR EXISTS (SELECT 1 FROM digital_menu_services dms WHERE dms.menu_id = dm.id AND dms.service_id = v.id))
+                     ORDER BY position
+                     LIMIT 3
+                 ) t
+             ) top ON true
+             WHERE s.is_active = true AND ${PUBLISHED_CONDITION}
+               -- Demo salons (marked by Super Admin) are never shown to the public list.
+               AND COALESCE(s.is_dummy, false) = false
+             ORDER BY rv.review_count DESC NULLS LAST, business_name ASC
+             LIMIT $1`,
+            [limit]
+        );
+        return rows;
+        } catch (err: any) {
+            // Migration/add_marketplace_onboarding.sql not run yet: no salon can be approved, so none is listed.
+            if (err?.code === UNDEFINED_TABLE || err?.code === UNDEFINED_COLUMN) return [];
+            throw err;
+        }
+    },
+
+    // The features each listed salon saved on its Marketplace Profile, for the Salons page filter.
+    // A separate query, so a problem here never empties the salon list.
+    async findDirectoryFeatures(salonIds: string[]) {
+        if (!salonIds.length) return [];
+        try {
+            const { rows } = await pool.query(
+                `SELECT mp.salon_id, f.feature_key
+                 FROM marketplace_features f
+                 JOIN marketplace_profiles mp ON mp.id = f.profile_id
+                 WHERE mp.salon_id::text = ANY($1::text[])`,
+                [salonIds]
+            );
+            return rows as { salon_id: string; feature_key: string }[];
+        } catch (err: any) {
+            if (err?.code === "42P01" || err?.code === "42703") return [];
+            throw err;
+        }
+    },
+
+    // The newest written reviews across approved salons, for the Marketplace homepage. Every rating is
+    // included (never only the good ones), and only the reviewer's first name leaves the server.
+    async findDirectoryReviews(limit = 30) {
+        try {
+            const { rows } = await pool.query(
+                `SELECT r.id, r.rating, r.review_text, r.created_at, s.id AS salon_id, s.slug,
+                        s.business_name AS salon_name, COALESCE(NULLIF(c.first_name, ''), 'Guest') AS client_first_name
+                 FROM reviews r
+                 JOIN salons s ON s.id = r.salon_id
+                 JOIN marketplace_profiles mp ON mp.salon_id = s.id
+                 JOIN marketplace_onboarding mo ON mo.salon_id = s.id AND mo.status = 'approved'
+                 LEFT JOIN clients c ON c.id = r.client_id
+                 WHERE r.is_visible = true AND r.rating IS NOT NULL AND NULLIF(TRIM(r.review_text), '') IS NOT NULL
+                   AND s.is_active = true AND ${PUBLISHED_CONDITION} AND COALESCE(s.is_dummy, false) = false
+                 ORDER BY r.created_at DESC
+                 LIMIT $1`,
+                [limit]
+            );
+            return rows;
+        } catch (err: any) {
+            if (err?.code === UNDEFINED_TABLE || err?.code === UNDEFINED_COLUMN) return [];
+            throw err;
+        }
+    },
+
+    // The owner's preview before approval: the public columns without the published/approved gates.
+    async findSalonForPreview(salonId: string) {
+        const { rows } = await pool.query(`${PUBLIC_SALON_SELECT} WHERE s.id = $1`, [salonId]);
+        return rows[0] || null;
+    },
+
+    // The map pin saved with the salon's Marketplace address, or null.
+    async findMapPin(marketplaceProfileId: string) {
+        const { rows } = await pool.query(
+            `SELECT latitude::float8 AS latitude, longitude::float8 AS longitude
+             FROM marketplace_locations
+             WHERE profile_id = $1 AND latitude IS NOT NULL AND longitude IS NOT NULL
+             LIMIT 1`,
+            [marketplaceProfileId]
+        );
+        return rows[0] || null;
+    },
+
+    // The week's opening hours, as saved in the salon's Marketplace Profile.
+    async findWeekHours(marketplaceProfileId: string) {
+        const { rows } = await pool.query(
+            `SELECT day_of_week, is_open, open_time, close_time
+             FROM marketplace_working_hours
+             WHERE profile_id = $1
+             ORDER BY day_of_week, slot_index`,
+            [marketplaceProfileId]
+        );
+        return rows;
+    },
+
     async findSalonBySlug(slug: string) {
         const { rows } = await pool.query(
             `${PUBLIC_SALON_SELECT}
@@ -167,7 +331,7 @@ export const bookingsRepository = {
                  WHERE profile_id = $1
                    AND NULLIF(TRIM(COALESCE(image_url, '')), '') IS NOT NULL
                  ORDER BY is_cover DESC, sort_order ASC NULLS LAST, created_at ASC
-                 LIMIT 12`,
+                 LIMIT 20`,
                 [marketplaceProfileId]
             );
             return rows.map((r) => r.image_url as string);
@@ -546,8 +710,8 @@ export const bookingsRepository = {
         durationMinutes: number;
         notes?: string | null;
         services: unknown[];
-    }) {
-        const { rows } = await pool.query(
+    }, client?: import("pg").PoolClient) {
+        const { rows } = await (client ?? pool).query(
             `WITH n AS (
               INSERT INTO salon_booking_counters (salon_id, last_number) VALUES ($1, 1)
               ON CONFLICT (salon_id) DO UPDATE SET last_number = salon_booking_counters.last_number + 1

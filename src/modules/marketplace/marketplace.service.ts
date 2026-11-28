@@ -14,7 +14,7 @@ import {
   UpsertBookingPolicyBody, UpsertThemeBody, UpsertHeadlineBody,
 } from "./marketplace.types";
 
-const MAX_IMAGES = 10;
+const MAX_IMAGES = 20;
 
 // ─── Helper: ensure profile exists ───────────────────────────────────────────
 

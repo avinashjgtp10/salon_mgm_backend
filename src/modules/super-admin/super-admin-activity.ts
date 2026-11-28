@@ -75,6 +75,8 @@ const RULES: Rule[] = [
   { method: "PATCH", re: /^\/salons\/([^/]+)\/onboarding$/, action: "salon_onboarding_forced", entity: "salon", idGroup: 1 },
   { method: "POST", re: /^\/salons\/([^/]+)\/impersonate$/, action: "salon_impersonated", entity: "salon", idGroup: 1 },
   { method: "POST", re: /^\/salons\/([^/]+)\/restore$/, action: "salon_restored", entity: "salon", idGroup: 1 },
+  { method: "POST", re: /^\/marketplace-reviews\/([^/]+)\/approve$/, action: "marketplace_salon_approved", entity: "salon", idGroup: 1 },
+  { method: "POST", re: /^\/marketplace-reviews\/([^/]+)\/reject$/, action: "marketplace_salon_rejected", entity: "salon", idGroup: 1, keep: ["reason"] },
   { method: "PUT", re: /^\/salon-permissions\/([^/]+)$/, action: "salon_permissions_updated", entity: "salon", idGroup: 1 },
   { method: "PATCH", re: /^\/demo-requests\/([^/]+)\/status$/, action: "demo_request_status_changed", entity: "demo_request", idGroup: 1, keep: ["status"] },
   { method: "POST", re: /^\/salons\/([^/]+)\/invoices$/, action: "salon_invoice_created", entity: "invoice", idGroup: 1 },

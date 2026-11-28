@@ -5,6 +5,33 @@ import { bookingsService } from "./bookings.service";
 import { PublicBookingRequest } from "./bookings.types";
 
 export const bookingsController = {
+    async getDirectory(_req: Request, res: Response, next: NextFunction) {
+        try {
+            const result = await bookingsService.getDirectory();
+            return sendSuccess(res, 200, result, "Salons fetched successfully");
+        } catch (err) {
+            return next(err);
+        }
+    },
+
+    async getDirectoryReviews(_req: Request, res: Response, next: NextFunction) {
+        try {
+            const result = await bookingsService.getDirectoryReviews();
+            return sendSuccess(res, 200, result, "Reviews fetched successfully");
+        } catch (err) {
+            return next(err);
+        }
+    },
+
+    async getMarketplaceExtras(req: Request, res: Response, next: NextFunction) {
+        try {
+            const result = await bookingsService.getMarketplaceExtras(req.params.slug as string);
+            return sendSuccess(res, 200, result, "Salon details fetched successfully");
+        } catch (err) {
+            return next(err);
+        }
+    },
+
     async getSalonDetails(req: Request, res: Response, next: NextFunction) {
         try {
             const { salon_id } = req.params;
@@ -20,7 +47,7 @@ export const bookingsController = {
         try {
             const { slug } = req.params;
             if (!slug) throw new AppError(400, "Slug is required", "VALIDATION_ERROR");
-            const details = await bookingsService.getSalonBySlug(slug as string);
+            const details = await bookingsService.getSalonBySlug(slug as string, req.query.source === "marketplace");
             return sendSuccess(res, 200, details, "Salon details fetched successfully");
         } catch (err) {
             return next(err);
